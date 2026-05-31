@@ -200,11 +200,11 @@ TEST_F(IpadIntegration, TC_WF_05_ConcurrentListDuringDownload) {
  * ══════════════════════════════════════════════════════════════════════════ */
 TEST_F(IpadIntegration, TC_WF_06_NicknamePersistence) {
     auto iccid = download_profile("LPA:1$smdp.carrier.io$NICKNAMETEST");
-    ASSERT_EQ(IPAD_OK, ipad_profile_set_nickname(hdl, iccid.data(), "MonOpérateur"));
+    ASSERT_EQ(IPAD_OK, ipad_profile_set_nickname(hdl, iccid.data(), "MyOperator"));
 
     ipad_profile_t p{};
     ASSERT_EQ(IPAD_OK, ipad_profile_get(hdl, iccid.data(), &p));
-    EXPECT_STREQ("MonOpérateur", p.nickname);
+    EXPECT_STREQ("MyOperator", p.nickname);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════

@@ -1,7 +1,7 @@
 # IPAd Abstraction Library
 
 **IoT Profile Assistant Device (IPAd) — GSMA SGP.32**  
-Backend : Qualcomm Telematics SDK (TelSDK) — SA525
+Backend: Qualcomm Telematics SDK (TelSDK) — SA525
 
 ---
 
@@ -9,63 +9,70 @@ Backend : Qualcomm Telematics SDK (TelSDK) — SA525
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              Application / Test IHM (TUI)               │
+│            Application / Test UI (TUI)                  │
 ├─────────────────────────────────────────────────────────┤
-│          libipad  (API publique C — ipad.h)              │
-│  Init │ Profils │ eUICC │ Events │ Sécurité │ Diag      │
+│         libipad  (public C API — ipad.h)                │
+│  Init │ Profiles │ eUICC │ Events │ Security │ Diag     │
 ├─────────────────────────────────────────────────────────┤
-│         Qualcomm TelSDK (telux::tel::ISimProfileManager) │
-│                  ICardManager / SA525 BSP                │
+│        Qualcomm TelSDK (telux::tel::ISimProfileManager) │
+│                 ICardManager / SA525 BSP                │
 ├─────────────────────────────────────────────────────────┤
-│                    eUICC physique (SA525)                │
+│                   Physical eUICC (SA525)                │
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Contenu du projet
+## Project layout
 
 ```
 ipad_lib/
 ├── include/ipad/
-│   ├── ipad.h                      ← API publique C (stable)
-│   └── ipad_telsdk_backend.h       ← Internals C++ / TelSDK
+│   ├── ipad.h                      ← Public C API (stable)
+│   ├── ipad_log.h                  ← Configurable log sink API
+│   └── ipad_telsdk_backend.h       ← C++ / TelSDK internals
 ├── src/
-│   └── ipad.cpp                    ← Implémentation principale
+│   ├── ipad.cpp                    ← Main implementation
+│   └── ipad_log.cpp                ← Serial / TCP log sinks
 ├── app/src/
-│   └── ipad_app.cpp                ← IHM ncurses interactive
+│   └── ipad_app.cpp                ← Interactive ncurses TUI
 ├── tests/
 │   ├── mocks/
-│   │   └── mock_telsdk.h           ← Mock complet TelSDK (sans HW)
+│   │   └── mock_telsdk.h           ← Full TelSDK mock (no HW required)
 │   ├── unit/
-│   │   └── test_ipad_unit.cpp      ← Tests unitaires (30+ TCs)
+│   │   ├── test_ipad_unit.cpp      ← Unit tests (30+ TCs)
+│   │   └── test_ipad_log.cpp       ← Log sink tests
 │   ├── integration/
-│   │   └── test_ipad_integration.cpp ← Tests workflows SGP.32
+│   │   └── test_ipad_integration.cpp ← SGP.32 workflow tests
 │   └── vectors/
-│       ├── test_vectors.json        ← Vecteurs de test (JSON)
-│       └── test_vectors_runner.cpp  ← Exécuteur automatique
-├── .github/workflows/
-│   └── ci.yml                      ← Pipeline CI/CD GitHub Actions
+│       ├── test_vectors.json        ← JSON test vectors
+│       └── test_vectors_runner.cpp  ← Automated vector runner
+├── doc/
+│   └── IPAd_Library_Reference.docx ← Full developer reference manual
+├── tools/
+│   ├── gen_kpi_report.py            ← PDF KPI report generator
+│   └── gen_doc.py                   ← Word documentation generator
 └── CMakeLists.txt
 ```
 
-## Build — Mode mock (sans hardware SA525)
+## Build — Mock mode (no SA525 hardware)
 
 ```bash
-# Dépendances Ubuntu/Debian
+# Dependencies (Ubuntu/Debian)
 sudo apt install cmake ninja-build libgtest-dev libgmock-dev \
                  nlohmann-json3-dev libncurses-dev
+pip install reportlab   # for PDF KPI report
 
-# Configurer et compiler
+# Configure and build
 cmake -B build -DIPAD_MOCK_TELSDK=ON -DBUILD_TESTS=ON -DBUILD_APP=ON
 cmake --build build --parallel $(nproc)
 
-# Lancer les tests
+# Run tests
 cd build && ctest --output-on-failure
 
-# Lancer l'IHM (mode mock)
+# Launch the TUI (mock mode)
 ./build/ipad_app --mock
 ```
 
-## Build — Mode hardware (SA525 + TelSDK)
+## Build — Hardware mode (SA525 + TelSDK)
 
 ```bash
 export TELSDK_ROOT=/opt/qualcomm/telematics-sdk
@@ -78,46 +85,63 @@ cmake -B build_hw \
 cmake --build build_hw --parallel $(nproc)
 ```
 
-## Tests
+## CMake options
 
-| Suite             | Commande ctest                          | Rapport        |
-|-------------------|-----------------------------------------|----------------|
-| Unitaires         | `ctest -L unit`                         | JUnit XML      |
-| Intégration       | `ctest -L integration`                  | JUnit XML      |
-| Vecteurs SGP.32   | `./ipad_vector_runner`                  | JUnit XML      |
-| Couverture        | `cmake -DBUILD_COVERAGE=ON` + gcovr     | HTML + XML     |
+| Option              | Default | Description                                              |
+|---------------------|---------|----------------------------------------------------------|
+| `IPAD_MOCK_TELSDK`  | OFF     | Use in-process mock instead of real TelSDK               |
+| `BUILD_APP`         | ON      | Build the ncurses TUI demo application                   |
+| `BUILD_TESTS`       | ON      | Build the GTest test suite                               |
+| `BUILD_COVERAGE`    | OFF     | Instrument with gcov for coverage measurement            |
 
-## CI/CD (GitHub Actions)
+## Test suites
 
-Le pipeline `.github/workflows/ci.yml` exécute sur chaque push :
+| Suite              | ctest command                       | Report         |
+|--------------------|-------------------------------------|----------------|
+| Unit               | `ctest -L unit`                     | JUnit XML      |
+| Integration        | `ctest -L integration`              | JUnit XML      |
+| SGP.32 vectors     | `./ipad_vector_runner`              | JUnit XML      |
+| Log sinks          | `ctest -R ipad_log_tests`           | JUnit XML      |
+| Coverage           | `cmake -DBUILD_COVERAGE=ON` + gcovr | HTML + XML     |
 
-1. **Build + tests unitaires** — GCC 13 + Clang 17
-2. **Tests d'intégration** — workflows SGP.32 complets
-3. **Vecteurs de test** — exécution automatique des 30+ vecteurs JSON
-4. **Analyse statique** — clang-tidy + cppcheck
-5. **Cross-compile aarch64** — vérification binaire SA525 (branches main/release)
-6. **Rapport consolidé** — JUnit fusionné
+## Python port
 
-## Utilisation de l'IHM
+A complete Python 3.9+ port is available in `../ipad_python/`:
 
-```
-Touches :
-  i   Initialiser la connexion IPAd/TelSDK
-  r   Rafraîchir la liste des profils
-  d   Télécharger un profil (saisie Activation Code)
-  e   Activer le profil sélectionné
-  x   Désactiver le profil sélectionné
-  D   Supprimer le profil sélectionné (confirmation)
-  n   Renommer le profil sélectionné
-  s   Self-test (HAL + transport)
-  j   Export diagnostics JSON
-  +/↓ Profil suivant
-  -/↑ Profil précédent
-  q   Quitter
+```bash
+cd ../ipad_python
+pip install pytest
+pytest tests/ -v   # 54 tests
 ```
 
-## Normes de référence
+## KPI report
+
+A PDF KPI report (`ipad_kpi_report.pdf`) is automatically generated in the
+build directory after every `cmake --build` invocation. It includes binary
+size, section breakdown, RAM consumption, and flash/RAM usage bars vs the
+SA525 target.
+
+## TUI key bindings
+
+```
+Key   Action
+─────────────────────────────────
+i     Initialise IPAd / TelSDK
+r     Refresh profile list
+d     Download profile (enter Activation Code)
+e     Enable selected profile
+x     Disable selected profile
+D     Delete selected profile (confirmation required)
+n     Rename selected profile
+s     Self-test (HAL + transport + crypto)
+j     Export diagnostics to JSON
++/↓   Next profile
+-/↑   Previous profile
+q     Quit
+```
+
+## Reference standards
 
 - GSMA SGP.32 v1.0 — eSIM IoT Technical Specification
-- Qualcomm Telematics SDK — telux::tel::ISimProfileManager
+- Qualcomm Telematics SDK — `telux::tel::ISimProfileManager`
 - GSMA SGP.22 v3.0 — RSP Technical Specification
