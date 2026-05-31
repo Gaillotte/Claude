@@ -101,6 +101,7 @@ if(BUILD_TESTS)
         add_executable(${name} ${sources})
         target_include_directories(${name} PRIVATE
             ${CMAKE_SOURCE_DIR}/include
+            ${CMAKE_SOURCE_DIR}/tests
             ${CMAKE_SOURCE_DIR}/tests/mocks
         )
         target_compile_definitions(${name} PRIVATE IPAD_MOCK_TELSDK=1)

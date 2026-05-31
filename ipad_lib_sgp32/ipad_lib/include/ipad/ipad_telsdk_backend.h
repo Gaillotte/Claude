@@ -19,10 +19,14 @@
 #include "ipad.h"
 
 /* ── TelSDK headers (provided by Qualcomm SA525 BSP) ─────────────────────── */
-#include <telux/tel/PhoneFactory.hpp>
-#include <telux/tel/SimProfileManager.hpp>
-#include <telux/tel/CardManager.hpp>
-#include <telux/common/Status.hpp>
+#ifdef IPAD_MOCK_TELSDK
+#  include "mock_telsdk.h"
+#else
+#  include <telux/tel/PhoneFactory.hpp>
+#  include <telux/tel/SimProfileManager.hpp>
+#  include <telux/tel/CardManager.hpp>
+#  include <telux/common/Status.hpp>
+#endif
 
 #include <mutex>
 #include <condition_variable>
@@ -72,17 +76,19 @@ struct Subscription {
     void           *user_ctx;
 };
 
+} // namespace ipad_internal
+
 /* ──────────────────────────────────────────────────────────────────────────────
- * Main library context
+ * Main library context  (global namespace — matches ipad.h forward declaration)
  * ────────────────────────────────────────────────────────────────────────── */
 struct ipad_ctx_s {
     /* Configuration */
     ipad_config_t cfg;
 
     /* TelSDK handles */
-    std::shared_ptr<telux::tel::ISimProfileManager> sim_mgr;
-    std::shared_ptr<telux::tel::ICardManager>       card_mgr;
-    std::shared_ptr<IpadProfileListener>            listener;
+    std::shared_ptr<telux::tel::ISimProfileManager>       sim_mgr;
+    std::shared_ptr<telux::tel::ICardManager>             card_mgr;
+    std::shared_ptr<ipad_internal::IpadProfileListener>   listener;
 
     /* Event queue */
     std::mutex               evt_mutex;
@@ -90,9 +96,9 @@ struct ipad_ctx_s {
     std::queue<ipad_event_t> evt_queue;
 
     /* Subscriptions */
-    std::mutex                  sub_mutex;
-    std::vector<Subscription>   subscriptions;
-    std::atomic<ipad_sub_id_t>  next_sub_id{1};
+    std::mutex                              sub_mutex;
+    std::vector<ipad_internal::Subscription> subscriptions;
+    std::atomic<ipad_sub_id_t>              next_sub_id{1};
 
     /* Async operation tracking */
     std::mutex                           op_mutex;
@@ -114,5 +120,3 @@ struct ipad_ctx_s {
     void dispatch_events();
     void log(ipad_loglevel_t level, const char *module, const char *fmt, ...);
 };
-
-} // namespace ipad_internal

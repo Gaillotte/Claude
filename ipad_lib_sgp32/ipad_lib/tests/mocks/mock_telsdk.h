@@ -15,6 +15,8 @@
 #include <future>
 #include <map>
 #include <mutex>
+#include <thread>
+#include <chrono>
 
 /* ──────────────────────────────────────────────────────────────────────────────
  * telux::common stubs
@@ -268,6 +270,7 @@ public:
     }
 
     std::shared_ptr<ISimProfileManager> getSimProfileManager(SlotId = 0) {
+        if (!sim_mgr_->mock_cfg.subsystem_ready) return nullptr;
         return sim_mgr_;
     }
     std::shared_ptr<ICardManager> getCardManager() {

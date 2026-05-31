@@ -6,6 +6,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <array>
 #include <cstring>
 #include <thread>
 #include <atomic>
@@ -50,8 +51,8 @@ protected:
         return iccid_str;
     }
 
-    ipad_iccid_t str_to_iccid(const std::string &s) {
-        ipad_iccid_t out{};
+    std::array<uint8_t, IPAD_ICCID_LEN> str_to_iccid(const std::string &s) {
+        std::array<uint8_t, IPAD_ICCID_LEN> out{};
         for (size_t i = 0; i < s.size() && i/2 < IPAD_ICCID_LEN; i += 2)
             out[i/2] = (uint8_t)strtol(s.substr(i,2).c_str(), nullptr, 16);
         return out;
@@ -320,12 +321,15 @@ TEST_F(IpadTest, EventSubscribeAndReceive) {
     std::atomic<int>  evt_count{0};
     ipad_event_type_t last_type{};
 
+    using Ctx = std::pair<std::atomic<int>*, ipad_event_type_t*>;
+    Ctx ctx_pair{&evt_count, &last_type};
+
     ipad_sub_id_t sub = ipad_event_subscribe(hdl, IPAD_EVT_ALL,
         [](ipad_handle_t, const ipad_event_t *e, void *ctx) {
-            auto *p = static_cast<std::pair<std::atomic<int>*, ipad_event_type_t*>*>(ctx);
+            auto *p = static_cast<Ctx*>(ctx);
             p->first->fetch_add(1);
             *p->second = e->type;
-        }, nullptr);
+        }, &ctx_pair);
     EXPECT_NE(0u, sub);
 
     /* trigger enable → generates IPAD_EVT_PROFILE_ENABLED */
@@ -359,7 +363,7 @@ TEST(IpadUtilTest, IccidToStrRoundtrip) {
     ipad_iccid_t iccid = {0x89,0x01,0x23,0x00,0x00,0x00,0x00,0x00,0xAA,0xBB};
     char str[21];
     ipad_iccid_to_str(iccid, str);
-    EXPECT_STREQ("890123000000000000AABB", str);  /* note: 20 chars */
+    EXPECT_STREQ("8901230000000000AABB", str);  /* 10 bytes × 2 = 20 hex chars */
 }
 
 TEST(IpadUtilTest, EidToStrRoundtrip) {

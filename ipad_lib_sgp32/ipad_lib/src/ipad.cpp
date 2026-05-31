@@ -386,6 +386,20 @@ ipad_status_t ipad_profile_download(ipad_handle_t          hdl,
     hdl->log(IPAD_LOG_INFO, "download", "Starting profile download: %s",
              params->activation_code);
 
+    /* Snapshot existing ICCIDs to detect the new profile after download */
+    std::vector<std::string> before_iccids;
+    if (iccid_out) {
+        uint8_t cnt = 16;
+        ipad_profile_t lst[16];
+        if (ipad_profile_list(hdl, lst, &cnt) == IPAD_OK) {
+            char tmp[21];
+            for (uint8_t i = 0; i < cnt; ++i) {
+                ipad_iccid_to_str(lst[i].iccid, tmp);
+                before_iccids.emplace_back(tmp);
+            }
+        }
+    }
+
     /* Mark operation pending */
     {
         std::lock_guard<std::mutex> lk(hdl->op_mutex);
@@ -420,8 +434,26 @@ ipad_status_t ipad_profile_download(ipad_handle_t          hdl,
     if (hdl->op_pending) return IPAD_ERR_TIMEOUT;
     if (hdl->op_result != IPAD_OK) return hdl->op_result;
 
-    /* Copy out ICCID if requested */
-    if (iccid_out) memcpy(iccid_out, hdl->op_iccid, IPAD_ICCID_LEN);
+    /* Find the newly added profile by diffing against the snapshot */
+    if (iccid_out) {
+        uint8_t cnt = 16;
+        ipad_profile_t lst[16];
+        if (ipad_profile_list(hdl, lst, &cnt) == IPAD_OK) {
+            char tmp[21];
+            for (uint8_t i = 0; i < cnt; ++i) {
+                ipad_iccid_to_str(lst[i].iccid, tmp);
+                bool is_new = true;
+                for (auto &s : before_iccids) {
+                    if (s == tmp) { is_new = false; break; }
+                }
+                if (is_new) {
+                    memcpy(iccid_out, lst[i].iccid, IPAD_ICCID_LEN);
+                    break;
+                }
+            }
+        }
+    }
+
     hdl->log(IPAD_LOG_INFO, "download", "Profile download completed");
     return IPAD_OK;
 }
