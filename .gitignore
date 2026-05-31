@@ -1,4 +1,6 @@
 build/
 build_cov/
+build_kpi/
+build_kpi_app/
 **/__pycache__/
 **/*.pyc
