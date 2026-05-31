@@ -1,0 +1,353 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "meta": {
+    "version": "1.0.0",
+    "spec": "GSMA SGP.32 v1.0",
+    "backend": "Qualcomm TelSDK SA525",
+    "description": "IPAd Library — Test Vectors"
+  },
+
+  "test_vectors": [
+
+    {
+      "id": "TV-INIT-001",
+      "group": "Initialisation",
+      "description": "Init avec configuration minimale valide",
+      "input": {
+        "cfg": { "timeout_ms": 5000, "slot_id": 0, "log_level": "INFO" }
+      },
+      "expected": { "return": "IPAD_OK", "handle": "non-null" }
+    },
+    {
+      "id": "TV-INIT-002",
+      "group": "Initialisation",
+      "description": "Init avec cfg NULL",
+      "input": { "cfg": null },
+      "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
+    },
+    {
+      "id": "TV-INIT-003",
+      "group": "Initialisation",
+      "description": "Init quand TelSDK indisponible (subsystem not ready)",
+      "precondition": { "telsdk_ready": false },
+      "input": {
+        "cfg": { "timeout_ms": 500, "slot_id": 0 }
+      },
+      "expected": { "return": "IPAD_ERR_TIMEOUT" }
+    },
+
+    {
+      "id": "TV-EID-001",
+      "group": "EID",
+      "description": "Lecture EID nominal",
+      "precondition": { "mock_eid": "89049032005000000000000000000001" },
+      "input": {},
+      "expected": {
+        "return": "IPAD_OK",
+        "eid_str": "89049032005000000000000000000001",
+        "eid_len": 32
+      }
+    },
+    {
+      "id": "TV-EID-002",
+      "group": "EID",
+      "description": "Lecture EID quand CardManager échoue",
+      "precondition": { "card_fail_eid": true },
+      "input": {},
+      "expected": { "return": "IPAD_ERR_TELSDK" }
+    },
+
+    {
+      "id": "TV-LST-001",
+      "group": "Profile List",
+      "description": "Liste vide",
+      "precondition": { "profiles": [] },
+      "input": { "capacity": 16 },
+      "expected": { "return": "IPAD_OK", "count": 0 }
+    },
+    {
+      "id": "TV-LST-002",
+      "group": "Profile List",
+      "description": "Liste avec 3 profils",
+      "precondition": {
+        "profiles": [
+          { "iccid": "8901230000000000001A", "active": false },
+          { "iccid": "8901230000000000002B", "active": true  },
+          { "iccid": "8901230000000000003C", "active": false }
+        ]
+      },
+      "input": { "capacity": 16 },
+      "expected": { "return": "IPAD_OK", "count": 3 }
+    },
+    {
+      "id": "TV-LST-003",
+      "group": "Profile List",
+      "description": "Capacité buffer inférieure au nombre de profils réels",
+      "precondition": {
+        "profiles": [
+          { "iccid": "8901230000000000001A" },
+          { "iccid": "8901230000000000002B" },
+          { "iccid": "8901230000000000003C" }
+        ]
+      },
+      "input": { "capacity": 2 },
+      "expected": { "return": "IPAD_OK", "count": 2 }
+    },
+    {
+      "id": "TV-LST-004",
+      "group": "Profile List",
+      "description": "count_inout NULL",
+      "input": { "count_inout": null },
+      "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
+    },
+
+    {
+      "id": "TV-DL-001",
+      "group": "Download",
+      "description": "Téléchargement nominal avec activation code valide",
+      "input": {
+        "activation_code": "LPA:1$smdp.test.io$MATCHID001",
+        "auto_enable": false
+      },
+      "expected": {
+        "return": "IPAD_OK",
+        "iccid_non_null": true,
+        "profile_count_delta": 1
+      }
+    },
+    {
+      "id": "TV-DL-002",
+      "group": "Download",
+      "description": "Téléchargement avec auto_enable=true",
+      "input": {
+        "activation_code": "LPA:1$smdp.test.io$AUTOEN001",
+        "auto_enable": true
+      },
+      "expected": {
+        "return": "IPAD_OK",
+        "active_profile_iccid": "non-null"
+      }
+    },
+    {
+      "id": "TV-DL-003",
+      "group": "Download",
+      "description": "activation_code NULL",
+      "input": { "activation_code": null },
+      "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
+    },
+    {
+      "id": "TV-DL-004",
+      "group": "Download",
+      "description": "Échec backend addProfile",
+      "precondition": { "fail_add_profile": true },
+      "input": {
+        "activation_code": "LPA:1$smdp.test.io$FAIL001"
+      },
+      "expected": { "return": "IPAD_ERR_TELSDK" }
+    },
+    {
+      "id": "TV-DL-005",
+      "group": "Download",
+      "description": "Timeout réseau dépassé",
+      "precondition": { "download_delay_ms": 10000 },
+      "input": {
+        "activation_code": "LPA:1$smdp.test.io$TIMEOUT",
+        "timeout_ms": 200
+      },
+      "expected": { "return": "IPAD_ERR_TIMEOUT" }
+    },
+    {
+      "id": "TV-DL-006",
+      "group": "Download",
+      "description": "Download avec confirmation code",
+      "input": {
+        "activation_code": "LPA:1$smdp.test.io$CONFIRM001",
+        "confirmation_code": "12345678",
+        "auto_enable": false
+      },
+      "expected": { "return": "IPAD_OK" }
+    },
+    {
+      "id": "TV-DL-007",
+      "group": "Download",
+      "description": "Async download — callback appelé avec IPAD_OK",
+      "input": {
+        "activation_code": "LPA:1$smdp.test.io$ASYNC001",
+        "mode": "async"
+      },
+      "expected": {
+        "return_ipad_profile_download_async": "IPAD_OK",
+        "callback_status": "IPAD_OK",
+        "callback_max_delay_ms": 2000
+      }
+    },
+
+    {
+      "id": "TV-EN-001",
+      "group": "Enable",
+      "description": "Activation profil désactivé",
+      "precondition": {
+        "profiles": [{ "iccid": "8901230000000000AABB", "active": false }]
+      },
+      "input": { "iccid": "8901230000000000AABB" },
+      "expected": {
+        "return": "IPAD_OK",
+        "state": "IPAD_PROFILE_ENABLED"
+      }
+    },
+    {
+      "id": "TV-EN-002",
+      "group": "Enable",
+      "description": "Activation profil inexistant",
+      "precondition": { "profiles": [] },
+      "input": { "iccid": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" },
+      "expected": { "return": "IPAD_ERR_TELSDK" }
+    },
+    {
+      "id": "TV-EN-003",
+      "group": "Enable",
+      "description": "Exclusivité — activer B désactive A",
+      "precondition": {
+        "profiles": [
+          { "iccid": "8901230000000000AA01", "active": true  },
+          { "iccid": "8901230000000000AA02", "active": false }
+        ]
+      },
+      "input": { "iccid": "8901230000000000AA02" },
+      "expected": {
+        "return": "IPAD_OK",
+        "state_AA01": "IPAD_PROFILE_DISABLED",
+        "state_AA02": "IPAD_PROFILE_ENABLED"
+      }
+    },
+
+    {
+      "id": "TV-DIS-001",
+      "group": "Disable",
+      "description": "Désactivation profil actif",
+      "precondition": {
+        "profiles": [{ "iccid": "8901230000000000CCDD", "active": true }]
+      },
+      "input": { "iccid": "8901230000000000CCDD" },
+      "expected": {
+        "return": "IPAD_OK",
+        "state": "IPAD_PROFILE_DISABLED"
+      }
+    },
+
+    {
+      "id": "TV-DEL-001",
+      "group": "Delete",
+      "description": "Suppression profil désactivé",
+      "precondition": {
+        "profiles": [{ "iccid": "8901230000000000EEFF", "active": false }]
+      },
+      "input": { "iccid": "8901230000000000EEFF" },
+      "expected": {
+        "return": "IPAD_OK",
+        "profile_exists_after": false
+      }
+    },
+    {
+      "id": "TV-DEL-002",
+      "group": "Delete",
+      "description": "Suppression profil inexistant",
+      "precondition": { "profiles": [] },
+      "input": { "iccid": "DEADBEEFDEADBEEF0000000000001234" },
+      "expected": { "return": "IPAD_ERR_TELSDK" }
+    },
+
+    {
+      "id": "TV-NICK-001",
+      "group": "Nickname",
+      "description": "Mise à jour nickname ASCII",
+      "precondition": {
+        "profiles": [{ "iccid": "8901230000000000F1F2" }]
+      },
+      "input": { "iccid": "8901230000000000F1F2", "nickname": "MonOpérateur" },
+      "expected": {
+        "return": "IPAD_OK",
+        "nickname_after": "MonOpérateur"
+      }
+    },
+    {
+      "id": "TV-NICK-002",
+      "group": "Nickname",
+      "description": "Nickname NULL",
+      "input": { "nickname": null },
+      "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
+    },
+
+    {
+      "id": "TV-EVT-001",
+      "group": "Events",
+      "description": "Souscription — événement INSTALLED reçu après download",
+      "input": {
+        "subscribe_mask": "IPAD_EVT_PROFILE_INSTALLED",
+        "action": "download LPA:1$smdp.test.io$EVTINSTALL"
+      },
+      "expected": {
+        "event_received": "IPAD_EVT_PROFILE_INSTALLED",
+        "max_delay_ms": 3000
+      }
+    },
+    {
+      "id": "TV-EVT-002",
+      "group": "Events",
+      "description": "Désouscription — callback plus appelé après unsubscribe",
+      "input": {
+        "subscribe_then_unsubscribe": true,
+        "action": "enable profile"
+      },
+      "expected": { "callback_not_called": true }
+    },
+    {
+      "id": "TV-EVT-003",
+      "group": "Events",
+      "description": "Souscription ID invalide",
+      "input": { "sub_id": 99999 },
+      "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
+    },
+
+    {
+      "id": "TV-DIAG-001",
+      "group": "Diagnostics",
+      "description": "Export JSON valide après 2 téléchargements",
+      "precondition": {
+        "profiles_downloaded": 2
+      },
+      "input": { "buf_len": 1024 },
+      "expected": {
+        "return": "IPAD_OK",
+        "json_has_eid": true,
+        "json_has_profile_count": true,
+        "json_profile_count_gte": 2
+      }
+    },
+    {
+      "id": "TV-DIAG-002",
+      "group": "Diagnostics",
+      "description": "Buffer trop petit",
+      "input": { "buf_len": 1 },
+      "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
+    },
+
+    {
+      "id": "TV-UTIL-001",
+      "group": "Utilities",
+      "description": "strerror pour tous les codes connus",
+      "input": {
+        "codes": [
+          "IPAD_OK", "IPAD_PENDING", "IPAD_ERR_INVALID_PARAM",
+          "IPAD_ERR_NOT_INITIALIZED", "IPAD_ERR_HAL_FAILURE",
+          "IPAD_ERR_TRANSPORT", "IPAD_ERR_TLS_HANDSHAKE",
+          "IPAD_ERR_EIM_REJECTED", "IPAD_ERR_PROFILE_NOT_FOUND",
+          "IPAD_ERR_PROFILE_ACTIVE", "IPAD_ERR_NO_MEMORY",
+          "IPAD_ERR_CRYPTO", "IPAD_ERR_TIMEOUT", "IPAD_ERR_BUSY",
+          "IPAD_ERR_NOT_SUPPORTED", "IPAD_ERR_TELSDK", "IPAD_ERR_INTERNAL"
+        ]
+      },
+      "expected": { "all_non_null": true, "all_non_empty": true }
+    }
+  ]
+}
