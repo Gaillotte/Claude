@@ -154,6 +154,27 @@ if(BUILD_TESTS)
 endif()
 
 # ═════════════════════════════════════════════════════════════════════════════
+# KPI report — generated after every build of the ipad library
+# ═════════════════════════════════════════════════════════════════════════════
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_FOUND)
+    set(KPI_REPORT "${CMAKE_BINARY_DIR}/ipad_kpi_report.pdf")
+    set(KPI_SCRIPT "${CMAKE_SOURCE_DIR}/tools/gen_kpi_report.py")
+    add_custom_command(
+        TARGET ipad POST_BUILD
+        COMMAND ${Python3_EXECUTABLE} ${KPI_SCRIPT}
+                    --build-dir   "${CMAKE_BINARY_DIR}"
+                    --source-dir  "${CMAKE_SOURCE_DIR}"
+                    --output      "${KPI_REPORT}"
+        COMMENT "Generating KPI report → ${KPI_REPORT}"
+        VERBATIM
+    )
+    message(STATUS "KPI report: ${KPI_REPORT} (generated after each build)")
+else()
+    message(STATUS "Python3 not found — KPI report disabled")
+endif()
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Install rules
 # ═════════════════════════════════════════════════════════════════════════════
 include(GNUInstallDirs)
