@@ -3,6 +3,39 @@
  * @brief IPAd Abstraction Library — Core implementation
  *
  * Wraps Qualcomm TelSDK telux::tel::ISimProfileManager for SA525.
+ *
+ * Requirements fulfilled in this file (see doc/IPAd_Requirements_Traceability_Matrix.docx):
+ *   REQ-001  ipad_init — initialise session with TelSDK subsystem
+ *   REQ-002  ipad_deinit — release all resources
+ *   REQ-003  ipad_configure — runtime reconfiguration
+ *   REQ-004  ipad_get_version — library + SGP.32 spec version
+ *   REQ-005  ipad_selftest — HAL + subsystem self-test
+ *   REQ-010  ipad_get_eid — 32 BCD-digit EID retrieval
+ *   REQ-011  ipad_get_euicc_info — EID + OS version + capacity
+ *   REQ-020  ipad_profile_download — LPA activation-code download
+ *   REQ-021  confirmation_code forwarded to TelSDK addProfile
+ *   REQ-022  ipad_profile_download_async — non-blocking download
+ *   REQ-023  IPAD_EVT_DOWNLOAD_PROGRESS events from onDownloadStatus
+ *   REQ-024  auto_enable flag forwarded to TelSDK addProfile
+ *   REQ-030  ipad_profile_list — enumerate installed profiles
+ *   REQ-031  ipad_profile_get — single profile by ICCID
+ *   REQ-032  ipad_profile_enable — ENABLED state transition
+ *   REQ-033  single-active-profile enforced by TelSDK setProfile
+ *   REQ-034  ipad_profile_disable — DISABLED state transition
+ *   REQ-035  ipad_profile_delete — permanent profile removal
+ *   REQ-036  ipad_profile_set_nickname — human-readable label
+ *   REQ-037  ipad_profile_get_state — on-demand state query
+ *   REQ-060  ipad_event_subscribe / ipad_event_unsubscribe
+ *   REQ-061  IPAD_EVT_PROFILE_* events on every state transition
+ *   REQ-062  IPAD_EVT_EIM_CONNECTED / EIM_DISCONNECTED via serviceStatus
+ *   REQ-063  multiple concurrent subscriptions (subscriptions vector)
+ *   REQ-064  ipad_event_pump — explicit event processing
+ *   REQ-070  ipad_strerror — structured error-to-string mapping
+ *   REQ-071  retry_count stored in cfg (enforced at application level)
+ *   REQ-072  timeout_ms applied to every blocking wait_for call
+ *   REQ-080  ipad_diag_export_json — JSON snapshot
+ *   REQ-081  ipad_log / ipad_log_set_level — 5-level log filtering
+ *   REQ-082  ipad_log_set_handler — custom log callback
  */
 
 #include "ipad/ipad_telsdk_backend.h"
@@ -22,6 +55,7 @@ static bool valid_hdl(ipad_handle_t hdl) {
     return hdl != nullptr && hdl->initialized.load();
 }
 
+/* [REQ-081] [REQ-082] — five-level log routing with optional custom handler */
 void ipad_ctx_s::log(ipad_loglevel_t level, const char *module,
                       const char *fmt, ...) {
     if (level > cfg.log_level) return;
@@ -41,6 +75,7 @@ void ipad_ctx_s::log(ipad_loglevel_t level, const char *module,
     }
 }
 
+/* [REQ-060] [REQ-063] — thread-safe event queue + fan-out to all subscribers */
 void ipad_ctx_s::push_event(const ipad_event_t &evt) {
     {
         std::lock_guard<std::mutex> lk(evt_mutex);
@@ -74,7 +109,7 @@ void ipad_ctx_s::dispatch_events() {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────
- * TelSDK status mapping
+ * TelSDK status mapping                                            [REQ-070]
  * ────────────────────────────────────────────────────────────────────────── */
 ipad_status_t ipad_internal::telsdk_status_to_ipad(telux::common::Status ts) {
     switch (ts) {
@@ -89,6 +124,8 @@ ipad_status_t ipad_internal::telsdk_status_to_ipad(telux::common::Status ts) {
 /* ──────────────────────────────────────────────────────────────────────────────
  * Profile Listener callbacks
  * ────────────────────────────────────────────────────────────────────────── */
+
+/* [REQ-023] — download progress events; [REQ-061] — PROFILE_INSTALLED event */
 void IpadProfileListener::onDownloadStatus(
         telux::tel::DownloadStatus status,
         int percentage,
@@ -96,14 +133,14 @@ void IpadProfileListener::onDownloadStatus(
 
     ipad_event_t evt{};
     if (percentage < 100) {
-        evt.type         = IPAD_EVT_DOWNLOAD_PROGRESS;
+        evt.type         = IPAD_EVT_DOWNLOAD_PROGRESS;    /* [REQ-023] */
         evt.progress_pct = static_cast<uint8_t>(percentage);
         snprintf(evt.detail, sizeof(evt.detail), "Download %d%%", percentage);
         evt.status = IPAD_PENDING;
     } else {
         /* Map TelSDK DownloadStatus enum */
         if (status == telux::tel::DownloadStatus::DOWNLOADED) {
-            evt.type   = IPAD_EVT_PROFILE_INSTALLED;
+            evt.type   = IPAD_EVT_PROFILE_INSTALLED;      /* [REQ-061] */
             evt.status = IPAD_OK;
             snprintf(evt.detail, sizeof(evt.detail), "Profile installed");
         } else {
@@ -134,14 +171,15 @@ void IpadProfileListener::onUserDisplayInfo(
     }
 }
 
+/* [REQ-062] — eIM connectivity events */
 void IpadProfileListener::serviceStatus(telux::common::ServiceStatus ss) {
     ipad_event_t evt{};
     if (ss == telux::common::ServiceStatus::SERVICE_AVAILABLE) {
-        evt.type   = IPAD_EVT_EIM_CONNECTED;
+        evt.type   = IPAD_EVT_EIM_CONNECTED;               /* [REQ-062] */
         evt.status = IPAD_OK;
         snprintf(evt.detail, sizeof(evt.detail), "TelSDK SimProfileManager available");
     } else {
-        evt.type   = IPAD_EVT_EIM_DISCONNECTED;
+        evt.type   = IPAD_EVT_EIM_DISCONNECTED;            /* [REQ-062] */
         evt.status = IPAD_ERR_TELSDK;
         snprintf(evt.detail, sizeof(evt.detail), "TelSDK SimProfileManager unavailable");
     }
@@ -152,6 +190,7 @@ void IpadProfileListener::serviceStatus(telux::common::ServiceStatus ss) {
  * Public API implementation
  * ══════════════════════════════════════════════════════════════════════════ */
 
+/* [REQ-001] — initialise session; [REQ-072] — subsystem-ready timeout */
 ipad_status_t ipad_init(const ipad_config_t *cfg, ipad_handle_t *hdl_out) {
     if (!cfg || !hdl_out) return IPAD_ERR_INVALID_PARAM;
 
@@ -160,7 +199,7 @@ ipad_status_t ipad_init(const ipad_config_t *cfg, ipad_handle_t *hdl_out) {
 
     ctx->cfg = *cfg;
     ctx->cfg.timeout_ms   = cfg->timeout_ms   ? cfg->timeout_ms   : 30000;
-    ctx->cfg.retry_count  = cfg->retry_count  ? cfg->retry_count  : 3;
+    ctx->cfg.retry_count  = cfg->retry_count  ? cfg->retry_count  : 3;   /* [REQ-071] */
 
     /* ── Connect to TelSDK PhoneFactory ──────────────────────────────────── */
     auto &factory = telux::tel::PhoneFactory::getInstance();
@@ -179,7 +218,7 @@ ipad_status_t ipad_init(const ipad_config_t *cfg, ipad_handle_t *hdl_out) {
         return IPAD_ERR_TELSDK;
     }
 
-    /* Wait for subsystem ready with timeout */
+    /* [REQ-072] Wait for subsystem ready with configurable timeout */
     auto timeout = std::chrono::milliseconds(ctx->cfg.timeout_ms);
     auto ready   = ctx->sim_mgr->onSubsystemReady().wait_for(timeout);
     if (ready == std::future_status::timeout) {
@@ -197,6 +236,7 @@ ipad_status_t ipad_init(const ipad_config_t *cfg, ipad_handle_t *hdl_out) {
     return IPAD_OK;
 }
 
+/* [REQ-002] — release all resources and deregister listener */
 ipad_status_t ipad_deinit(ipad_handle_t hdl) {
     if (!hdl) return IPAD_ERR_INVALID_PARAM;
     hdl->initialized = false;
@@ -207,6 +247,7 @@ ipad_status_t ipad_deinit(ipad_handle_t hdl) {
     return IPAD_OK;
 }
 
+/* [REQ-003] — runtime update of timeout, retry count, log level */
 ipad_status_t ipad_configure(ipad_handle_t hdl, const ipad_config_t *cfg) {
     if (!hdl || !cfg) return IPAD_ERR_INVALID_PARAM;
     std::lock_guard<std::mutex> lk(hdl->log_mutex);
@@ -216,6 +257,7 @@ ipad_status_t ipad_configure(ipad_handle_t hdl, const ipad_config_t *cfg) {
     return IPAD_OK;
 }
 
+/* [REQ-004] — library version + SGP.32 spec revision string */
 ipad_status_t ipad_get_version(ipad_version_t *ver_out) {
     if (!ver_out) return IPAD_ERR_INVALID_PARAM;
     ver_out->major          = IPAD_VERSION_MAJOR;
@@ -226,6 +268,7 @@ ipad_status_t ipad_get_version(ipad_version_t *ver_out) {
     return IPAD_OK;
 }
 
+/* [REQ-005] — self-test: HAL (card_mgr) + subsystem ready (sim_mgr) */
 ipad_status_t ipad_selftest(ipad_handle_t hdl, uint32_t *result) {
     if (!valid_hdl(hdl) || !result) return IPAD_ERR_INVALID_PARAM;
     *result = 0;
@@ -237,6 +280,8 @@ ipad_status_t ipad_selftest(ipad_handle_t hdl, uint32_t *result) {
 /* ──────────────────────────────────────────────────────────────────────────────
  * eUICC identity
  * ────────────────────────────────────────────────────────────────────────── */
+
+/* [REQ-010] — retrieve 32 BCD-digit EID via ICardManager::requestEid */
 ipad_status_t ipad_get_eid(ipad_handle_t hdl, ipad_eid_t eid_out) {
     if (!valid_hdl(hdl) || !eid_out) return IPAD_ERR_INVALID_PARAM;
 
@@ -258,6 +303,7 @@ ipad_status_t ipad_get_eid(ipad_handle_t hdl, ipad_eid_t eid_out) {
         });
     if (status != telux::common::Status::SUCCESS) return telsdk_status_to_ipad(status);
 
+    /* [REQ-072] — configurable timeout on async EID request */
     std::unique_lock<std::mutex> lk(mtx);
     cv.wait_for(lk, std::chrono::milliseconds(hdl->cfg.timeout_ms),
                 [&]{ return done; });
@@ -272,6 +318,7 @@ ipad_status_t ipad_get_eid(ipad_handle_t hdl, ipad_eid_t eid_out) {
     return IPAD_OK;
 }
 
+/* [REQ-011] — EID + OS version + profile capacity */
 ipad_status_t ipad_get_euicc_info(ipad_handle_t hdl, ipad_euicc_info_t *info_out) {
     if (!valid_hdl(hdl) || !info_out) return IPAD_ERR_INVALID_PARAM;
     memset(info_out, 0, sizeof(*info_out));
@@ -312,7 +359,7 @@ static void fill_profile(ipad_profile_t &dst, const telux::tel::SimProfile &src)
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────
- * Profile listing
+ * Profile listing                                                  [REQ-030]
  * ────────────────────────────────────────────────────────────────────────── */
 ipad_status_t ipad_profile_list(ipad_handle_t  hdl,
                                  ipad_profile_t *list_out,
@@ -335,6 +382,7 @@ ipad_status_t ipad_profile_list(ipad_handle_t  hdl,
         });
     if (st != telux::common::Status::SUCCESS) return telsdk_status_to_ipad(st);
 
+    /* [REQ-072] — configurable timeout */
     std::unique_lock<std::mutex> lk(mtx);
     cv.wait_for(lk, std::chrono::milliseconds(hdl->cfg.timeout_ms),
                 [&]{ return done; });
@@ -351,6 +399,7 @@ ipad_status_t ipad_profile_list(ipad_handle_t  hdl,
     return IPAD_OK;
 }
 
+/* [REQ-031] — single profile lookup by ICCID */
 ipad_status_t ipad_profile_get(ipad_handle_t      hdl,
                                 const ipad_iccid_t iccid,
                                 ipad_profile_t    *profile_out) {
@@ -375,7 +424,7 @@ ipad_status_t ipad_profile_get(ipad_handle_t      hdl,
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────
- * Profile download (synchronous)
+ * Profile download (synchronous)          [REQ-020] [REQ-021] [REQ-024]
  * ────────────────────────────────────────────────────────────────────────── */
 ipad_status_t ipad_profile_download(ipad_handle_t          hdl,
                                      const ipad_dl_params_t *params,
@@ -407,6 +456,7 @@ ipad_status_t ipad_profile_download(ipad_handle_t          hdl,
         hdl->op_result  = IPAD_ERR_TIMEOUT;
     }
 
+    /* [REQ-020] activation_code; [REQ-021] confirmation_code; [REQ-024] auto_enable */
     auto st = hdl->sim_mgr->addProfile(
         hdl->cfg.slot_id,
         params->activation_code,
@@ -425,7 +475,7 @@ ipad_status_t ipad_profile_download(ipad_handle_t          hdl,
         return telsdk_status_to_ipad(st);
     }
 
-    /* Wait for completion */
+    /* [REQ-072] — per-operation configurable timeout */
     auto timeout_ms = params->timeout_ms ? params->timeout_ms : hdl->cfg.timeout_ms;
     std::unique_lock<std::mutex> lk(hdl->op_mutex);
     hdl->op_cv.wait_for(lk, std::chrono::milliseconds(timeout_ms),
@@ -458,6 +508,7 @@ ipad_status_t ipad_profile_download(ipad_handle_t          hdl,
     return IPAD_OK;
 }
 
+/* [REQ-022] — asynchronous download; returns IPAD_PENDING immediately */
 ipad_status_t ipad_profile_download_async(ipad_handle_t           hdl,
                                            const ipad_dl_params_t *params,
                                            ipad_callback_t         cb,
@@ -481,6 +532,9 @@ ipad_status_t ipad_profile_download_async(ipad_handle_t           hdl,
 /* ──────────────────────────────────────────────────────────────────────────────
  * Profile enable / disable / delete
  * ────────────────────────────────────────────────────────────────────────── */
+
+/* [REQ-032] [REQ-033] [REQ-034] — state transitions via TelSDK setProfile.
+ * Single-active-profile exclusivity (REQ-033) is enforced by the TelSDK. */
 static ipad_status_t profile_set_state(ipad_handle_t hdl,
                                         const ipad_iccid_t iccid,
                                         bool enable) {
@@ -503,11 +557,13 @@ static ipad_status_t profile_set_state(ipad_handle_t hdl,
         });
     if (st != telux::common::Status::SUCCESS) return telsdk_status_to_ipad(st);
 
+    /* [REQ-072] — timeout on enable/disable */
     std::unique_lock<std::mutex> lk(mtx);
     cv.wait_for(lk, std::chrono::milliseconds(hdl->cfg.timeout_ms), [&]{ return done; });
     if (!done) return IPAD_ERR_TIMEOUT;
 
     if (rc == IPAD_OK) {
+        /* [REQ-061] — emit state-transition event */
         ipad_event_t evt{};
         evt.type   = enable ? IPAD_EVT_PROFILE_ENABLED : IPAD_EVT_PROFILE_DISABLED;
         evt.status = IPAD_OK;
@@ -525,6 +581,7 @@ ipad_status_t ipad_profile_disable(ipad_handle_t hdl, const ipad_iccid_t iccid) 
     return profile_set_state(hdl, iccid, false);
 }
 
+/* [REQ-035] — permanent profile removal via TelSDK deleteProfile */
 ipad_status_t ipad_profile_delete(ipad_handle_t hdl, const ipad_iccid_t iccid) {
     if (!valid_hdl(hdl)) return IPAD_ERR_INVALID_PARAM;
     char iccid_str[21]; ipad_iccid_to_str(iccid, iccid_str);
@@ -546,6 +603,7 @@ ipad_status_t ipad_profile_delete(ipad_handle_t hdl, const ipad_iccid_t iccid) {
     if (!done) return IPAD_ERR_TIMEOUT;
 
     if (rc == IPAD_OK) {
+        /* [REQ-061] — emit PROFILE_DELETED event */
         ipad_event_t evt{};
         evt.type = IPAD_EVT_PROFILE_DELETED;
         evt.status = IPAD_OK;
@@ -555,6 +613,7 @@ ipad_status_t ipad_profile_delete(ipad_handle_t hdl, const ipad_iccid_t iccid) {
     return rc;
 }
 
+/* [REQ-036] — human-readable label update via TelSDK updateNickName */
 ipad_status_t ipad_profile_set_nickname(ipad_handle_t      hdl,
                                          const ipad_iccid_t iccid,
                                          const char        *nickname) {
@@ -578,6 +637,7 @@ ipad_status_t ipad_profile_set_nickname(ipad_handle_t      hdl,
     return done ? rc : IPAD_ERR_TIMEOUT;
 }
 
+/* [REQ-037] — on-demand profile state query */
 ipad_status_t ipad_profile_get_state(ipad_handle_t        hdl,
                                       const ipad_iccid_t   iccid,
                                       ipad_profile_state_t *state_out) {
@@ -588,8 +648,10 @@ ipad_status_t ipad_profile_get_state(ipad_handle_t        hdl,
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────
- * Events
+ * Events                                                       [REQ-060..064]
  * ────────────────────────────────────────────────────────────────────────── */
+
+/* [REQ-060] — bitmask subscription; [REQ-063] — multiple concurrent subscribers */
 ipad_sub_id_t ipad_event_subscribe(ipad_handle_t   hdl,
                                     uint32_t         mask,
                                     ipad_event_cb_t  cb,
@@ -605,6 +667,7 @@ ipad_sub_id_t ipad_event_subscribe(ipad_handle_t   hdl,
     return sub.id;
 }
 
+/* [REQ-060] — cancel subscription by ID */
 ipad_status_t ipad_event_unsubscribe(ipad_handle_t hdl, ipad_sub_id_t sub_id) {
     if (!hdl) return IPAD_ERR_INVALID_PARAM;
     std::lock_guard<std::mutex> lk(hdl->sub_mutex);
@@ -616,6 +679,7 @@ ipad_status_t ipad_event_unsubscribe(ipad_handle_t hdl, ipad_sub_id_t sub_id) {
     return IPAD_OK;
 }
 
+/* [REQ-064] — explicit event pump for single-threaded environments */
 ipad_status_t ipad_event_pump(ipad_handle_t hdl, uint32_t timeout_ms) {
     if (!hdl) return IPAD_ERR_INVALID_PARAM;
     std::unique_lock<std::mutex> lk(hdl->evt_mutex);
@@ -627,8 +691,10 @@ ipad_status_t ipad_event_pump(ipad_handle_t hdl, uint32_t timeout_ms) {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────
- * Diagnostics
+ * Diagnostics                                                  [REQ-080..082]
  * ────────────────────────────────────────────────────────────────────────── */
+
+/* [REQ-082] — install custom log handler */
 ipad_status_t ipad_log_set_handler(ipad_handle_t hdl,
                                     ipad_log_cb_t  cb,
                                     void          *user_ctx) {
@@ -639,12 +705,14 @@ ipad_status_t ipad_log_set_handler(ipad_handle_t hdl,
     return IPAD_OK;
 }
 
+/* [REQ-081] — runtime log-level change */
 ipad_status_t ipad_log_set_level(ipad_handle_t hdl, ipad_loglevel_t level) {
     if (!hdl) return IPAD_ERR_INVALID_PARAM;
     hdl->cfg.log_level = level;
     return IPAD_OK;
 }
 
+/* [REQ-080] — JSON diagnostic snapshot: EID, profile count, subsystem state */
 ipad_status_t ipad_diag_export_json(ipad_handle_t hdl,
                                      char         *buf,
                                      size_t        buf_len) {
@@ -667,8 +735,10 @@ ipad_status_t ipad_diag_export_json(ipad_handle_t hdl,
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────
- * Utilities
+ * Utilities                                                         [REQ-070]
  * ────────────────────────────────────────────────────────────────────────── */
+
+/* [REQ-070] — structured error-code to human-readable string */
 const char *ipad_strerror(ipad_status_t s) {
     switch (s) {
         case IPAD_OK:                    return "OK";
