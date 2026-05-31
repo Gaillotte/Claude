@@ -45,7 +45,7 @@ add_compile_definitions(TELSDK_VERSION_STRING="${TELSDK_VERSION}")
 # ═════════════════════════════════════════════════════════════════════════════
 # Library target: ipad
 # ═════════════════════════════════════════════════════════════════════════════
-add_library(ipad SHARED src/ipad.cpp)
+add_library(ipad SHARED src/ipad.cpp src/ipad_log.cpp)
 
 target_include_directories(ipad
     PUBLIC
@@ -122,6 +122,9 @@ if(BUILD_TESTS)
 
     # ── Unit tests ─────────────────────────────────────────────────────────
     add_ipad_test(ipad_unit_tests tests/unit/test_ipad_unit.cpp)
+
+    # ── Log sink tests ─────────────────────────────────────────────────────
+    add_ipad_test(ipad_log_tests tests/unit/test_ipad_log.cpp)
 
     # ── Integration tests ──────────────────────────────────────────────────
     add_ipad_test(ipad_integration_tests tests/integration/test_ipad_integration.cpp)
