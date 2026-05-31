@@ -1,2 +1,4 @@
 build/
 build_cov/
+**/__pycache__/
+**/*.pyc
