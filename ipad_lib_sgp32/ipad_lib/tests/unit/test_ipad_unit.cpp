@@ -389,7 +389,172 @@ TEST_F(IpadTest, DiagExportJsonIsValidJson) {
 TEST_F(IpadTest, SelfTestPasses) {
     uint32_t result = 0;
     EXPECT_EQ(IPAD_OK, ipad_selftest(hdl, &result));
-    EXPECT_NE(0u, result);   /* at least one flag set */
+    EXPECT_NE(0u, result);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * TC-CFG — ipad_configure
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+TEST_F(IpadTest, ConfigureUpdatesSettings) {
+    ipad_config_t cfg{};
+    cfg.log_level   = IPAD_LOG_WARN;
+    cfg.retry_count = 5;
+    cfg.timeout_ms  = 10000;
+    EXPECT_EQ(IPAD_OK, ipad_configure(hdl, &cfg));
+}
+
+TEST_F(IpadTest, ConfigureNullParamsReturnsError) {
+    EXPECT_EQ(IPAD_ERR_INVALID_PARAM, ipad_configure(hdl, nullptr));
+    EXPECT_EQ(IPAD_ERR_INVALID_PARAM, ipad_configure(nullptr, nullptr));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * TC-PUMP — ipad_event_pump
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+TEST_F(IpadTest, EventPumpWithNoEvents) {
+    EXPECT_EQ(IPAD_OK, ipad_event_pump(hdl, 10));
+}
+
+TEST_F(IpadTest, EventPumpNullHandleReturnsError) {
+    EXPECT_EQ(IPAD_ERR_INVALID_PARAM, ipad_event_pump(nullptr, 10));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * TC-LOG — ipad_log_set_handler / ipad_log_set_level
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+TEST_F(IpadTest, LogSetHandlerReceivesLogMessages) {
+    std::atomic<int> log_count{0};
+    EXPECT_EQ(IPAD_OK, ipad_log_set_handler(hdl,
+        [](ipad_loglevel_t, const char *, const char *, void *ctx) {
+            static_cast<std::atomic<int>*>(ctx)->fetch_add(1);
+        }, &log_count));
+    EXPECT_EQ(IPAD_OK, ipad_log_set_level(hdl, IPAD_LOG_DEBUG));
+
+    mock_mgr->mock_cfg.download_delay_ms = 10;
+    ipad_dl_params_t p{}; p.activation_code = "LPA:1$smdp.test.io$LOGTEST";
+    ipad_profile_download(hdl, &p, nullptr);
+
+    EXPECT_GT(log_count.load(), 0);
+    /* Reset to default stderr handler */
+    EXPECT_EQ(IPAD_OK, ipad_log_set_handler(hdl, nullptr, nullptr));
+}
+
+TEST_F(IpadTest, LogSetHandlerNullHdlReturnsError) {
+    EXPECT_EQ(IPAD_ERR_INVALID_PARAM, ipad_log_set_handler(nullptr, nullptr, nullptr));
+}
+
+TEST_F(IpadTest, LogSetLevelNullHdlReturnsError) {
+    EXPECT_EQ(IPAD_ERR_INVALID_PARAM, ipad_log_set_level(nullptr, IPAD_LOG_DEBUG));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * TC-INIT-ERR — init error paths
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+TEST(IpadInitTest, InitNullCardManagerFails) {
+    auto &factory = telux::tel::PhoneFactory::getInstance();
+    factory.sim_mgr_  = std::make_shared<MockMgr>();
+    factory.card_mgr_ = std::make_shared<MockCard>();
+    factory.fail_card_manager = true;
+
+    ipad_config_t cfg{}; cfg.timeout_ms = 1000;
+    ipad_handle_t h = nullptr;
+    EXPECT_EQ(IPAD_ERR_TELSDK, ipad_init(&cfg, &h));
+    EXPECT_EQ(nullptr, h);
+
+    factory.fail_card_manager = false;
+}
+
+TEST(IpadInitTest, InitSubsystemReadyTimeout) {
+    auto &factory = telux::tel::PhoneFactory::getInstance();
+    factory.sim_mgr_  = std::make_shared<MockMgr>();
+    factory.sim_mgr_->mock_cfg.subsystem_ready_timeout = true;
+    factory.card_mgr_ = std::make_shared<MockCard>();
+
+    ipad_config_t cfg{}; cfg.timeout_ms = 50;  /* fast timeout */
+    ipad_handle_t h = nullptr;
+    EXPECT_EQ(IPAD_ERR_TIMEOUT, ipad_init(&cfg, &h));
+    EXPECT_EQ(nullptr, h);
+
+    factory.sim_mgr_->mock_cfg.subsystem_ready_timeout = false;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * TC-SVC — serviceStatus callbacks
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+TEST_F(IpadTest, ServiceStatusCallbacks) {
+    std::atomic<int> eim_conn{0}, eim_disc{0};
+    using Ctx = std::pair<std::atomic<int>*, std::atomic<int>*>;
+    Ctx ctx{&eim_conn, &eim_disc};
+
+    ipad_event_subscribe(hdl, IPAD_EVT_ALL,
+        [](ipad_handle_t, const ipad_event_t *e, void *uctx) {
+            auto *p = static_cast<Ctx*>(uctx);
+            if (e->type == IPAD_EVT_EIM_CONNECTED)    p->first->fetch_add(1);
+            if (e->type == IPAD_EVT_EIM_DISCONNECTED) p->second->fetch_add(1);
+        }, &ctx);
+
+    auto listener = mock_mgr->get_listener();
+    ASSERT_NE(nullptr, listener);
+    listener->serviceStatus(telux::common::ServiceStatus::SERVICE_AVAILABLE);
+    listener->serviceStatus(telux::common::ServiceStatus::SERVICE_UNAVAILABLE);
+
+    EXPECT_EQ(1, eim_conn.load());
+    EXPECT_EQ(1, eim_disc.load());
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * TC-DL-EXTRA — download edge cases
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+TEST_F(IpadTest, DownloadWithUserConsent) {
+    mock_mgr->mock_cfg.require_user_consent = true;
+    mock_mgr->mock_cfg.download_delay_ms    = 80;
+    ipad_dl_params_t p{}; p.activation_code = "LPA:1$smdp.test.io$CONSENT";
+    EXPECT_EQ(IPAD_OK, ipad_profile_download(hdl, &p, nullptr));
+}
+
+TEST_F(IpadTest, DownloadErrorAtCompletion) {
+    mock_mgr->mock_cfg.download_error_at_end = true;
+    mock_mgr->mock_cfg.download_delay_ms     = 50;
+    ipad_dl_params_t p{}; p.activation_code = "LPA:1$smdp.test.io$ERRSTAT";
+    EXPECT_EQ(IPAD_ERR_TELSDK, ipad_profile_download(hdl, &p, nullptr));
+}
+
+TEST_F(IpadTest, DownloadImmediateStatusFailure) {
+    mock_mgr->mock_cfg.fail_add_profile_status = true;
+    ipad_dl_params_t p{}; p.activation_code = "LPA:1$smdp.test.io$STATFAIL";
+    EXPECT_EQ(IPAD_ERR_TELSDK, ipad_profile_download(hdl, &p, nullptr));
+    mock_mgr->mock_cfg.fail_add_profile_status = false;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * TC-TELSDK — telsdk_status_to_ipad mapping
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+TEST_F(IpadTest, TelsdkStatusMappingFailed) {
+    mock_mgr->mock_cfg.fail_get_profiles_status = telux::common::Status::FAILED;
+    uint8_t count = 8; ipad_profile_t list[8];
+    EXPECT_EQ(IPAD_ERR_TELSDK, ipad_profile_list(hdl, list, &count));
+    mock_mgr->mock_cfg.fail_get_profiles_status = telux::common::Status::SUCCESS;
+}
+
+TEST_F(IpadTest, TelsdkStatusMappingInvalidParam) {
+    mock_mgr->mock_cfg.fail_get_profiles_status = telux::common::Status::INVALID_PARAM;
+    uint8_t count = 8; ipad_profile_t list[8];
+    EXPECT_EQ(IPAD_ERR_INVALID_PARAM, ipad_profile_list(hdl, list, &count));
+    mock_mgr->mock_cfg.fail_get_profiles_status = telux::common::Status::SUCCESS;
+}
+
+TEST_F(IpadTest, TelsdkStatusMappingNotSupported) {
+    mock_mgr->mock_cfg.fail_get_profiles_status = telux::common::Status::NOT_SUPPORTED;
+    uint8_t count = 8; ipad_profile_t list[8];
+    EXPECT_EQ(IPAD_ERR_NOT_SUPPORTED, ipad_profile_list(hdl, list, &count));
+    mock_mgr->mock_cfg.fail_get_profiles_status = telux::common::Status::SUCCESS;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────
