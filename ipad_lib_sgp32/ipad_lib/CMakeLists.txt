@@ -148,6 +148,13 @@ if(BUILD_TESTS)
                        "Install with: apt install nlohmann-json3-dev")
     endif()
 
+    # ── Benchmark suite ────────────────────────────────────────────────────
+    add_ipad_test(ipad_bench tests/bench/bench_ipad.cpp)
+    set_tests_properties(ipad_bench PROPERTIES
+        TIMEOUT 120
+        LABELS  "bench"
+    )
+
     # ── CTest labels ───────────────────────────────────────────────────────
     set_tests_properties(ipad_unit_tests PROPERTIES LABELS "unit")
     set_tests_properties(ipad_integration_tests PROPERTIES LABELS "integration")

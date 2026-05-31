@@ -104,6 +104,27 @@ def shared_deps(path: str) -> list[str]:
     return deps
 
 
+def run_benchmarks(build_dir: str) -> list[dict]:
+    """Execute ipad_bench and parse the embedded JSON block."""
+    bench_bin = os.path.join(build_dir, "ipad_bench")
+    if not os.path.isfile(bench_bin):
+        return []
+    try:
+        out = subprocess.check_output(
+            [bench_bin, "--gtest_brief=1"],
+            stderr=subprocess.DEVNULL, text=True, timeout=120,
+        )
+        start = out.find("__BENCH_JSON_BEGIN__")
+        end   = out.find("__BENCH_JSON_END__")
+        if start == -1 or end == -1:
+            return []
+        import json
+        return json.loads(out[start + len("__BENCH_JSON_BEGIN__"):end].strip())
+    except Exception as e:
+        print(f"[kpi] benchmark run failed: {e}")
+        return []
+
+
 def git_info(source_dir: str) -> dict[str, str]:
     env = os.environ.copy()
     env["GIT_DIR"] = os.path.join(source_dir, ".git")
@@ -184,6 +205,9 @@ def collect(build_dir: str, source_dir: str) -> dict:
         # Target context
         "target_ram_mb":   512,
         "target_flash_mb": 4096,
+
+        # Performance benchmarks
+        "benchmarks": run_benchmarks(build_dir),
     }
 
 
@@ -374,6 +398,91 @@ def generate(m: dict, output_path: str) -> None:
         ["ipad_euicc_info_t",  f"{m['euicc_size']}",
          "eUICC identity and capabilities"],
     ], col_widths=[W*0.3, W*0.2, W*0.5]))
+
+    # ── Performance benchmarks ────────────────────────────────────────────────
+    benches = m.get("benchmarks", [])
+    if benches:
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("API Latency Benchmarks  (mock backend, x86-64 Release)",
+                                ss["section_head"]))
+        story.append(Paragraph(
+            "Measured on the build host using std::chrono::steady_clock. "
+            "Values reflect pure library overhead excluding TelSDK / hardware delays. "
+            "On the SA525 target, add the TelSDK call latency (~1–5 ms per synchronous call).",
+            ss["body"]))
+        story.append(Spacer(1, 4))
+
+        rows = [["API / Operation", "Mean (µs)", "Median (µs)", "P99 (µs)",
+                 "Min (µs)", "Max (µs)", "Iterations"]]
+        for b in benches:
+            def fmt(v):
+                return f"{v:.1f}" if v >= 0.1 else "< 0.1"
+            rows.append([
+                b["name"],
+                fmt(b["mean_us"]),
+                fmt(b["median_us"]),
+                fmt(b["p99_us"]),
+                fmt(b["min_us"]),
+                fmt(b["max_us"]),
+                str(b["iterations"]),
+            ])
+        story.append(_table(rows,
+            col_widths=[W*0.36, W*0.10, W*0.10, W*0.10,
+                        W*0.10, W*0.10, W*0.14]))
+        story.append(Spacer(1, 6))
+
+        # Latency budget summary
+        story.append(Paragraph("Key performance indicators", ss["section_head"]))
+        kpi_map = {b["name"]: b for b in benches}
+        def kv(key, label, target):
+            b = kpi_map.get(key)
+            if not b:
+                return None
+            v = b["median_us"]
+            status = "✓ PASS" if v <= target else "✗ OVER"
+            return [label, f"{v:.1f} µs", f"{target} µs", status]
+
+        kpi_rows = [["KPI", "Measured (median)", "Target", "Status"]]
+        for row in [
+            kv("ipad_get_eid",                   "get_eid latency",        100),
+            kv("ipad_get_euicc_info",             "get_euicc_info latency", 500),
+            kv("ipad_profile_list (0 profiles)",  "profile_list (empty)",   200),
+            kv("ipad_profile_list (8 profiles)",  "profile_list (8 items)", 500),
+            kv("ipad_profile_enable",             "profile_enable latency", 500),
+            kv("ipad_profile_disable",            "profile_disable latency",500),
+            kv("ipad_event_subscribe + unsubscribe","event subscribe/unsub", 50),
+            kv("ipad_diag_export_json",           "diag JSON export",      5000),
+        ]:
+            if row:
+                ok = row[3].startswith("✓")
+                kpi_rows.append(row)
+
+        # Build coloured KPI table inline
+        from reportlab.platypus import TableStyle as TS
+        kpi_table_data = kpi_rows
+        kpi_col_widths = [W*0.42, W*0.20, W*0.18, W*0.20]
+        tbl = Table(kpi_table_data, colWidths=kpi_col_widths)
+        style_cmds = [
+            ("FONTNAME",     (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",     (0, 0), (-1, -1), 9),
+            ("BACKGROUND",   (0, 0), (-1, 0), BLUE_MID),
+            ("TEXTCOLOR",    (0, 0), (-1, 0), colors.white),
+            ("ALIGN",        (0, 0), (-1, -1), "LEFT"),
+            ("ALIGN",        (1, 1), (-1, -1), "RIGHT"),
+            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, GREY_ROW]),
+            ("GRID",         (0, 0), (-1, -1), 0.3, colors.lightgrey),
+            ("TOPPADDING",   (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING",(0, 0), (-1, -1), 4),
+            ("LEFTPADDING",  (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ]
+        for i, row in enumerate(kpi_rows[1:], start=1):
+            clr = GREEN_OK if row[3].startswith("✓") else RED_WARN
+            style_cmds.append(("TEXTCOLOR", (3, i), (3, i), clr))
+            style_cmds.append(("FONTNAME",  (3, i), (3, i), "Helvetica-Bold"))
+        tbl.setStyle(TableStyle(style_cmds))
+        story.append(tbl)
+        story.append(Spacer(1, 4))
 
     # ── Footer ────────────────────────────────────────────────────────────────
     story.append(Spacer(1, 12))
