@@ -11,8 +11,8 @@
 
     {
       "id": "TV-INIT-001",
-      "group": "Initialisation",
-      "description": "Init avec configuration minimale valide",
+      "group": "Initialization",
+      "description": "Init with minimal valid configuration",
       "input": {
         "cfg": { "timeout_ms": 5000, "slot_id": 0, "log_level": "INFO" }
       },
@@ -20,15 +20,15 @@
     },
     {
       "id": "TV-INIT-002",
-      "group": "Initialisation",
-      "description": "Init avec cfg NULL",
+      "group": "Initialization",
+      "description": "Init with NULL cfg",
       "input": { "cfg": null },
       "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
     },
     {
       "id": "TV-INIT-003",
-      "group": "Initialisation",
-      "description": "Init quand TelSDK indisponible (subsystem not ready)",
+      "group": "Initialization",
+      "description": "Init when TelSDK unavailable (subsystem not ready)",
       "precondition": { "telsdk_ready": false },
       "input": {
         "cfg": { "timeout_ms": 500, "slot_id": 0 }
@@ -39,7 +39,7 @@
     {
       "id": "TV-EID-001",
       "group": "EID",
-      "description": "Lecture EID nominal",
+      "description": "Nominal EID read",
       "precondition": { "mock_eid": "89049032005000000000000000000001" },
       "input": {},
       "expected": {
@@ -51,7 +51,7 @@
     {
       "id": "TV-EID-002",
       "group": "EID",
-      "description": "Lecture EID quand CardManager échoue",
+      "description": "EID read when CardManager fails",
       "precondition": { "card_fail_eid": true },
       "input": {},
       "expected": { "return": "IPAD_ERR_TELSDK" }
@@ -60,7 +60,7 @@
     {
       "id": "TV-LST-001",
       "group": "Profile List",
-      "description": "Liste vide",
+      "description": "Empty list",
       "precondition": { "profiles": [] },
       "input": { "capacity": 16 },
       "expected": { "return": "IPAD_OK", "count": 0 }
@@ -68,7 +68,7 @@
     {
       "id": "TV-LST-002",
       "group": "Profile List",
-      "description": "Liste avec 3 profils",
+      "description": "List with 3 profiles",
       "precondition": {
         "profiles": [
           { "iccid": "8901230000000000001A", "active": false },
@@ -82,7 +82,7 @@
     {
       "id": "TV-LST-003",
       "group": "Profile List",
-      "description": "Capacité buffer inférieure au nombre de profils réels",
+      "description": "Buffer capacity smaller than actual profile count",
       "precondition": {
         "profiles": [
           { "iccid": "8901230000000000001A" },
@@ -104,7 +104,7 @@
     {
       "id": "TV-DL-001",
       "group": "Download",
-      "description": "Téléchargement nominal avec activation code valide",
+      "description": "Nominal download with valid activation code",
       "input": {
         "activation_code": "LPA:1$smdp.test.io$MATCHID001",
         "auto_enable": false
@@ -118,7 +118,7 @@
     {
       "id": "TV-DL-002",
       "group": "Download",
-      "description": "Téléchargement avec auto_enable=true",
+      "description": "Download with auto_enable=true",
       "input": {
         "activation_code": "LPA:1$smdp.test.io$AUTOEN001",
         "auto_enable": true
@@ -138,7 +138,7 @@
     {
       "id": "TV-DL-004",
       "group": "Download",
-      "description": "Échec backend addProfile",
+      "description": "Backend addProfile failure",
       "precondition": { "fail_add_profile": true },
       "input": {
         "activation_code": "LPA:1$smdp.test.io$FAIL001"
@@ -148,7 +148,7 @@
     {
       "id": "TV-DL-005",
       "group": "Download",
-      "description": "Timeout réseau dépassé",
+      "description": "Network timeout exceeded",
       "precondition": { "download_delay_ms": 10000 },
       "input": {
         "activation_code": "LPA:1$smdp.test.io$TIMEOUT",
@@ -159,7 +159,7 @@
     {
       "id": "TV-DL-006",
       "group": "Download",
-      "description": "Download avec confirmation code",
+      "description": "Download with confirmation code",
       "input": {
         "activation_code": "LPA:1$smdp.test.io$CONFIRM001",
         "confirmation_code": "12345678",
@@ -170,7 +170,7 @@
     {
       "id": "TV-DL-007",
       "group": "Download",
-      "description": "Async download — callback appelé avec IPAD_OK",
+      "description": "Async download — callback invoked with IPAD_OK",
       "input": {
         "activation_code": "LPA:1$smdp.test.io$ASYNC001",
         "mode": "async"
@@ -185,7 +185,7 @@
     {
       "id": "TV-EN-001",
       "group": "Enable",
-      "description": "Activation profil désactivé",
+      "description": "Enable disabled profile",
       "precondition": {
         "profiles": [{ "iccid": "8901230000000000AABB", "active": false }]
       },
@@ -198,7 +198,7 @@
     {
       "id": "TV-EN-002",
       "group": "Enable",
-      "description": "Activation profil inexistant",
+      "description": "Enable nonexistent profile",
       "precondition": { "profiles": [] },
       "input": { "iccid": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" },
       "expected": { "return": "IPAD_ERR_TELSDK" }
@@ -206,7 +206,7 @@
     {
       "id": "TV-EN-003",
       "group": "Enable",
-      "description": "Exclusivité — activer B désactive A",
+      "description": "Exclusivity — enabling B disables A",
       "precondition": {
         "profiles": [
           { "iccid": "8901230000000000AA01", "active": true  },
@@ -224,7 +224,7 @@
     {
       "id": "TV-DIS-001",
       "group": "Disable",
-      "description": "Désactivation profil actif",
+      "description": "Disable active profile",
       "precondition": {
         "profiles": [{ "iccid": "8901230000000000CCDD", "active": true }]
       },
@@ -238,7 +238,7 @@
     {
       "id": "TV-DEL-001",
       "group": "Delete",
-      "description": "Suppression profil désactivé",
+      "description": "Delete disabled profile",
       "precondition": {
         "profiles": [{ "iccid": "8901230000000000EEFF", "active": false }]
       },
@@ -251,7 +251,7 @@
     {
       "id": "TV-DEL-002",
       "group": "Delete",
-      "description": "Suppression profil inexistant",
+      "description": "Delete nonexistent profile",
       "precondition": { "profiles": [] },
       "input": { "iccid": "DEADBEEFDEADBEEF0000000000001234" },
       "expected": { "return": "IPAD_ERR_TELSDK" }
@@ -260,14 +260,14 @@
     {
       "id": "TV-NICK-001",
       "group": "Nickname",
-      "description": "Mise à jour nickname ASCII",
+      "description": "Update ASCII nickname",
       "precondition": {
         "profiles": [{ "iccid": "8901230000000000F1F2" }]
       },
-      "input": { "iccid": "8901230000000000F1F2", "nickname": "MonOpérateur" },
+      "input": { "iccid": "8901230000000000F1F2", "nickname": "MyOperator" },
       "expected": {
         "return": "IPAD_OK",
-        "nickname_after": "MonOpérateur"
+        "nickname_after": "MyOperator"
       }
     },
     {
@@ -281,7 +281,7 @@
     {
       "id": "TV-EVT-001",
       "group": "Events",
-      "description": "Souscription — événement INSTALLED reçu après download",
+      "description": "Subscription — INSTALLED event received after download",
       "input": {
         "subscribe_mask": "IPAD_EVT_PROFILE_INSTALLED",
         "action": "download LPA:1$smdp.test.io$EVTINSTALL"
@@ -294,7 +294,7 @@
     {
       "id": "TV-EVT-002",
       "group": "Events",
-      "description": "Désouscription — callback plus appelé après unsubscribe",
+      "description": "Unsubscription — callback no longer invoked after unsubscribe",
       "input": {
         "subscribe_then_unsubscribe": true,
         "action": "enable profile"
@@ -304,7 +304,7 @@
     {
       "id": "TV-EVT-003",
       "group": "Events",
-      "description": "Souscription ID invalide",
+      "description": "Unsubscribe with invalid ID",
       "input": { "sub_id": 99999 },
       "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
     },
@@ -312,7 +312,7 @@
     {
       "id": "TV-DIAG-001",
       "group": "Diagnostics",
-      "description": "Export JSON valide après 2 téléchargements",
+      "description": "Valid JSON export after 2 downloads",
       "precondition": {
         "profiles_downloaded": 2
       },
@@ -327,7 +327,7 @@
     {
       "id": "TV-DIAG-002",
       "group": "Diagnostics",
-      "description": "Buffer trop petit",
+      "description": "Buffer too small",
       "input": { "buf_len": 1 },
       "expected": { "return": "IPAD_ERR_INVALID_PARAM" }
     },
@@ -335,7 +335,7 @@
     {
       "id": "TV-UTIL-001",
       "group": "Utilities",
-      "description": "strerror pour tous les codes connus",
+      "description": "strerror for all known codes",
       "input": {
         "codes": [
           "IPAD_OK", "IPAD_PENDING", "IPAD_ERR_INVALID_PARAM",
