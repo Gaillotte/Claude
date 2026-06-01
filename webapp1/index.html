@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebApp 1 – GitHub Repository UI</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Top navbar -->
+  <header class="navbar">
+    <div class="navbar-left">
+      <svg class="gh-logo" viewBox="0 0 16 16" width="32" height="32" fill="white">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+          0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
+          -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
+          .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
+          -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27
+          .68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12
+          .51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48
+          0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      <nav class="navbar-links">
+        <a href="#">Pull requests</a>
+        <a href="#">Issues</a>
+        <a href="#">Marketplace</a>
+        <a href="#">Explore</a>
+      </nav>
+    </div>
+    <div class="navbar-right">
+      <div class="search-box">
+        <input type="text" placeholder="Type / to search" />
+      </div>
+      <div class="navbar-icons">
+        <button class="icon-btn" title="Create new">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+            <path d="M7.75 2a.75.75 0 01.75.75V7h4.25a.75.75 0 010 1.5H8.5v4.25a.75.75 0 01-1.5 0V8.5H2.75a.75.75 0 010-1.5H7V2.75A.75.75 0 017.75 2z"/>
+          </svg>
+          <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor" style="margin-left:2px">
+            <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
+          </svg>
+        </button>
+        <button class="icon-btn" title="Issues">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+            <path d="M8 9.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/><path fill-rule="evenodd" d="M8 0a8 8 0 100 16A8 8 0 008 0zM1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0z"/>
+          </svg>
+        </button>
+        <button class="icon-btn" title="Pull requests">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+            <path fill-rule="evenodd" d="M7.177 3.073L9.573.677A.25.25 0 0110 .854v4.792a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354zM3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122v5.256a2.251 2.251 0 11-1.5 0V5.372A2.25 2.25 0 011.5 3.25zM11 2.5h-1V4h1a1 1 0 011 1v5.628a2.251 2.251 0 101.5 0V5A2.5 2.5 0 0011 2.5zm1 10.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0zM3.75 12a.75.75 0 100 1.5.75.75 0 000-1.5z"/>
+          </svg>
+        </button>
+        <div class="avatar-menu">
+          <div class="avatar">T</div>
+          <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor">
+            <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sub-navigation (repo tabs) -->
+  <div class="repo-header">
+    <div class="repo-breadcrumb">
+      <svg class="repo-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+        <path fill-rule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8zM5 5.75a.75.75 0 01.75-.75h4.5a.75.75 0 010 1.5h-4.5A.75.75 0 015 5.75zm0 3a.75.75 0 01.75-.75h4.5a.75.75 0 010 1.5h-4.5A.75.75 0 015 8.75z"/>
+      </svg>
+      <span class="breadcrumb-owner"><a href="#">Gaillotte</a></span>
+      <span class="breadcrumb-sep">/</span>
+      <span class="breadcrumb-repo"><a href="#">Claude</a></span>
+      <span class="repo-visibility">Public</span>
+    </div>
+    <nav class="repo-tabs">
+      <a href="#" class="tab active">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 110-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1V9h-8c-.356 0-.694.074-1 .208V2.5a1 1 0 011-1h8zM5 5.75a.75.75 0 01.75-.75h4.5a.75.75 0 010 1.5h-4.5A.75.75 0 015 5.75zm0 3a.75.75 0 01.75-.75h4.5a.75.75 0 010 1.5h-4.5A.75.75 0 015 8.75z"/></svg>
+        Code
+      </a>
+      <a href="#" class="tab">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 9.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/><path fill-rule="evenodd" d="M8 0a8 8 0 100 16A8 8 0 008 0zM1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0z"/></svg>
+        Issues
+      </a>
+      <a href="#" class="tab">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M7.177 3.073L9.573.677A.25.25 0 0110 .854v4.792a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354zM3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122v5.256a2.251 2.251 0 11-1.5 0V5.372A2.25 2.25 0 011.5 3.25zM11 2.5h-1V4h1a1 1 0 011 1v5.628a2.251 2.251 0 101.5 0V5A2.5 2.5 0 0011 2.5zm1 10.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0zM3.75 12a.75.75 0 100 1.5.75.75 0 000-1.5z"/></svg>
+        Pull requests
+      </a>
+      <a href="#" class="tab">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0zM0 8a8 8 0 1116 0A8 8 0 010 8zm6.5-.25A.75.75 0 017.25 7h1a.75.75 0 01.75.75v2.75h.25a.75.75 0 010 1.5h-2a.75.75 0 010-1.5h.25v-2h-.25a.75.75 0 01-.75-.75zM8 6a1 1 0 100-2 1 1 0 000 2z"/></svg>
+        Actions
+      </a>
+      <a href="#" class="tab">Projects</a>
+      <a href="#" class="tab">Wiki</a>
+      <a href="#" class="tab">Security &amp; quality</a>
+      <a href="#" class="tab">Insights</a>
+      <a href="#" class="tab">Settings</a>
+    </nav>
+  </div>
+
+  <!-- Main content -->
+  <div class="main-content">
+    <div class="content-area">
+
+      <!-- Branch / actions bar -->
+      <div class="branch-bar">
+        <div class="branch-bar-left">
+          <button class="branch-btn">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z"/></svg>
+            claude/trusting-pasteur-x9P...
+            <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor"><path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/></svg>
+          </button>
+          <button class="branches-btn">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z"/></svg>
+            <strong>2</strong> Branches
+          </button>
+          <button class="tags-btn">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M2.5 7.775V2.75a.25.25 0 01.25-.25h5.025a.25.25 0 01.177.073l6.25 6.25a.25.25 0 010 .354l-5.025 5.025a.25.25 0 01-.354 0l-6.25-6.25a.25.25 0 01-.073-.177zm-1.5 0V2.75C1 1.784 1.784 1 2.75 1h5.025c.464 0 .91.184 1.238.513l6.25 6.25a1.75 1.75 0 010 2.474l-5.026 5.026a1.75 1.75 0 01-2.474 0l-6.25-6.25A1.75 1.75 0 011 7.775zM6 5a1 1 0 100 2 1 1 0 000-2z"/></svg>
+            <strong>0</strong> Tags
+          </button>
+          <button class="goto-btn">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M9.5 3.25a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.493 2.493 0 016 7h4a1 1 0 001-1v-.628A2.251 2.251 0 019.5 3.25z"/></svg>
+            Go to file
+            <kbd>T</kbd>
+          </button>
+        </div>
+        <div class="branch-bar-right">
+          <button class="add-file-btn">
+            Add file
+            <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor"><path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/></svg>
+          </button>
+          <button class="code-btn">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="white"><path fill-rule="evenodd" d="M4 2.5a.5.5 0 00-.5.5v10a.5.5 0 00.5.5h8a.5.5 0 00.5-.5V5.414a.5.5 0 00-.146-.354L9.854 2.646A.5.5 0 009.5 2.5H4zm4.5 1.207L11 6.207V12H5V4h3.5V3.707z"/></svg>
+            Code
+            <svg viewBox="0 0 16 16" width="10" height="10" fill="white"><path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Ahead of main notice -->
+      <div class="ahead-notice">
+        <span>This branch is <a href="#">16 commits ahead of</a> <code>main</code> .</span>
+        <button class="contribute-btn">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M7.177 3.073L9.573.677A.25.25 0 0110 .854v4.792a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354z"/><path fill-rule="evenodd" d="M3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122v5.256a2.251 2.251 0 11-1.5 0V5.372A2.25 2.25 0 011.5 3.25z"/></svg>
+          Contribute
+          <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor"><path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/></svg>
+        </button>
+      </div>
+
+      <!-- Latest commit row -->
+      <div class="commit-row">
+        <div class="commit-row-left">
+          <div class="avatar-small">c</div>
+          <span class="commit-author">claude</span>
+          <span class="commit-msg">docs: regenerate all Word documents for consistency</span>
+          <span class="commit-icon">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8z"/><path d="M6.5 7.75A.75.75 0 017.25 7h1a.75.75 0 01.75.75v2.75h.25a.75.75 0 010 1.5h-2a.75.75 0 010-1.5h.25v-2h-.25a.75.75 0 01-.75-.75zM8 6a1 1 0 100-2 1 1 0 000 2z"/></svg>
+          </span>
+        </div>
+        <div class="commit-row-right">
+          <a href="#" class="commit-hash">4472c46</a>
+          <span class="commit-time">· 1 hour ago</span>
+          <button class="commits-count-btn">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M10.5 7.75a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0zm1.43.75a4.002 4.002 0 01-7.86 0H.75a.75.75 0 110-1.5h3.32a4.001 4.001 0 017.86 0h3.32a.75.75 0 110 1.5h-3.32z"/></svg>
+            17 Commits
+          </button>
+        </div>
+      </div>
+
+      <!-- File list -->
+      <div class="file-list">
+        <div class="file-row">
+          <div class="file-row-left">
+            <svg class="file-icon folder-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+              <path d="M1.75 1A1.75 1.75 0 000 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0016 13.25v-8.5A1.75 1.75 0 0014.25 3h-6.5a.25.25 0 01-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/>
+            </svg>
+            <a href="#" class="file-name">ipad_lib_sgp32</a>
+          </div>
+          <div class="file-row-mid">
+            <span>docs: regenerate all Word documents for consistency</span>
+          </div>
+          <div class="file-row-right">1 hour ago</div>
+        </div>
+        <div class="file-row">
+          <div class="file-row-left">
+            <svg class="file-icon" viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+              <path fill-rule="evenodd" d="M3.75 1.5a.25.25 0 00-.25.25v11.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25V6H9.75A1.75 1.75 0 018 4.25V1.5H3.75zm5.75.56v2.19c0 .138.112.25.25.25h2.19L9.5 2.06zM2 1.75C2 .784 2.784 0 3.75 0h5.086c.464 0 .909.184 1.237.513l3.414 3.414c.329.328.513.773.513 1.237v8.086A1.75 1.75 0 0112.25 15h-8.5A1.75 1.75 0 012 13.25V1.75z"/>
+            </svg>
+            <a href="#" class="file-name">.gitignore</a>
+          </div>
+          <div class="file-row-mid">
+            <span>chore: ignore build_kpi directories</span>
+          </div>
+          <div class="file-row-right">yesterday</div>
+        </div>
+      </div>
+
+      <!-- README placeholder -->
+      <div class="readme-section">
+        <div class="readme-header">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M0 1.75A.75.75 0 01.75 1h4.253c1.227 0 2.317.59 3 1.501A3.744 3.744 0 0111.006 1h4.245a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75h-4.507a2.25 2.25 0 00-1.591.659l-.622.621a.75.75 0 01-1.06 0l-.622-.621A2.25 2.25 0 005.258 13H.75a.75.75 0 01-.75-.75V1.75zm8.755 3a2.25 2.25 0 012.25-2.25H14.5v9h-3.757a3.75 3.75 0 00-1.983.557V4.75zm-1.51 9.31a3.75 3.75 0 00-1.983-.557H1.5v-9h3.495a2.25 2.25 0 012.25 2.25v8.557z"/></svg>
+          README
+        </div>
+        <div class="readme-body">
+          <div class="readme-empty">
+            <svg viewBox="0 0 16 16" width="32" height="32" fill="currentColor" style="opacity:0.4"><path fill-rule="evenodd" d="M0 1.75A.75.75 0 01.75 1h4.253c1.227 0 2.317.59 3 1.501A3.744 3.744 0 0111.006 1h4.245a.75.75 0 01.75.75v10.5a.75.75 0 01-.75.75h-4.507a2.25 2.25 0 00-1.591.659l-.622.621a.75.75 0 01-1.06 0l-.622-.621A2.25 2.25 0 005.258 13H.75a.75.75 0 01-.75-.75V1.75zm8.755 3a2.25 2.25 0 012.25-2.25H14.5v9h-3.757a3.75 3.75 0 00-1.983.557V4.75zm-1.51 9.31a3.75 3.75 0 00-1.983-.557H1.5v-9h3.495a2.25 2.25 0 012.25 2.25v8.557z"/></svg>
+            <h3>Add a README</h3>
+            <p>Help people interested in this repository understand your project.</p>
+            <button class="add-readme-btn">Add a README</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <!-- About -->
+      <div class="sidebar-section">
+        <div class="sidebar-section-header">
+          <h3>About</h3>
+          <button class="settings-btn" title="Edit">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M7.429 1.525a6.593 6.593 0 011.142 0c.036.003.108.036.137.146l.289 1.105c.147.56.55.967.997 1.189.174.086.341.183.501.29.417.278.97.423 1.53.27l1.102-.303c.11-.03.175.016.195.046.219.31.41.641.573.989.063.13.04.21-.017.275l-.765.827c-.382.414-.537.958-.53 1.508 0 .054.001.109 0 .163-.007.55.148 1.094.53 1.508l.765.827c.056.064.08.144.017.274a6.505 6.505 0 01-.573.99c-.02.029-.086.075-.195.045l-1.103-.303c-.559-.153-1.112-.008-1.529.27-.16.107-.327.204-.5.29-.449.222-.851.628-.998 1.189l-.289 1.105c-.029.11-.101.143-.137.146a6.613 6.613 0 01-1.142 0c-.036-.003-.108-.036-.137-.146l-.289-1.105c-.147-.56-.55-.967-.997-1.189a4.502 4.502 0 01-.501-.29c-.417-.278-.97-.423-1.53-.27l-1.102.303c-.11.03-.175-.016-.195-.046a6.507 6.507 0 01-.573-.989c-.063-.13-.04-.21.017-.275l.765-.827c.382-.414.537-.958.53-1.508a5.527 5.527 0 010-.163c.007-.55-.148-1.094-.53-1.508l-.765-.827c-.056-.064-.08-.144-.017-.274a6.505 6.505 0 01.573-.99c.02-.029.086-.075.195-.045l1.103.303c.559.153 1.112.008 1.529-.27.16-.107.327-.204.5-.29.449-.222.851-.628.998-1.189l.289-1.105c.029-.11.101-.143.137-.146zM8 10.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"/></svg>
+          </button>
+        </div>
+        <p class="about-description">Claude Code</p>
+        <ul class="about-stats">
+          <li>
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25zm0 2.445L6.615 5.5a.75.75 0 01-.564.41l-3.097.45 2.24 2.184a.75.75 0 01.216.664l-.528 3.084 2.769-1.456a.75.75 0 01.698 0l2.77 1.456-.53-3.084a.75.75 0 01.216-.664l2.24-2.183-3.096-.45a.75.75 0 01-.564-.41L8 2.694v.001z"/></svg>
+            0 stars
+          </li>
+          <li>
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M1.679 7.932c.412-.621 1.242-1.75 2.366-2.717C5.175 4.242 6.527 3.5 8 3.5c1.473 0 2.824.742 3.955 1.715 1.124.967 1.954 2.096 2.366 2.717a.119.119 0 010 .136c-.412.621-1.242 1.75-2.366 2.717C10.825 11.758 9.473 12.5 8 12.5c-1.473 0-2.824-.742-3.955-1.715C2.92 9.818 2.09 8.69 1.679 8.068a.119.119 0 010-.136zM8 2c-1.981 0-3.67.992-4.933 2.078C1.797 5.169.88 6.423.43 7.1a1.619 1.619 0 000 1.798c.45.678 1.367 1.932 2.637 3.024C4.329 13.008 6.019 14 8 14c1.981 0 3.67-.992 4.933-2.078 1.27-1.091 2.187-2.345 2.637-3.023a1.619 1.619 0 000-1.798c-.45-.678-1.367-1.932-2.637-3.023C11.671 2.992 9.981 2 8 2zm0 6a1 1 0 11-2 0 1 1 0 012 0zM7 8a1 1 0 112 0 1 1 0 01-2 0z"/></svg>
+            0 watching
+          </li>
+          <li>
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M5 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm0 2.122a2.25 2.25 0 10-1.5 0v.878A2.25 2.25 0 005.75 8.5h1.5v2.128a2.251 2.251 0 101.5 0V8.5h1.5a2.25 2.25 0 002.25-2.25v-.878a2.25 2.25 0 10-1.5 0v.878a.75.75 0 01-.75.75h-4.5A.75.75 0 015 6.25v-.878zm3.75 7.378a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm3-8.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg>
+            0 forks
+          </li>
+        </ul>
+      </div>
+
+      <!-- Releases -->
+      <div class="sidebar-section">
+        <h3>Releases</h3>
+        <p class="sidebar-muted">No releases published</p>
+        <a href="#" class="sidebar-link">Create a new release</a>
+      </div>
+
+      <!-- Packages -->
+      <div class="sidebar-section">
+        <h3>Packages</h3>
+        <p class="sidebar-muted">No packages published</p>
+        <a href="#" class="sidebar-link">Publish your first package</a>
+      </div>
+
+      <!-- Contributors -->
+      <div class="sidebar-section">
+        <h3>Contributors <span class="contributors-count">1</span></h3>
+        <div class="contributors-list">
+          <div class="contributor">
+            <div class="avatar-contrib">T</div>
+            <span>Gaillotte</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Languages -->
+      <div class="sidebar-section">
+        <h3>Languages</h3>
+        <div class="lang-bar">
+          <div class="lang-segment" style="width:80.4%;background:#f34b7d" title="C++ 80.4%"></div>
+          <div class="lang-segment" style="width:13.3%;background:#555555" title="C 13.3%"></div>
+          <div class="lang-segment" style="width:6.3%;background:#da3434" title="CMake 6.3%"></div>
+        </div>
+        <ul class="lang-list">
+          <li><span class="lang-dot" style="background:#f34b7d"></span> C++ <span class="lang-pct">80.4%</span></li>
+          <li><span class="lang-dot" style="background:#555555"></span> C <span class="lang-pct">13.3%</span></li>
+          <li><span class="lang-dot" style="background:#da3434"></span> CMake <span class="lang-pct">6.3%</span></li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
