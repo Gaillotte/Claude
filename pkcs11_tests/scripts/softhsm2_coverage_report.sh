@@ -45,14 +45,16 @@ lcov \
   --capture \
   --directory "$BUILD_DIR" \
   --output-file "$INFO_FILE" \
+  --ignore-errors gcov,gcov \
+  --rc geninfo_unexecuted_blocks=1 \
   --quiet
 
-# Remove system headers and test infrastructure from the report
+# Remove system headers from the report
 echo "==> Filtering system headers..."
 lcov \
   --remove "$INFO_FILE" \
   '/usr/*' \
-  '*/testing/*' \
+  --ignore-errors unused \
   --output-file "$INFO_FILE" \
   --quiet
 
