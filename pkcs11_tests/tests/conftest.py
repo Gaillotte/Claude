@@ -1,5 +1,7 @@
 """Shared pytest fixtures for PKCS11 / SoftHSM2 tests."""
 
+from pathlib import Path
+
 import pytest
 import pkcs11
 
@@ -13,6 +15,27 @@ from pkcs11_app.aead import AEADOperations
 from pkcs11_app.derive import DeriveOperations
 from pkcs11_app.objects import ObjectOperations
 from pkcs11_app.info import InfoOperations
+from pkcs11_app.report import PerfReport
+
+# ------------------------------------------------------------------ #
+# Performance report — one instance shared across all perf tests
+# ------------------------------------------------------------------ #
+
+_GLOBAL_PERF_REPORT = PerfReport()
+
+
+@pytest.fixture(scope="session")
+def perf_report() -> PerfReport:
+    return _GLOBAL_PERF_REPORT
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Write the Excel performance report after all tests complete."""
+    if not _GLOBAL_PERF_REPORT.entries:
+        return
+    out = Path(__file__).parent.parent / "perf_report.xlsx"
+    _GLOBAL_PERF_REPORT.write(out)
+    print(f"\n\n  Rapport Excel écrit : {out}  ({len(_GLOBAL_PERF_REPORT.entries)} mesures)\n")
 
 
 # ------------------------------------------------------------------ #

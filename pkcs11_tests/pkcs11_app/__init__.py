@@ -10,6 +10,8 @@ from pkcs11_app.aead import AEADOperations
 from pkcs11_app.derive import DeriveOperations
 from pkcs11_app.objects import ObjectOperations
 from pkcs11_app.info import InfoOperations
+from pkcs11_app.benchmark import BenchResult, run_benchmark
+from pkcs11_app.report import PerfEntry, PerfReport
 
 __all__ = [
     "PKCS11Config",
@@ -22,4 +24,8 @@ __all__ = [
     "DeriveOperations",
     "ObjectOperations",
     "InfoOperations",
+    "BenchResult",
+    "run_benchmark",
+    "PerfEntry",
+    "PerfReport",
 ]
