@@ -5,6 +5,11 @@ from pkcs11_app.library import PKCS11Library
 from pkcs11_app.session import SessionManager
 from pkcs11_app.token import TokenManager
 from pkcs11_app.crypto import CryptoOperations
+from pkcs11_app.mac import MACOperations
+from pkcs11_app.aead import AEADOperations
+from pkcs11_app.derive import DeriveOperations
+from pkcs11_app.objects import ObjectOperations
+from pkcs11_app.info import InfoOperations
 
 __all__ = [
     "PKCS11Config",
@@ -12,4 +17,9 @@ __all__ = [
     "SessionManager",
     "TokenManager",
     "CryptoOperations",
+    "MACOperations",
+    "AEADOperations",
+    "DeriveOperations",
+    "ObjectOperations",
+    "InfoOperations",
 ]

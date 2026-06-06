@@ -70,3 +70,7 @@ class SessionManager:
     @staticmethod
     def change_pin(session: Session, old_pin: str, new_pin: str) -> None:
         session.set_pin(old_pin, new_pin)
+
+    @staticmethod
+    def seed_random(session: Session, seed: bytes) -> None:
+        session.seed_random(seed)

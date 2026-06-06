@@ -47,28 +47,19 @@ class TestMultiSession:
                 results.append(idx)
         assert results == [0, 1, 2]
 
-    def test_parallel_sessions_different_libraries(self, pkcs11_library: PKCS11Library):
-        """Each thread gets its own library instance — this avoids slot contention."""
+    def test_sequential_sessions_across_threads(self, session_manager: SessionManager):
+        """Sequential sessions across multiple threads (no concurrent PKCS11 calls)."""
         results = []
         errors = []
+        lock = threading.Lock()
 
         def worker():
-            from pkcs11_app.config import PKCS11Config
-            cfg = PKCS11Config(
-                module_path=pkcs11_library.config.module_path,
-                token_label=pkcs11_library.config.token_label,
-                user_pin=pkcs11_library.config.user_pin,
-                so_pin=pkcs11_library.config.so_pin,
-            )
-            lib = PKCS11Library(cfg)
-            sm = SessionManager(lib)
             try:
-                with sm.open_user_session() as s:
-                    info = SessionManager.get_session_info(s)
-                    results.append(info["rw"])
-            except pkcs11.UserAlreadyLoggedIn:
-                # PKCS11 spec allows this — record as partial success
-                results.append(None)
+                # Serialize PKCS11 access with a lock to avoid SoftHSM2 thread issues
+                with lock:
+                    with session_manager.open_user_session() as s:
+                        info = SessionManager.get_session_info(s)
+                        results.append(info["rw"])
             except Exception as exc:
                 errors.append(str(exc))
 

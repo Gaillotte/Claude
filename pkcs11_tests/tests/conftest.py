@@ -8,6 +8,11 @@ from pkcs11_app.library import PKCS11Library
 from pkcs11_app.session import SessionManager
 from pkcs11_app.token import TokenManager
 from pkcs11_app.crypto import CryptoOperations
+from pkcs11_app.mac import MACOperations
+from pkcs11_app.aead import AEADOperations
+from pkcs11_app.derive import DeriveOperations
+from pkcs11_app.objects import ObjectOperations
+from pkcs11_app.info import InfoOperations
 
 
 # ------------------------------------------------------------------ #
@@ -42,6 +47,31 @@ def token_manager(pkcs11_library: PKCS11Library) -> TokenManager:
 @pytest.fixture(scope="session")
 def crypto() -> CryptoOperations:
     return CryptoOperations()
+
+
+@pytest.fixture(scope="session")
+def mac_ops() -> MACOperations:
+    return MACOperations()
+
+
+@pytest.fixture(scope="session")
+def aead_ops() -> AEADOperations:
+    return AEADOperations()
+
+
+@pytest.fixture(scope="session")
+def derive_ops() -> DeriveOperations:
+    return DeriveOperations()
+
+
+@pytest.fixture(scope="session")
+def object_ops() -> ObjectOperations:
+    return ObjectOperations()
+
+
+@pytest.fixture(scope="session")
+def info_ops(pkcs11_library: PKCS11Library) -> InfoOperations:
+    return InfoOperations(pkcs11_library)
 
 
 # ------------------------------------------------------------------ #
