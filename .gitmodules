@@ -1,0 +1,4 @@
+[submodule "pkcs11_tests/softhsm2_src"]
+	path = pkcs11_tests/softhsm2_src
+	url = https://github.com/opendnssec/SoftHSMv2.git
+	branch = 2.6.1
