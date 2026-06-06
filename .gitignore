@@ -1,0 +1,8 @@
+
+# SoftHSM2 build artefacts
+pkcs11_tests/softhsm2_build/
+pkcs11_tests/softhsm2_install/
+pkcs11_tests/softhsm2_tokens/
+pkcs11_tests/softhsm2_local.conf
+pkcs11_tests/softhsm2_coverage.info
+pkcs11_tests/softhsm2_coverage_html/
