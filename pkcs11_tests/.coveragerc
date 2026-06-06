@@ -1,0 +1,15 @@
+[run]
+source = pkcs11_app
+branch = True
+
+[report]
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    \.\.\.
+
+[html]
+directory = coverage_html
