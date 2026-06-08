@@ -46,6 +46,7 @@ add_executable(pkcs11_test
     tests/test_req_session.c
     tests/test_req_objects.c
     tests/test_req_crypto.c
+    tests/test_neg_scenarios.c
 )
 target_link_libraries(pkcs11_test ${DL_LIB} pthread)
 

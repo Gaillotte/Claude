@@ -116,6 +116,7 @@ DECLARE_TESTS(req_general);
 DECLARE_TESTS(req_session);
 DECLARE_TESTS(req_objects);
 DECLARE_TESTS(req_crypto);
+DECLARE_TESTS(neg_scenarios);
 
 static void print_banner(void)
 {
@@ -201,6 +202,7 @@ int main(int argc, char *argv[])
     register_tests_req_session();
     register_tests_req_objects();
     register_tests_req_crypto();
+    register_tests_neg_scenarios();
 
     log_info("Registered %d tests", g_test_count);
     printf("\n");
