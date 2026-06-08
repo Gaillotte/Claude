@@ -112,6 +112,10 @@ DECLARE_TESTS(derive);
 DECLARE_TESTS(dual_function);
 DECLARE_TESTS(parallel);
 DECLARE_TESTS(edge_cases);
+DECLARE_TESTS(req_general);
+DECLARE_TESTS(req_session);
+DECLARE_TESTS(req_objects);
+DECLARE_TESTS(req_crypto);
 
 static void print_banner(void)
 {
@@ -193,6 +197,10 @@ int main(int argc, char *argv[])
     register_tests_dual_function();
     register_tests_parallel();
     register_tests_edge_cases();
+    register_tests_req_general();
+    register_tests_req_session();
+    register_tests_req_objects();
+    register_tests_req_crypto();
 
     log_info("Registered %d tests", g_test_count);
     printf("\n");

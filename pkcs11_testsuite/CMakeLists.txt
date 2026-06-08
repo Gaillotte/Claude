@@ -42,6 +42,10 @@ add_executable(pkcs11_test
     tests/test_dual_function.c
     tests/test_parallel.c
     tests/test_edge_cases.c
+    tests/test_req_general.c
+    tests/test_req_session.c
+    tests/test_req_objects.c
+    tests/test_req_crypto.c
 )
 target_link_libraries(pkcs11_test ${DL_LIB} pthread)
 
