@@ -10,6 +10,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -132,8 +133,8 @@ private:
         return hdl;
     }
 
-    ipad_iccid_t parse_iccid(const std::string &s) {
-        ipad_iccid_t out{};
+    std::array<uint8_t, IPAD_ICCID_LEN> parse_iccid(const std::string &s) {
+        std::array<uint8_t, IPAD_ICCID_LEN> out{};
         for (size_t i = 0; i < s.size() && i/2 < IPAD_ICCID_LEN; i += 2)
             out[i/2] = (uint8_t)strtol(s.substr(i,2).c_str(), nullptr, 16);
         return out;
@@ -193,7 +194,7 @@ private:
                     r.failure_message = "Expected " + exp.value("return","?") + " got " + std::to_string(rc);
 
             } else if (group == "Profile List") {
-                if (inp.value("count_inout", 0) == 0 && inp.contains("count_inout") && inp["count_inout"].is_null()) {
+                if (inp.contains("count_inout") && inp["count_inout"].is_null()) {
                     ipad_status_t rc = ipad_profile_list(hdl, nullptr, nullptr);
                     r.passed = (rc == get_expected_status());
                 } else {
@@ -208,7 +209,8 @@ private:
                 }
 
             } else if (group == "Download") {
-                std::string ac = inp.value("activation_code", "");
+                std::string ac = (inp.contains("activation_code") && !inp["activation_code"].is_null())
+                                  ? inp["activation_code"].get<std::string>() : "";
                 bool auto_en   = inp.value("auto_enable", false);
                 uint32_t tms   = inp.value("timeout_ms", 0u);
 
@@ -321,7 +323,11 @@ private:
 /* ─────────────────────────────────────────────────────────────────────────────
  * GTest wrapper — one TEST per vector
  * ────────────────────────────────────────────────────────────────────────── */
+#ifdef VECTORS_PATH
+static std::string g_vectors_path = VECTORS_PATH;
+#else
 static std::string g_vectors_path = "tests/vectors/test_vectors.json";
+#endif
 
 class VectorTest : public ::testing::TestWithParam<VectorResult> {};
 

@@ -45,7 +45,7 @@ add_compile_definitions(TELSDK_VERSION_STRING="${TELSDK_VERSION}")
 # ═════════════════════════════════════════════════════════════════════════════
 # Library target: ipad
 # ═════════════════════════════════════════════════════════════════════════════
-add_library(ipad SHARED src/ipad.cpp)
+add_library(ipad SHARED src/ipad.cpp src/ipad_log.cpp)
 
 target_include_directories(ipad
     PUBLIC
@@ -101,6 +101,7 @@ if(BUILD_TESTS)
         add_executable(${name} ${sources})
         target_include_directories(${name} PRIVATE
             ${CMAKE_SOURCE_DIR}/include
+            ${CMAKE_SOURCE_DIR}/tests
             ${CMAKE_SOURCE_DIR}/tests/mocks
         )
         target_compile_definitions(${name} PRIVATE IPAD_MOCK_TELSDK=1)
@@ -121,6 +122,9 @@ if(BUILD_TESTS)
 
     # ── Unit tests ─────────────────────────────────────────────────────────
     add_ipad_test(ipad_unit_tests tests/unit/test_ipad_unit.cpp)
+
+    # ── Log sink tests ─────────────────────────────────────────────────────
+    add_ipad_test(ipad_log_tests tests/unit/test_ipad_log.cpp)
 
     # ── Integration tests ──────────────────────────────────────────────────
     add_ipad_test(ipad_integration_tests tests/integration/test_ipad_integration.cpp)
@@ -144,9 +148,37 @@ if(BUILD_TESTS)
                        "Install with: apt install nlohmann-json3-dev")
     endif()
 
+    # ── Benchmark suite ────────────────────────────────────────────────────
+    add_ipad_test(ipad_bench tests/bench/bench_ipad.cpp)
+    set_tests_properties(ipad_bench PROPERTIES
+        TIMEOUT 120
+        LABELS  "bench"
+    )
+
     # ── CTest labels ───────────────────────────────────────────────────────
     set_tests_properties(ipad_unit_tests PROPERTIES LABELS "unit")
     set_tests_properties(ipad_integration_tests PROPERTIES LABELS "integration")
+endif()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# KPI report — generated after every build of the ipad library
+# ═════════════════════════════════════════════════════════════════════════════
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_FOUND)
+    set(KPI_REPORT "${CMAKE_BINARY_DIR}/ipad_kpi_report.pdf")
+    set(KPI_SCRIPT "${CMAKE_SOURCE_DIR}/tools/gen_kpi_report.py")
+    add_custom_command(
+        TARGET ipad POST_BUILD
+        COMMAND ${Python3_EXECUTABLE} ${KPI_SCRIPT}
+                    --build-dir   "${CMAKE_BINARY_DIR}"
+                    --source-dir  "${CMAKE_SOURCE_DIR}"
+                    --output      "${KPI_REPORT}"
+        COMMENT "Generating KPI report → ${KPI_REPORT}"
+        VERBATIM
+    )
+    message(STATUS "KPI report: ${KPI_REPORT} (generated after each build)")
+else()
+    message(STATUS "Python3 not found — KPI report disabled")
 endif()
 
 # ═════════════════════════════════════════════════════════════════════════════

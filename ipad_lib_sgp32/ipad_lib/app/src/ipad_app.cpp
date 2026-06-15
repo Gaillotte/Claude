@@ -1,10 +1,10 @@
 /**
  * @file ipad_app.cpp
- * @brief IPAd — Application de test IHM (ncurses TUI)
+ * @brief IPAd — Interactive TUI test application (ncurses)
  *
- * Interface terminal interactive pour tester les services de la bibliothèque IPAd.
- * Compilation: cmake -DBUILD_APP=ON ..
- * Dépendances: libncurses, libipad
+ * Interactive terminal interface for testing the IPAd library services.
+ * Build: cmake -DBUILD_APP=ON ..
+ * Dependencies: libncurses, libipad
  */
 
 #include <ncurses.h>
@@ -132,7 +132,7 @@ static std::string readline_popup(WINDOW *parent, const char *prompt,
     WINDOW *pop = newwin(ph, pw, py, px);
     box(pop, 0, 0);
     wattron(pop, COLOR_PAIR(CP_TITLE) | A_BOLD);
-    mvwprintw(pop, 0, 2, " Entrée ");
+    mvwprintw(pop, 0, 2, " Input ");
     wattroff(pop, COLOR_PAIR(CP_TITLE) | A_BOLD);
     mvwprintw(pop, 1, 2, "%s", prompt);
     mvwprintw(pop, 2, 2, "> ");
@@ -207,24 +207,24 @@ static void draw_ui(WINDOW *win) {
     draw_box(win, r_eid, "eUICC Info");
     if (g_app.euicc_loaded) {
         mvwprintw(win, 2, 2, "EID : %.32s", g_app.euicc.eid_str);
-        mvwprintw(win, 2, cols/2, "Profils : %u/%u",
+        mvwprintw(win, 2, cols/2, "Profiles: %u/%u",
                   (unsigned)g_app.profiles.size(),
                   g_app.euicc.profile_capacity);
     } else {
         wattron(win, COLOR_PAIR(CP_ERROR));
-        mvwprintw(win, 2, 2, "Non connecté — appuyez sur 'i' pour initialiser");
+        mvwprintw(win, 2, 2, "Not connected — press 'i' to initialise");
         wattroff(win, COLOR_PAIR(CP_ERROR));
     }
 
     /* ── Profile list ─────────────────────────────────────────────────── */
     int list_h = rows - 15;
     Rect r_lst = {5, 0, list_h, cols * 2 / 3};
-    draw_box(win, r_lst, "Profils eSIM");
+    draw_box(win, r_lst, "eSIM Profiles");
 
     /* Header */
     wattron(win, COLOR_PAIR(CP_HEADER) | A_BOLD);
     mvwprintw(win, 6, 2, "%-3s %-22s %-12s %-18s %-8s",
-              "#", "ICCID", "État", "Fournisseur", "Nickname");
+              "#", "ICCID", "State", "Provider", "Nickname");
     wattroff(win, COLOR_PAIR(CP_HEADER) | A_BOLD);
 
     for (int i = 0; i < (int)g_app.profiles.size() && i < list_h - 4; ++i) {
@@ -233,8 +233,8 @@ static void draw_ui(WINDOW *win) {
         const char *state_str;
         int cp;
         switch (p.state) {
-            case IPAD_PROFILE_ENABLED:  state_str = "ACTIF   "; cp = CP_SUCCESS; break;
-            case IPAD_PROFILE_DISABLED: state_str = "inactif "; cp = CP_LOG;     break;
+            case IPAD_PROFILE_ENABLED:  state_str = "ACTIVE  "; cp = CP_SUCCESS; break;
+            case IPAD_PROFILE_DISABLED: state_str = "inactive"; cp = CP_LOG;     break;
             default:                    state_str = "pending "; cp = CP_STATUS;  break;
         }
         if (i == g_app.selected_profile)
@@ -255,7 +255,7 @@ static void draw_ui(WINDOW *win) {
 
     if (g_app.profiles.empty()) {
         wattron(win, COLOR_PAIR(CP_LOG));
-        mvwprintw(win, 7, 4, "(aucun profil installé)");
+        mvwprintw(win, 7, 4, "(no profile installed)");
         wattroff(win, COLOR_PAIR(CP_LOG));
     }
 
@@ -267,18 +267,18 @@ static void draw_ui(WINDOW *win) {
 
     struct MenuItem { char key; const char *label; };
     static const MenuItem items[] = {
-        {'i', "Initialiser"},
-        {'r', "Rafraîchir"},
-        {'d', "Télécharger profil"},
-        {'e', "Activer sélection"},
-        {'x', "Désactiver sélection"},
-        {'D', "Supprimer sélection"},
-        {'n', "Renommer profil"},
+        {'i', "Initialise"},
+        {'r', "Refresh"},
+        {'d', "Download profile"},
+        {'e', "Enable selected"},
+        {'x', "Disable selected"},
+        {'D', "Delete selected"},
+        {'n', "Rename profile"},
         {'s', "Self-test"},
         {'j', "Export diagnostics"},
-        {'+', "Profil suivant"},
-        {'-', "Profil précédent"},
-        {'q', "Quitter"},
+        {'+', "Next profile"},
+        {'-', "Previous profile"},
+        {'q', "Quit"},
     };
     for (int i = 0; i < (int)(sizeof(items)/sizeof(items[0])); ++i) {
         wattron(win, COLOR_PAIR(CP_MENU_SEL) | A_BOLD);
@@ -293,7 +293,7 @@ static void draw_ui(WINDOW *win) {
     int log_y = 5 + list_h;
     int log_h = rows - log_y - 2;
     Rect r_log = {log_y, 0, log_h, cols};
-    draw_box(win, r_log, "Journal événements");
+    draw_box(win, r_log, "Event log");
     {
         std::lock_guard<std::mutex> lk(g_app.log_mutex);
         for (int i = 0; i < log_h - 2 && i < (int)g_app.log_entries.size(); ++i) {
@@ -331,23 +331,23 @@ static void action_init(WINDOW *win) {
 
     ipad_status_t rc = ipad_init(&cfg, &g_app.hdl);
     if (rc != IPAD_OK) {
-        app_log("Init échoué : " + std::string(ipad_strerror(rc)), false);
+        app_log("Init failed: " + std::string(ipad_strerror(rc)), false);
         return;
     }
     ipad_log_set_handler(g_app.hdl, ipad_log_bridge, nullptr);
     ipad_event_subscribe(g_app.hdl, IPAD_EVT_ALL, on_event, nullptr);
     refresh_euicc();
     refresh_profiles();
-    app_log("IPAd initialisé — EID: " + std::string(g_app.euicc.eid_str));
+    app_log("IPAd initialised — EID: " + std::string(g_app.euicc.eid_str));
 }
 
 static void action_download(WINDOW *win) {
-    if (!g_app.hdl) { app_log("Non initialisé", false); return; }
+    if (!g_app.hdl) { app_log("Not initialised", false); return; }
     std::string ac = readline_popup(win,
-        "Activation Code (LPA:1$host$matchid) :", 180);
+        "Activation Code (LPA:1$host$matchid):", 180);
     if (ac.empty()) return;
 
-    app_log("Téléchargement en cours…");
+    app_log("Download in progress…");
 
     /* Run in background thread to keep UI responsive */
     std::thread([ac]{
@@ -358,10 +358,10 @@ static void action_download(WINDOW *win) {
         ipad_status_t rc = ipad_profile_download(g_app.hdl, &params, iccid);
         if (rc == IPAD_OK) {
             char s[21]; ipad_iccid_to_str(iccid, s);
-            app_log("Profil installé : " + std::string(s));
+            app_log("Profile installed: " + std::string(s));
             refresh_profiles();
         } else {
-            app_log("Échec download : " + std::string(ipad_strerror(rc)), false);
+            app_log("Download failed: " + std::string(ipad_strerror(rc)), false);
         }
     }).detach();
 }
@@ -370,39 +370,39 @@ static void action_enable(WINDOW *) {
     if (!g_app.hdl || g_app.profiles.empty()) return;
     auto &p  = g_app.profiles[g_app.selected_profile];
     ipad_status_t rc = ipad_profile_enable(g_app.hdl, p.iccid);
-    if (rc == IPAD_OK) { app_log("Profil activé"); refresh_profiles(); }
-    else app_log("Erreur activation : " + std::string(ipad_strerror(rc)), false);
+    if (rc == IPAD_OK) { app_log("Profile enabled"); refresh_profiles(); }
+    else app_log("Enable error: " + std::string(ipad_strerror(rc)), false);
 }
 
 static void action_disable(WINDOW *) {
     if (!g_app.hdl || g_app.profiles.empty()) return;
     auto &p  = g_app.profiles[g_app.selected_profile];
     ipad_status_t rc = ipad_profile_disable(g_app.hdl, p.iccid);
-    if (rc == IPAD_OK) { app_log("Profil désactivé"); refresh_profiles(); }
-    else app_log("Erreur désactivation : " + std::string(ipad_strerror(rc)), false);
+    if (rc == IPAD_OK) { app_log("Profile disabled"); refresh_profiles(); }
+    else app_log("Disable error: " + std::string(ipad_strerror(rc)), false);
 }
 
 static void action_delete(WINDOW *win) {
     if (!g_app.hdl || g_app.profiles.empty()) return;
-    if (!confirm_popup(win, "Supprimer ce profil ? (irréversible)")) return;
+    if (!confirm_popup(win, "Delete this profile? (irreversible)")) return;
     auto &p = g_app.profiles[g_app.selected_profile];
     ipad_status_t rc = ipad_profile_delete(g_app.hdl, p.iccid);
-    if (rc == IPAD_OK) { app_log("Profil supprimé"); refresh_profiles(); }
-    else app_log("Erreur suppression : " + std::string(ipad_strerror(rc)), false);
+    if (rc == IPAD_OK) { app_log("Profile deleted"); refresh_profiles(); }
+    else app_log("Delete error: " + std::string(ipad_strerror(rc)), false);
 }
 
 static void action_rename(WINDOW *win) {
     if (!g_app.hdl || g_app.profiles.empty()) return;
-    std::string nick = readline_popup(win, "Nouveau nom du profil :", 63);
+    std::string nick = readline_popup(win, "New profile name:", 63);
     if (nick.empty()) return;
     auto &p = g_app.profiles[g_app.selected_profile];
     ipad_status_t rc = ipad_profile_set_nickname(g_app.hdl, p.iccid, nick.c_str());
-    if (rc == IPAD_OK) { app_log("Nom mis à jour"); refresh_profiles(); }
-    else app_log("Erreur rename : " + std::string(ipad_strerror(rc)), false);
+    if (rc == IPAD_OK) { app_log("Nickname updated"); refresh_profiles(); }
+    else app_log("Rename error: " + std::string(ipad_strerror(rc)), false);
 }
 
 static void action_selftest(WINDOW *) {
-    if (!g_app.hdl) { app_log("Non initialisé", false); return; }
+    if (!g_app.hdl) { app_log("Not initialised", false); return; }
     uint32_t result = 0;
     ipad_status_t rc = ipad_selftest(g_app.hdl, &result);
     if (rc == IPAD_OK) {
@@ -410,16 +410,16 @@ static void action_selftest(WINDOW *) {
         oss << "Self-test OK, bitmask=0x" << std::hex << result;
         app_log(oss.str());
     } else {
-        app_log("Self-test échoué : " + std::string(ipad_strerror(rc)), false);
+        app_log("Self-test failed: " + std::string(ipad_strerror(rc)), false);
     }
 }
 
 static void action_diag(WINDOW *) {
-    if (!g_app.hdl) { app_log("Non initialisé", false); return; }
+    if (!g_app.hdl) { app_log("Not initialised", false); return; }
     char buf[2048];
     ipad_status_t rc = ipad_diag_export_json(g_app.hdl, buf, sizeof(buf));
     if (rc == IPAD_OK) app_log("Diag: " + std::string(buf));
-    else app_log("Diag échoué", false);
+    else app_log("Diag export failed", false);
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────
@@ -459,7 +459,7 @@ int main(int argc, char **argv) {
     WINDOW *main_win = newwin(0, 0, 0, 0);
     keypad(main_win, TRUE);
 
-    app_log("Prêt — appuyez sur 'i' pour initialiser IPAd");
+    app_log("Ready — press 'i' to initialise IPAd");
 
     /* Start event pump thread */
     std::thread ev_thread(event_thread_fn);
@@ -470,11 +470,11 @@ int main(int argc, char **argv) {
 
         switch (c) {
             case 'q': case 'Q':
-                if (confirm_popup(main_win, "Quitter l'application ?"))
+                if (confirm_popup(main_win, "Quit the application?"))
                     g_app.running = false;
                 break;
             case 'i': action_init(main_win);    break;
-            case 'r': refresh_profiles(); refresh_euicc(); app_log("Rafraîchi"); break;
+            case 'r': refresh_profiles(); refresh_euicc(); app_log("Refreshed"); break;
             case 'd': action_download(main_win); break;
             case 'e': action_enable(main_win);  break;
             case 'x': action_disable(main_win); break;

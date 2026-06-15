@@ -15,6 +15,8 @@
 #include <future>
 #include <map>
 #include <mutex>
+#include <thread>
+#include <chrono>
 
 /* ──────────────────────────────────────────────────────────────────────────────
  * telux::common stubs
@@ -76,14 +78,18 @@ class ISimProfileManager {
 public:
     /* ── Mock state ─────────────────────────────────────────────────────── */
     struct MockConfig {
-        bool   subsystem_ready      = true;
-        bool   fail_add_profile     = false;
-        bool   fail_delete_profile  = false;
-        bool   fail_set_profile     = false;
-        bool   fail_get_profiles    = false;
-        bool   require_user_consent = false;
-        int    download_delay_ms    = 50;
-        std::string forced_eid      = "89049032005000000000000000000001";
+        bool   subsystem_ready           = true;
+        bool   subsystem_ready_timeout   = false;   // onSubsystemReady never resolves
+        bool   fail_add_profile          = false;
+        bool   fail_add_profile_status   = false;   // addProfile returns non-SUCCESS Status
+        bool   fail_delete_profile       = false;
+        bool   fail_set_profile          = false;
+        bool   fail_get_profiles         = false;
+        telux::common::Status fail_get_profiles_status = telux::common::Status::SUCCESS;
+        bool   require_user_consent      = false;
+        bool   download_error_at_end     = false;   // onDownloadStatus(ERROR, 100, ...)
+        int    download_delay_ms         = 50;
+        std::string forced_eid           = "89049032005000000000000000000001";
     };
 
     MockConfig mock_cfg;
@@ -91,6 +97,10 @@ public:
     bool isSubsystemReady() const { return mock_cfg.subsystem_ready; }
 
     std::future<void> onSubsystemReady() {
+        if (mock_cfg.subsystem_ready_timeout) {
+            blocking_promise_ = std::make_shared<std::promise<void>>();
+            return blocking_promise_->get_future();
+        }
         std::promise<void> p;
         p.set_value();
         return p.get_future();
@@ -110,22 +120,23 @@ public:
             SlotId, const std::string &ac, const std::string &,
             bool auto_enable,
             std::function<void(telux::common::ErrorCode)> cb) {
+        if (mock_cfg.fail_add_profile_status)
+            return telux::common::Status::FAILED;
         if (mock_cfg.fail_add_profile) {
             std::thread([cb]{ cb(telux::common::ErrorCode::FAILED); }).detach();
             return telux::common::Status::SUCCESS;
         }
 
-        /* Simulate user consent if required */
         auto self = this;
         int delay = mock_cfg.download_delay_ms;
         bool consent = mock_cfg.require_user_consent;
+        bool err_end = mock_cfg.download_error_at_end;
 
-        std::thread([this, self, ac, auto_enable, cb, delay, consent] {
+        std::thread([this, self, ac, auto_enable, cb, delay, consent, err_end] {
             auto listener = self->get_listener();
             if (listener && consent)
                 listener->onUserDisplayInfo(0, true, false);
 
-            /* progress ticks */
             if (listener) {
                 for (int p : {20, 50, 80}) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(delay/4));
@@ -134,7 +145,12 @@ public:
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(delay));
 
-            /* Generate fake ICCID from activation code hash */
+            if (err_end) {
+                if (listener) listener->onDownloadStatus(DownloadStatus::ERROR, 100, 0);
+                cb(telux::common::ErrorCode::FAILED);
+                return;
+            }
+
             std::string iccid = "8901230000000000";
             iccid += std::to_string(std::hash<std::string>{}(ac) % 10000);
             iccid = iccid.substr(0, 20);
@@ -157,6 +173,8 @@ public:
     telux::common::Status getProfiles(SlotId,
             std::function<void(telux::common::ErrorCode,
                 std::vector<std::shared_ptr<SimProfile>>)> cb) {
+        if (mock_cfg.fail_get_profiles_status != telux::common::Status::SUCCESS)
+            return mock_cfg.fail_get_profiles_status;
         if (mock_cfg.fail_get_profiles) {
             cb(telux::common::ErrorCode::FAILED, {});
             return telux::common::Status::SUCCESS;
@@ -241,8 +259,9 @@ public:
 
 private:
     std::mutex mtx_;
-    std::vector<std::shared_ptr<SimProfile>>   profiles_;
-    std::shared_ptr<ISimProfileListener>       listener_;
+    std::vector<std::shared_ptr<SimProfile>>       profiles_;
+    std::shared_ptr<ISimProfileListener>           listener_;
+    std::shared_ptr<std::promise<void>>            blocking_promise_;
 };
 
 /* ── ICardManager (mock) ──────────────────────────────────────────────────── */
@@ -268,13 +287,16 @@ public:
     }
 
     std::shared_ptr<ISimProfileManager> getSimProfileManager(SlotId = 0) {
+        if (!sim_mgr_->mock_cfg.subsystem_ready) return nullptr;
         return sim_mgr_;
     }
     std::shared_ptr<ICardManager> getCardManager() {
+        if (fail_card_manager) return nullptr;
         return card_mgr_;
     }
 
     /* Access for test setup */
+    bool fail_card_manager = false;
     std::shared_ptr<ISimProfileManager> sim_mgr_ =
         std::make_shared<ISimProfileManager>();
     std::shared_ptr<ICardManager> card_mgr_ =

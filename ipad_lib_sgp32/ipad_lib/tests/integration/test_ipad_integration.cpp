@@ -11,6 +11,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <array>
 #include <thread>
 #include <atomic>
 #include <chrono>
@@ -45,12 +46,12 @@ protected:
         if (hdl) { ipad_deinit(hdl); hdl = nullptr; }
     }
 
-    ipad_iccid_t download_profile(const std::string &ac) {
+    std::array<uint8_t, IPAD_ICCID_LEN> download_profile(const std::string &ac) {
         ipad_dl_params_t p{};
         p.activation_code = ac.c_str();
         p.auto_enable     = false;
-        ipad_iccid_t iccid{};
-        EXPECT_EQ(IPAD_OK, ipad_profile_download(hdl, &p, iccid));
+        std::array<uint8_t, IPAD_ICCID_LEN> iccid{};
+        EXPECT_EQ(IPAD_OK, ipad_profile_download(hdl, &p, iccid.data()));
         return iccid;
     }
 };
@@ -95,15 +96,15 @@ TEST_F(IpadIntegration, TC_WF_02_MultipleProfiles_Exclusivity) {
     auto iccid_c = download_profile("LPA:1$smdp.carrier.io$PROFILEC");
 
     /* Enable A */
-    ASSERT_EQ(IPAD_OK, ipad_profile_enable(hdl, iccid_a));
+    ASSERT_EQ(IPAD_OK, ipad_profile_enable(hdl, iccid_a.data()));
 
     /* Enable B — A should become disabled */
-    ASSERT_EQ(IPAD_OK, ipad_profile_enable(hdl, iccid_b));
+    ASSERT_EQ(IPAD_OK, ipad_profile_enable(hdl, iccid_b.data()));
 
     ipad_profile_state_t sa, sb, sc;
-    ASSERT_EQ(IPAD_OK, ipad_profile_get_state(hdl, iccid_a, &sa));
-    ASSERT_EQ(IPAD_OK, ipad_profile_get_state(hdl, iccid_b, &sb));
-    ASSERT_EQ(IPAD_OK, ipad_profile_get_state(hdl, iccid_c, &sc));
+    ASSERT_EQ(IPAD_OK, ipad_profile_get_state(hdl, iccid_a.data(), &sa));
+    ASSERT_EQ(IPAD_OK, ipad_profile_get_state(hdl, iccid_b.data(), &sb));
+    ASSERT_EQ(IPAD_OK, ipad_profile_get_state(hdl, iccid_c.data(), &sc));
 
     EXPECT_EQ(IPAD_PROFILE_DISABLED, sa);
     EXPECT_EQ(IPAD_PROFILE_ENABLED,  sb);
@@ -199,11 +200,11 @@ TEST_F(IpadIntegration, TC_WF_05_ConcurrentListDuringDownload) {
  * ══════════════════════════════════════════════════════════════════════════ */
 TEST_F(IpadIntegration, TC_WF_06_NicknamePersistence) {
     auto iccid = download_profile("LPA:1$smdp.carrier.io$NICKNAMETEST");
-    ASSERT_EQ(IPAD_OK, ipad_profile_set_nickname(hdl, iccid, "MonOpérateur"));
+    ASSERT_EQ(IPAD_OK, ipad_profile_set_nickname(hdl, iccid.data(), "MyOperator"));
 
     ipad_profile_t p{};
-    ASSERT_EQ(IPAD_OK, ipad_profile_get(hdl, iccid, &p));
-    EXPECT_STREQ("MonOpérateur", p.nickname);
+    ASSERT_EQ(IPAD_OK, ipad_profile_get(hdl, iccid.data(), &p));
+    EXPECT_STREQ("MyOperator", p.nickname);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
