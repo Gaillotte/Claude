@@ -3,6 +3,7 @@
 Generates the AI Transit Pipeline PDF slide deck via ReportLab.
 Format 16:9 — 1333 × 750 pt
 Light (white/light gray) background theme, English text.
+5-layer scanning architecture version.
 """
 
 from reportlab.lib.pagesizes import landscape
@@ -41,6 +42,13 @@ ALT_ROW2 = HexColor("#FFFFFF")
 RED_ROW  = HexColor("#FDE8E8")
 ORG_ROW  = HexColor("#FEF3E2")
 GRN_ROW  = HexColor("#E8F8EE")
+
+# Layer colors for 5-layer diagram
+L1_COLOR = HexColor("#0070A8")   # deep blue
+L2_COLOR = HexColor("#8E44AD")   # purple
+L3_COLOR = HexColor("#C06010")   # dark orange
+L4_COLOR = HexColor("#1A7A40")   # dark green
+L5_COLOR = HexColor("#B8860B")   # dark gold
 
 # ── Helpers canvas ────────────────────────────────────────────────────────────
 def bg(cv, color=BG):
@@ -152,13 +160,13 @@ line(cv, 100, H - 290, W - 100, H - 290, GRAY, 1)
 
 bullets = [
     "🔍  Secure retrieval from GitHub",
-    "🛡   Adaptive multi-layer scan by file type",
+    "🛡   5-layer adaptive multi-layer scan by file type",
     "📦  Approved ZIP archive + Excel traceability report",
 ]
 for i, b in enumerate(bullets):
     text(cv, b, W/2, H - 340 - i * 45, size=18, color=DARK, align="center")
 
-text(cv, "Version 1.0  —  June 2026", W/2, 30, size=12, color=GRAY, align="center")
+text(cv, "Version 2.0  —  June 2026", W/2, 30, size=12, color=GRAY, align="center")
 cv.showPage()
 
 
@@ -171,23 +179,27 @@ text(cv, "Table of Contents", 35, H - 53, size=34, color=WHITE, bold=True)
 divider_line(cv, H - 83)
 
 items = [
-    ("01", "Context & Objectives",               ACCENT),
-    ("02", "Pipeline Architecture",              ACCENT2),
-    ("03", "Phase 1 — Secure Retrieval",         YELLOW),
-    ("04", "Phase 2 — Multi-layer Scan",         ORANGE),
-    ("05", "Per-type Check Details",             PURPLE),
-    ("06", "Tools Used",                         GREEN),
-    ("07", "Results & Deliverables",             ACCENT),
-    ("08", "Absolute Security Rules",            RED),
+    ("01", "Context & Objectives",                        ACCENT),
+    ("02", "Pipeline Architecture — 5 Layers",            ACCENT2),
+    ("03", "Phase 1 — Secure Retrieval",                  YELLOW),
+    ("04", "Layer 1 — Global Scan",                       ORANGE),
+    ("05", "Layer 2 — OWASP Top 10 / CWE Top 25",        PURPLE),
+    ("06", "Layer 3 — SCA: Vulnerable Dependencies",      L3_COLOR),
+    ("07", "Layer 4 — Universal Patterns",                L4_COLOR),
+    ("08", "Layer 5 — Per-type SAST (11 languages)",      L5_COLOR),
+    ("09", "Tools Used",                                   GREEN),
+    ("10", "Results & Deliverables",                      ACCENT),
+    ("11", "Absolute Security Rules",                     RED),
 ]
+cols = 3
 for i, (num, title, color) in enumerate(items):
-    col = 0 if i < 4 else 1
-    row = i % 4
-    x = 40 + col * 650
-    y = H - 155 - row * 140
-    card(cv, x, y - 95, 610, 105)
-    circle_num(cv, num, x + 35, y - 45, 22, color, WHITE)
-    text(cv, title, x + 75, y - 53, size=17, color=DARK, bold=True)
+    col = i % cols
+    row = i // cols
+    x = 30 + col * 435
+    y = H - 130 - row * 165
+    card(cv, x, y - 130, 420, 140)
+    circle_num(cv, num, x + 30, y - 60, 20, color, WHITE)
+    text(cv, title, x + 60, y - 68, size=14, color=DARK, bold=True)
 cv.showPage()
 
 
@@ -230,7 +242,7 @@ text(cv, "one-way flow", 1100, H - 265, size=10, color=GRAY, align="center")
 text(cv, "Key Objectives", 35, H - 390, size=20, color=ACCENT2, bold=True)
 objs = [
     ("Retrieve", "Secure depth-1 clone",        ACCENT),
-    ("Scan",     "Adaptive multi-layer",         ORANGE),
+    ("Scan",     "5-layer adaptive pipeline",    ORANGE),
     ("Decide",   "PASS→ZIP / FAIL→Quarantine",  RED),
     ("Trace",    "Excel + JSON + HTML",          GREEN),
 ]
@@ -244,56 +256,70 @@ cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SLIDE 4 — ARCHITECTURE
+# SLIDE 4 — ARCHITECTURE (5-layer flow)
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
 rect(cv, 0, H - 80, W, 80, ACCENT2)
-text(cv, "02  Pipeline Architecture", 35, H - 52, size=32,
+text(cv, "02  Pipeline Architecture — 5-Layer Scanning", 35, H - 52, size=30,
      color=WHITE, bold=True)
 divider_line(cv, H - 83, ACCENT2)
 
-flow_nodes = [
-    ("📂 Source  GitHub / Local",      H - 130, ACCENT),
-    ("⬇  fetch_repo.sh  (Phase 1)",    H - 230, HexColor("#3A7AB5")),
-    ("🔍 scan_pipeline.sh  (Phase 2)", H - 330, HexColor("#C06010")),
-    ("✔  Good/ — ZIP + Excel",         H - 480, GREEN),
-    ("✘  quarantine/  chmod 700",      H - 560, RED),
+# Left: top-level flow (Source -> fetch -> scan -> PASS/FAIL)
+text(cv, "Top-level Flow", 190, H - 105, size=14, color=DARK, bold=True, align="center")
+top_nodes = [
+    ("📂 Source\nGitHub / Local", H - 145, ACCENT),
+    ("⬇  fetch_repo.sh\n(Phase 1)", H - 235, HexColor("#3A7AB5")),
+    ("🔍 scan_pipeline.sh\n(Phase 2 — 5 Layers)", H - 330, HexColor("#C06010")),
+    ("✔  Good/ — ZIP + Excel", H - 455, GREEN),
+    ("✘  quarantine/  chmod 700", H - 530, RED),
 ]
-for label, y, c in flow_nodes:
-    card(cv, 25, y - 72, 360, 65, c, radius=6)
-    text(cv, label, 210, y - 46, size=13, color=WHITE, bold=True, align="center")
+for label, y, c in top_nodes:
+    card(cv, 20, y - 65, 350, 58, c, radius=6)
+    parts = label.split("\n")
+    for pi, p in enumerate(parts):
+        text(cv, p, 195, y - 25 - pi * 20, size=11, color=WHITE, bold=True, align="center")
 
-for y_arr in [H - 170, H - 270]:
-    text(cv, "▼", 205, y_arr, size=18, color=GRAY, align="center")
-text(cv, "PASS ▼", 90, H - 425, size=13, color=GREEN, bold=True)
-text(cv, "FAIL ▼", 255, H - 425, size=13, color=RED, bold=True)
+for y_arr in [H - 185, H - 280]:
+    text(cv, "▼", 195, y_arr, size=16, color=GRAY, align="center")
+text(cv, "PASS ▼", 80, H - 400, size=12, color=GREEN, bold=True)
+text(cv, "FAIL ▼", 245, H - 400, size=12, color=RED, bold=True)
 
-# Phase 1 detail
-text(cv, "Phase 1 — fetch_repo.sh", 420, H - 110, size=16, color=ACCENT, bold=True)
-p1 = ["✦  Host whitelist (github.com only)",
-      "✦  Size check via GitHub API (< 500 MB)",
-      "✦  git clone --depth 1 --no-tags",
-      "✦  .git/ removal (no metadata)",
-      "✦  SHA-256 manifest of all files",
-      "✦  Quick scan for suspicious patterns"]
-for i, l in enumerate(p1):
-    text(cv, l, 430, H - 145 - i * 37, size=13, color=DARK)
+# Right: 5-layer cascade
+text(cv, "5-Layer Scanning Cascade", 880, H - 100, size=15, color=DARK, bold=True, align="center")
 
-# Phase 2 detail
-text(cv, "Phase 2 — scan_pipeline.sh", 880, H - 110, size=16, color=ORANGE, bold=True)
-p2 = ["🌐 GLOBAL Layer:",
-      "   Gitleaks · detect-secrets · ClamAV · YARA",
-      "",
-      "📄 PER-TYPE Layer:",
-      "   .py → Bandit + eval/exec",
-      "   .js/.ts → Semgrep + child_process",
-      "   .sh → ShellCheck + curl|bash",
-      "   .yml → unpinned actions",
-      "   .tf → checkov + hardcoded secrets",
-      "   Dockerfile → hadolint + :latest",
-      "   .so/.exe → auto FAIL + strings"]
-for i, l in enumerate(p2):
-    text(cv, l, 890, H - 145 - i * 37, size=12, color=DARK)
+layers = [
+    ("L1", "Global",           "AV · gitleaks · detect-secrets · YARA",        L1_COLOR),
+    ("L2", "OWASP / CWE",     "Semgrep × 4 rulesets",                          L2_COLOR),
+    ("L3", "SCA / CVE",       "trivy · pip-audit · npm audit",                 L3_COLOR),
+    ("L4", "Universal",        "CWE-798 · CWE-22 · CWE-918 · CWE-327 · CWE-338", L4_COLOR),
+    ("L5", "Per-type SAST",   "11 languages",                                   L5_COLOR),
+]
+
+layer_y_start = H - 140
+layer_h = 88
+layer_gap = 10
+layer_x = 390
+layer_w = 910
+
+for idx, (lnum, lname, ldesc, lcolor) in enumerate(layers):
+    ly = layer_y_start - idx * (layer_h + layer_gap)
+    # colored band
+    rect(cv, layer_x, ly - layer_h, layer_w, layer_h, lcolor, radius=6)
+    # label badge
+    rect(cv, layer_x + 8, ly - layer_h + 10, 60, layer_h - 20, WHITE, radius=4)
+    text(cv, lnum, layer_x + 38, ly - layer_h/2 - 7, size=14, color=lcolor, bold=True, align="center")
+    text(cv, lname, layer_x + 85, ly - 22, size=14, color=WHITE, bold=True)
+    text(cv, ldesc, layer_x + 85, ly - 50, size=11, color=HexColor("#D8EEF8"))
+    # arrow between layers
+    if idx < len(layers) - 1:
+        ay = ly - layer_h - layer_gap/2
+        text(cv, "▼", layer_x + layer_w/2, ay - 2, size=13, color=GRAY, align="center")
+
+# PASS/FAIL outcome
+outcome_y = layer_y_start - len(layers) * (layer_h + layer_gap) - 10
+badge(cv, "PASS", layer_x + layer_w/2 - 110, outcome_y - 32, 100, 32, GREEN)
+badge(cv, "FAIL", layer_x + layer_w/2 + 10,  outcome_y - 32, 100, 32, RED)
+text(cv, "▼", layer_x + layer_w/2, outcome_y + 5, size=13, color=GRAY, align="center")
 cv.showPage()
 
 
@@ -301,7 +327,7 @@ cv.showPage()
 # SLIDE 5 — PHASE 1
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
-rect(cv, 0, H - 80, W, 80, HexColor("#C8860A"))  # darker yellow bar for contrast
+rect(cv, 0, H - 80, W, 80, HexColor("#C8860A"))
 text(cv, "03  Phase 1 — Secure Retrieval", 35, H - 52, size=30,
      color=WHITE, bold=True)
 divider_line(cv, H - 83, ORANGE)
@@ -334,15 +360,15 @@ cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SLIDE 6 — GLOBAL LAYER
+# SLIDE 6 — LAYER 1: GLOBAL SCAN
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
-rect(cv, 0, H - 80, W, 80, ORANGE)
-text(cv, "04  Phase 2 — Global Layer", 35, H - 52, size=32, color=WHITE, bold=True)
-divider_line(cv, H - 83, ORANGE)
+rect(cv, 0, H - 80, W, 80, L1_COLOR)
+text(cv, "04  Layer 1 — Global Scan (all files)", 35, H - 52, size=32, color=WHITE, bold=True)
+divider_line(cv, H - 83, L1_COLOR)
 
-text(cv, "Applies to the ENTIRE directory, regardless of file type",
-     W/2, H - 105, size=16, color=DARK, align="center")
+text(cv, "AV · gitleaks · detect-secrets · YARA  —  Applies to the ENTIRE directory, regardless of file type",
+     W/2, H - 105, size=14, color=DARK, align="center")
 
 tools_g = [
     ("Gitleaks", "🔑",
@@ -351,7 +377,7 @@ tools_g = [
     ("detect-secrets", "📊",
      ["Shannon entropy", "Secrets unknown to rule sets",
       "High-density base64/hex", "Complements Gitleaks"], ACCENT2),
-    ("ClamAV", "🦠",
+    ("ClamAV / AV", "🦠",
      ["Millions of signatures", "Trojans, ransomware, backdoors",
       "Full recursive scan", "freshclam updated base"], ORANGE),
     ("YARA", "🎯",
@@ -371,50 +397,237 @@ cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SLIDE 7 — DISPATCH BY FILE TYPE
+# SLIDE 7 — LAYER 2: OWASP / CWE
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
-rect(cv, 0, H - 80, W, 80, PURPLE)
-text(cv, "04  Phase 2 — Dispatch by File Type", 35, H - 52,
-     size=28, color=WHITE, bold=True)
-divider_line(cv, H - 83, PURPLE)
+rect(cv, 0, H - 80, W, 80, L2_COLOR)
+text(cv, "05  Layer 2 — OWASP Top 10 2021 + CWE Top 25 (Semgrep)", 35, H - 52,
+     size=26, color=WHITE, bold=True)
+divider_line(cv, H - 83, L2_COLOR)
+
+text(cv, "4 Semgrep rulesets run against all code files", W/2, H - 103, size=15,
+     color=DARK, bold=True, align="center")
+
+rulesets = [
+    ("p/owasp-top-ten", L1_COLOR,
+     "OWASP Top 10 2021",
+     ["A01 — Broken Access Control",
+      "A02 — Cryptographic Failures",
+      "A03 — Injection (SQLi, XSS, SSTI…)",
+      "A04 — Insecure Design",
+      "A05 — Security Misconfiguration",
+      "A06 — Vulnerable Components",
+      "A07 — Auth Failures",
+      "A08 — Data Integrity Failures",
+      "A09 — Logging & Monitoring Failures",
+      "A10 — SSRF"]),
+    ("p/cwe-top-25", L2_COLOR,
+     "CWE Top 25 Most Dangerous",
+     ["CWE-79  XSS",
+      "CWE-89  SQL Injection",
+      "CWE-20  Improper Input Validation",
+      "CWE-125 Out-of-bounds Read",
+      "CWE-78  OS Command Injection",
+      "CWE-416 Use After Free",
+      "CWE-22  Path Traversal",
+      "CWE-352 CSRF",
+      "CWE-476 NULL Pointer Dereference",
+      "CWE-287 Improper Authentication"]),
+    ("p/security-audit", L3_COLOR,
+     "General Security Audit",
+     ["Broad vulnerability patterns",
+      "Misconfigurations",
+      "Insecure API usage",
+      "Deprecated functions",
+      "Crypto weaknesses",
+      "Race conditions",
+      "Integer overflows",
+      "Memory safety issues",
+      "Protocol misuse",
+      "Hardcoded values"]),
+    ("p/secrets", L4_COLOR,
+     "Secrets & Credentials",
+     ["API keys (AWS, GCP, Azure…)",
+      "Private keys (RSA, EC, PEM)",
+      "OAuth tokens",
+      "Database connection strings",
+      "JWT secrets",
+      "Slack / Twilio / Stripe tokens",
+      "Generic password patterns",
+      "High-entropy strings",
+      "Environment variable leaks",
+      "Config file secrets"]),
+]
+
+rw = 310
+rx_start = 20
+for i, (ruleset, color, title, items_l) in enumerate(rulesets):
+    rx = rx_start + i * (rw + 12)
+    card(cv, rx, H - 710, rw, 575, BG_CARD, radius=8)
+    rect(cv, rx, H - 148, rw, 44, color)
+    text(cv, ruleset, rx + rw/2, H - 133, size=12, color=WHITE, bold=True, align="center")
+    text(cv, title, rx + rw/2, H - 165, size=11, color=color, bold=True, align="center")
+    for j, item in enumerate(items_l):
+        text(cv, f"• {item}", rx + 10, H - 195 - j * 50, size=10, color=DARK)
+cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE 8 — LAYER 3: SCA / CVE
+# ═══════════════════════════════════════════════════════════════════════════════
+bg(cv)
+rect(cv, 0, H - 80, W, 80, L3_COLOR)
+text(cv, "06  Layer 3 — SCA: Vulnerable Dependencies (OWASP A06)", 35, H - 52,
+     size=26, color=WHITE, bold=True)
+divider_line(cv, H - 83, L3_COLOR)
+
+# SCA explainer
+card(cv, 20, H - 185, W - 40, 80, BG_CARD, radius=8)
+text(cv, "What is SCA?", 40, H - 113, size=15, color=L3_COLOR, bold=True)
+text(cv, "Software Composition Analysis (SCA) identifies known vulnerabilities (CVEs) in third-party libraries and dependencies.",
+     40, H - 138, size=13, color=DARK, max_w=1270)
+text(cv, "OWASP A06:2021 — Vulnerable and Outdated Components is consistently in the OWASP Top 10.",
+     40, H - 163, size=13, color=DARK, max_w=1270)
+
+sca_tools = [
+    ("trivy", "🔍", L1_COLOR,
+     "Universal SCA scanner",
+     ["All ecosystems (pip, npm, gem, go, cargo…)",
+      "CVE database (NVD, OSV, GitHub Advisory)",
+      "Scans requirements.txt, package-lock.json,",
+      "  go.sum, Gemfile.lock, Cargo.lock…",
+      "CRITICAL / HIGH / MEDIUM / LOW severity",
+      "Output: JSON + table report",
+      "Also scans Dockerfiles & container images",
+      "Regularly updated vulnerability DB"]),
+    ("pip-audit / safety", "🐍", HexColor("#B8860B"),
+     "Python — requirements*.txt",
+     ["pip-audit: official PyPA tool (PURL-based)",
+      "safety: PyUp.io database",
+      "Scans requirements.txt, requirements-dev.txt",
+      "  requirements-*.txt (glob pattern)",
+      "Maps to CVE + GHSA identifiers",
+      "Detects yanked / abandoned packages",
+      "Outputs FAIL on any CRITICAL finding",
+      "Complements trivy for Python ecosystem"]),
+    ("npm audit", "📦", ACCENT2,
+     "JavaScript / Node — package-lock.json",
+     ["Built-in npm command (no install needed)",
+      "Uses npm registry advisory database",
+      "Scans package-lock.json",
+      "Severity: critical / high / moderate / low",
+      "FAIL on critical or high findings",
+      "Reports affected package tree",
+      "Identifies fix version when available",
+      "Covers direct and transitive dependencies"]),
+]
+
+tw = 415
+for i, (name, icon, color, subtitle, items_l) in enumerate(sca_tools):
+    tx = 20 + i * (tw + 12)
+    card(cv, tx, H - 700, tw, 485, BG_CARD, radius=8)
+    rect(cv, tx, H - 225, tw, 50, color)
+    text(cv, f"{icon}  {name}", tx + tw/2, H - 206, size=15, color=WHITE, bold=True, align="center")
+    text(cv, subtitle, tx + tw/2, H - 244, size=12, color=color, bold=True, align="center")
+    for j, item in enumerate(items_l):
+        text(cv, f"• {item}", tx + 12, H - 278 - j * 50, size=11, color=DARK)
+    badge(cv, "FAIL on CRITICAL/HIGH", tx + tw/2 - 90, H - 692, 180, 26, RED)
+
+cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE 9 — LAYER 4: UNIVERSAL PATTERNS
+# ═══════════════════════════════════════════════════════════════════════════════
+bg(cv)
+rect(cv, 0, H - 80, W, 80, L4_COLOR)
+text(cv, "07  Layer 4 — Universal Patterns (all files)", 35, H - 52,
+     size=30, color=WHITE, bold=True)
+divider_line(cv, H - 83, L4_COLOR)
+
+text(cv, "Pattern-matched against EVERY file regardless of language — no tool dependency",
+     W/2, H - 102, size=13, color=DARK, align="center")
+
+# Table header
+col_defs = [
+    ("CWE / Standard", 20, 210),
+    ("Pattern / Rule",  235, 270),
+    ("Example",         510, 450),
+    ("Verdict",         965, 350),
+]
+for hdr, hx, hw in col_defs:
+    rect(cv, hx, H - 140, hw, 36, L4_COLOR)
+    text(cv, hdr, hx + hw/2, H - 125, size=12, color=WHITE, bold=True, align="center")
+
+univ_rows = [
+    ("CWE-798",    "Hardcoded credentials",   'password="...", api_key="..."',    "FAIL", RED,    RED_ROW),
+    ("CWE-321",    "Hardcoded crypto key",     "BEGIN RSA PRIVATE KEY",            "FAIL", RED,    RED_ROW),
+    ("CWE-22",     "Path traversal",           "../../etc/passwd",                 "FAIL", RED,    RED_ROW),
+    ("CWE-918",    "SSRF",                     "requests.get(url=user_input)",     "WARN", ORANGE, ORG_ROW),
+    ("CWE-327",    "Weak cryptography",        "md5, sha1, rc4",                   "WARN", ORANGE, ORG_ROW),
+    ("CWE-338",    "Weak PRNG",                "Math.random(), rand()",            "WARN", ORANGE, ORG_ROW),
+    ("OWASP-A09",  "Logging suppressed",       "logging.disable(logging.CRITICAL)","WARN", ORANGE, ORG_ROW),
+]
+RH_U = 72
+for ri, (cwe, pattern, example, verdict, vcol, rowcol) in enumerate(univ_rows):
+    ry = H - 145 - (ri + 1) * RH_U
+    rect(cv, 20, ry, 1293, RH_U - 3, rowcol)
+    text(cv, cwe,      125, ry + RH_U//2 - 5, size=11, color=vcol, bold=True, align="center")
+    text(cv, pattern,  370, ry + RH_U//2 - 5, size=11, color=DARK, align="center")
+    text(cv, example,  510, ry + RH_U//2 - 5, size=10, color=HexColor("#333333"), max_w=445)
+    badge(cv, verdict, 1000, ry + RH_U//2 - 15, 85, 26, vcol)
+cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE 10 — LAYER 5: DISPATCH BY FILE TYPE
+# ═══════════════════════════════════════════════════════════════════════════════
+bg(cv)
+rect(cv, 0, H - 80, W, 80, L5_COLOR)
+text(cv, "08  Layer 5 — Per-type SAST Dispatch (11 languages)", 35, H - 52,
+     size=27, color=WHITE, bold=True)
+divider_line(cv, H - 83, L5_COLOR)
 
 hdrs = [("Extension(s)", 25, 165), ("SAST Tool", 195, 260),
         ("Manual Checks", 460, 600), ("Verdict", 1065, 180)]
 for hdr, hx, hw in hdrs:
-    rect(cv, hx, H - 128, hw, 38, HDR_PUR)
+    rect(cv, hx, H - 128, hw, 38, L5_COLOR)
     text(cv, hdr, hx + hw/2, H - 113, size=12, color=WHITE,
          bold=True, align="center")
 
 rows_t = [
-    (".py",             "Bandit",      "eval() exec() import os/subprocess",     "FAIL"),
-    (".js .ts .jsx",    "Semgrep",     "eval() child_process require(…)",         "FAIL"),
-    (".c .cpp .h",      "cppcheck",    "gets() strcpy() system() popen()",        "FAIL"),
-    (".sh .bash .ps1",  "ShellCheck",  "curl|bash  wget|sh  eval $var",           "FAIL"),
-    (".yml .yaml",      "—",           "Unpinned actions  inline secrets",        "FAIL"),
-    (".tf .tfvars",     "checkov",     "Hardcoded secrets  overly broad IAM",     "FAIL"),
-    ("Dockerfile",      "hadolint",    ":latest  ADD http://  RUN curl|bash",     "FAIL"),
-    (".so .exe .elf",   "strings",     "Auto FAIL + IOC strings",                 "FAIL ⚠"),
-    (".zip .tar.gz",    "—",           "Auto FAIL — re-scan after extraction",    "FAIL ⚠"),
-    (".sql",            "—",           "xp_cmdshell  DROP TABLE  ; --",           "FAIL"),
-    (".json .md .txt",  "—",           "password: secret: token: api_key=",       "FAIL"),
+    (".py",              "Bandit",      "eval() exec() import os/subprocess",     "FAIL"),
+    (".js .ts .jsx",     "Semgrep",     "eval() child_process require(…)",         "FAIL"),
+    (".java",            "Semgrep",     "Runtime.exec() ObjectInputStream JNDI Log4Shell TrustAllCerts",  "FAIL"),
+    (".php",             "Semgrep",     "shell_exec() echo $_GET include($var) unserialize()",            "FAIL"),
+    (".rb",              "Semgrep",     "system/exec eval() ActiveRecord string interpolation",            "FAIL"),
+    (".go",              "Semgrep",     "fmt.Sprintf in SQL math/rand TLS MinVersion",                     "FAIL"),
+    (".c .cpp .h",       "cppcheck",    "gets() strcpy() system() popen()",        "FAIL"),
+    (".sh .bash .ps1",   "ShellCheck",  "curl|bash  wget|sh  eval $var",           "FAIL"),
+    (".yml .yaml",       "—",           "Unpinned actions  inline secrets",        "FAIL"),
+    (".tf .tfvars",      "checkov",     "Hardcoded secrets  overly broad IAM",     "FAIL"),
+    ("Dockerfile",       "hadolint",    ":latest  ADD http://  RUN curl|bash",     "FAIL"),
+    (".xml",             "—",           "DOCTYPE + ENTITY (XXE CWE-611)",          "FAIL"),
+    (".so .exe .elf",    "strings",     "Auto FAIL + IOC strings",                 "FAIL ⚠"),
+    (".zip .tar.gz",     "—",           "Auto FAIL — re-scan after extraction",    "FAIL ⚠"),
+    (".sql",             "—",           "xp_cmdshell  DROP TABLE  ; --",           "FAIL"),
 ]
-RH = 48
+RH = 40
 for ri, (ext, tool, checks, verdict) in enumerate(rows_t):
     ry = H - 135 - (ri + 1) * RH
     fill_r = ALT_ROW1 if ri % 2 == 0 else ALT_ROW2
     rect(cv, 25, ry, 1283, RH - 2, fill_r)
-    text(cv, ext,     110, ry + 14, size=11, color=ACCENT, bold=True, align="center")
-    text(cv, tool,    325, ry + 14, size=11, color=DARK, align="center")
-    text(cv, checks,  460, ry + 14, size=10, color=DARK)
+    text(cv, ext,     110, ry + 12, size=10, color=ACCENT, bold=True, align="center")
+    text(cv, tool,    325, ry + 12, size=10, color=DARK, align="center")
+    text(cv, checks,  460, ry + 12, size=9, color=DARK)
     vcolor = RED if "FAIL" in verdict else ORANGE
-    text(cv, verdict, 1155, ry + 14, size=11, color=vcolor,
+    text(cv, verdict, 1155, ry + 12, size=10, color=vcolor,
          bold=True, align="center")
 cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SLIDES 8–10 — PER-TYPE CHECKS (3 slides × 2 columns)
+# SLIDES — PER-TYPE CHECKS details (classic languages)
 # ═══════════════════════════════════════════════════════════════════════════════
 details = [
     ("Python .py", ACCENT,
@@ -450,7 +663,7 @@ details = [
 for group_start in range(0, len(details), 2):
     bg(cv)
     rect(cv, 0, H - 80, W, 80, HDR_PUR)
-    text(cv, "05  Per-type Check Details", 35, H - 52,
+    text(cv, "08  Layer 5 — Per-type Check Details", 35, H - 52,
          size=29, color=WHITE, bold=True)
     divider_line(cv, H - 83, PURPLE)
 
@@ -484,11 +697,78 @@ for group_start in range(0, len(details), 2):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE — NEW LANGUAGES (Java, PHP, Ruby, Go, XML)
+# ═══════════════════════════════════════════════════════════════════════════════
+new_lang_details = [
+    ("Java .java", HexColor("#C06010"),
+     "Runtime reflection & deserialization — critical attack surface",
+     [("Runtime.exec() (CWE-78)",    "OS command injection via Java runtime shell execution",         "FAIL"),
+      ("ObjectInputStream (CWE-502)", "Deserialization of untrusted data — RCE vector",              "FAIL"),
+      ("Log4Shell JNDI (CVE-2021-44228)", "JNDI lookup in log messages → critical 0-day pattern",   "FAIL"),
+      ("TrustAllCerts (CWE-295)",    "Disabled TLS certificate validation → MITM",                   "FAIL")]),
+    ("PHP .php", HexColor("#6A2FA0"),
+     "Direct user input to shell / output — classic web attack surface",
+     [("shell_exec() (CWE-78)",  "Direct shell execution with user-controlled input",            "FAIL"),
+      ("echo $_GET (CWE-79)",    "Reflected XSS — user input echoed without sanitization",      "FAIL"),
+      ("include($var) (CWE-22)", "Remote/local file inclusion via variable path",               "FAIL"),
+      ("unserialize() (CWE-502)","PHP deserialization → object injection & RCE",               "FAIL")]),
+    ("Ruby .rb", ACCENT2,
+     "Metaprogramming power creates significant injection risk",
+     [("system/exec (CWE-78)",       "Shell command injection via system() or exec()",          "FAIL"),
+      ("eval() (CWE-95)",            "Dynamic code evaluation — trivial code injection",        "FAIL"),
+      ("ActiveRecord interpolation (CWE-89)", "SQL injection via string interpolation in queries", "FAIL")]),
+    ("Go .go", HexColor("#00758F"),
+     "Low-level control — subtle SQL and crypto pitfalls",
+     [("fmt.Sprintf in SQL (CWE-89)", "String-formatted SQL queries → SQL injection",           "FAIL"),
+      ("math/rand (CWE-338)",         "Weak PRNG — not cryptographically secure",              "WARN"),
+      ("TLS MinVersion (CWE-326)",    "Weak TLS version allowed (< TLS 1.2)",                 "FAIL")]),
+    ("XML .xml", HexColor("#8B0000"),
+     "XML External Entity (XXE) — file read & SSRF via XML parsers",
+     [("DOCTYPE + ENTITY (CWE-611)", "XXE: reads local files or makes internal HTTP requests", "FAIL"),
+      ("SYSTEM entity",               "<!ENTITY xxe SYSTEM 'file:///etc/passwd'>",             "FAIL")]),
+]
+
+for group_start in range(0, len(new_lang_details), 2):
+    bg(cv)
+    rect(cv, 0, H - 80, W, 80, L5_COLOR)
+    text(cv, "08  Layer 5 — New Languages: Java · PHP · Ruby · Go · XML", 35, H - 52,
+         size=26, color=WHITE, bold=True)
+    divider_line(cv, H - 83, L5_COLOR)
+
+    for ci in range(2):
+        di = group_start + ci
+        if di >= len(new_lang_details):
+            break
+        name, color, desc, checks = new_lang_details[di]
+        cx = 20 + ci * 660
+        cw = 645
+
+        card(cv, cx, H - 710, cw, 600, BG_CARD, radius=8)
+        rect(cv, cx, H - 130, cw, 48, color)
+        text(cv, name, cx + cw/2, H - 110, size=15, color=WHITE, bold=True, align="center")
+        text(cv, desc, cx + cw/2, H - 155, size=11, color=GRAY, align="center")
+
+        item_h = 140 if len(checks) >= 4 else 165
+        for i, (check, expl, verdict) in enumerate(checks):
+            cy = H - 215 - i * item_h
+            fill_c = ALT_ROW1 if i % 2 == 0 else ALT_ROW2
+            rect(cv, cx + 10, cy - (item_h - 18), cw - 20, item_h - 5, fill_c, radius=4)
+            vcolor = RED if verdict == "FAIL" else ORANGE
+            text(cv, check, cx + 20, cy - 22, size=12, color=vcolor, bold=True)
+            badge(cv, verdict, cx + cw - 90, cy - 32, 72, 24, vcolor)
+            chars = int((cw - 35) / 7.0)
+            lines = textwrap.wrap(expl, chars)
+            for li, ll in enumerate(lines):
+                text(cv, ll, cx + 20, cy - 58 - li * 24, size=10, color=DARK)
+    cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SLIDE — Additional Types (Dockerfile, Binaries, Archives, SQL)
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
 rect(cv, 0, H - 80, W, 80, HDR_PUR)
-text(cv, "05  Checks by Type — Dockerfile · Binaries · Archives · SQL",
+text(cv, "08  Layer 5 — Dockerfile · Binaries · Archives · SQL",
      35, H - 52, size=26, color=WHITE, bold=True)
 divider_line(cv, H - 83, PURPLE)
 
@@ -525,11 +805,11 @@ cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SLIDE — TOOLS SUMMARY
+# SLIDE — TOOLS SUMMARY (updated)
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
 rect(cv, 0, H - 80, W, 80, GREEN)
-text(cv, "06  Tools Used — Summary", 35, H - 52, size=32,
+text(cv, "09  Tools Used — Summary", 35, H - 52, size=32,
      color=WHITE, bold=True)
 divider_line(cv, H - 83, GREEN)
 
@@ -544,27 +824,31 @@ for hdr, hx, hw in hdrs_t:
          bold=True, align="center")
 
 tools_data = [
-    ("Gitleaks",       "secrets/tokens",          "GitHub binary",         "Global",      ACCENT),
-    ("detect-secrets", "high entropy",             "pip install",           "Global",      ACCENT),
-    ("ClamAV",         "malware signatures",       "apt install clamav",    "Global",      ORANGE),
-    ("YARA",           "custom IOC",               "apt install yara",      "Global",      PURPLE),
-    ("Bandit",         "Python SAST",              "pip install bandit",    ".py",         HexColor("#B8860B")),
-    ("Semgrep",        "multi-lang SAST",          "pip install semgrep",   ".js .ts",     HexColor("#B8860B")),
-    ("cppcheck",       "C/C++ static analysis",    "apt install cppcheck",  ".c .cpp",     ACCENT2),
-    ("ShellCheck",     "shell linting",            "apt install shellcheck", ".sh .bash",  ACCENT2),
-    ("hadolint",       "Dockerfile linting",       "GitHub binary",         "Dockerfile",  GREEN),
-    ("checkov",        "IaC security",             "pip install checkov",   ".tf .hcl",    GREEN),
-    ("jq",             "GitHub API JSON parsing",  "apt install jq",        "Utility",     GRAY),
+    ("Gitleaks",       "secrets/tokens",             "GitHub binary",          "L1 Global",   ACCENT),
+    ("detect-secrets", "high entropy",               "pip install",            "L1 Global",   ACCENT),
+    ("ClamAV",         "malware signatures",         "apt install clamav",     "L1 Global",   ORANGE),
+    ("YARA",           "custom IOC",                 "apt install yara",       "L1 Global",   PURPLE),
+    ("Semgrep",        "OWASP/CWE rulesets (×4)",   "pip install semgrep",    "L2 OWASP/CWE", L2_COLOR),
+    ("trivy",          "SCA universal CVE scan",     "GitHub binary",          "L3 SCA",      L3_COLOR),
+    ("pip-audit",      "Python SCA (PyPA)",          "pip install pip-audit",  "L3 SCA",      L3_COLOR),
+    ("safety",         "Python SCA (PyUp.io)",       "pip install safety",     "L3 SCA",      L3_COLOR),
+    ("npm audit",      "Node.js SCA (built-in)",     "built-in npm",           "L3 SCA",      L3_COLOR),
+    ("Bandit",         "Python SAST",                "pip install bandit",     "L5 .py",      HexColor("#B8860B")),
+    ("cppcheck",       "C/C++ static analysis",      "apt install cppcheck",   "L5 .c .cpp",  ACCENT2),
+    ("ShellCheck",     "shell linting",              "apt install shellcheck", "L5 .sh",      ACCENT2),
+    ("hadolint",       "Dockerfile linting",         "GitHub binary",          "L5 Docker",   GREEN),
+    ("checkov",        "IaC security",               "pip install checkov",    "L5 .tf",      GREEN),
+    ("jq",             "GitHub API JSON parsing",    "apt install jq",         "Utility",     GRAY),
 ]
-RH2 = 46
+RH2 = 38
 for ri, (name, role, install, scope, color) in enumerate(tools_data):
     ry2 = H - 145 - (ri + 1) * RH2
     bg2 = ALT_ROW1 if ri % 2 == 0 else ALT_ROW2
     rect(cv, 20, ry2, 1295, RH2 - 2, bg2)
-    text(cv, name,    110, ry2 + 14, size=11, color=color, bold=True, align="center")
-    text(cv, role,    345, ry2 + 14, size=11, color=DARK, align="center")
-    text(cv, install, 655, ry2 + 14, size=10, color=DARK, align="center")
-    text(cv, scope,   1070, ry2 + 14, size=11, color=GRAY, align="center")
+    text(cv, name,    110, ry2 + 11, size=10, color=color, bold=True, align="center")
+    text(cv, role,    345, ry2 + 11, size=10, color=DARK, align="center")
+    text(cv, install, 655, ry2 + 11, size=9,  color=DARK, align="center")
+    text(cv, scope,   1070, ry2 + 11, size=10, color=GRAY, align="center")
 cv.showPage()
 
 
@@ -573,7 +857,7 @@ cv.showPage()
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
 rect(cv, 0, H - 80, W, 80, ACCENT)
-text(cv, "07  Results — ZIP Archive & Excel Report",
+text(cv, "10  Results — ZIP Archive & Excel Report",
      35, H - 52, size=30, color=WHITE, bold=True)
 divider_line(cv, H - 83)
 
@@ -655,7 +939,7 @@ cv.showPage()
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
 rect(cv, 0, H - 80, W, 80, RED)
-text(cv, "08  Absolute Security Rules", 35, H - 52, size=32,
+text(cv, "11  Absolute Security Rules", 35, H - 52, size=32,
      color=WHITE, bold=True)
 divider_line(cv, H - 83, RED)
 
@@ -688,7 +972,7 @@ cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SLIDE — CONCLUSION
+# SLIDE — CONCLUSION (updated)
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
 rect(cv, 0, H - 80, W, 80, ACCENT2)
@@ -696,11 +980,11 @@ text(cv, "Summary", 35, H - 52, size=36, color=WHITE, bold=True)
 divider_line(cv, H - 83, ACCENT2)
 
 recap = [
-    ("🌐", "Source",  "GitHub (whitelist)\nor local path",     ACCENT),
-    ("⬇",  "Fetch",   "Minimal clone\n.git removed · SHA-256", ACCENT2),
-    ("🔍", "Scan",    "Global layer\n+ 11 file types",         ORANGE),
-    ("📦", "PASS",    "ZIP in Good/\nwith Excel included",     GREEN),
-    ("🚨", "FAIL",    "Quarantine\nchmod 700 + report",        RED),
+    ("🌐", "Source",   "GitHub (whitelist)\nor local path",           ACCENT),
+    ("⬇",  "Fetch",    "Minimal clone\n.git removed · SHA-256",       ACCENT2),
+    ("🔍", "5 Layers", "L1→L2→L3→L4→L5\n11 languages · SCA · CWE",  ORANGE),
+    ("📦", "PASS",     "ZIP in Good/\nwith Excel included",           GREEN),
+    ("🚨", "FAIL",     "Quarantine\nchmod 700 + report",              RED),
 ]
 for i, (icon, label, desc, color) in enumerate(recap):
     x = 40 + i * 252
@@ -713,10 +997,16 @@ for i, (icon, label, desc, color) in enumerate(recap):
     if i < 4:
         text(cv, "→", x + 248, H - 370, size=24, color=GRAY, align="center")
 
-text(cv, "Bash pipeline · Degraded mode · Optional tools · Timestamped reports",
-     W/2, H - 640, size=14, color=GRAY, align="center")
+# Standards badges
+badge_labels = ["OWASP", "CWE", "CERT", "SCA"]
+badge_colors = [L2_COLOR, L2_COLOR, PURPLE, L3_COLOR]
+for bi, (bl, bc) in enumerate(zip(badge_labels, badge_colors)):
+    badge(cv, bl, 280 + bi * 200, H - 645, 160, 34, bc)
+
+text(cv, "5-layer pipeline · OWASP · CWE · CERT · SCA · Degraded mode · Timestamped reports",
+     W/2, H - 680, size=13, color=GRAY, align="center")
 text(cv, "github.com/Gaillotte/Claude  —  branch claude/vigilant-carson-f8twy0",
-     W/2, H - 680, size=11, color=HexColor("#557799"), align="center")
+     W/2, H - 710, size=11, color=HexColor("#557799"), align="center")
 cv.showPage()
 
 
