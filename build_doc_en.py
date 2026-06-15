@@ -214,13 +214,14 @@ toc_items = [
     ("    5.16", "Documents (.json .xml .md .txt)"),
     ("6.", "Security Standards Covered"),
     ("7.", "Tools Used — Detailed Description"),
-    ("8.", "Results — Archives and Reports"),
-    ("    8.1", "Approved ZIP Archive (Good/ directory)"),
-    ("    8.2", "Excel Scan Report"),
-    ("    8.3", "JSON Report"),
-    ("    8.4", "HTML Report"),
-    ("9.", "Absolute Security Rules"),
-    ("10.", "Prerequisites and Installation"),
+    ("8.", "Success Criteria per Tool"),
+    ("9.", "Results — Archives and Reports"),
+    ("    9.1", "Approved ZIP Archive (Good/ directory)"),
+    ("    9.2", "Excel Scan Report"),
+    ("    9.3", "JSON Report"),
+    ("    9.4", "HTML Report"),
+    ("10.", "Absolute Security Rules"),
+    ("11.", "Prerequisites and Installation"),
 ]
 for num, title in toc_items:
     p = doc.add_paragraph()
@@ -1438,11 +1439,168 @@ for tool_name, install, role, desc in tools:
 page_break(doc)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 8. RESULTS
+# 8. SUCCESS CRITERIA PER TOOL
 # ══════════════════════════════════════════════════════════════════════════════
-heading(doc, "8. Results — Archives and Reports", level=1)
+heading(doc, "8. Success Criteria per Tool", level=1)
 
-heading(doc, "8.1 Approved ZIP Archive (Good/ directory)", level=2)
+para(doc, (
+    "The table below summarizes, for every tool and grep-based check in the pipeline, "
+    "the exact conditions that trigger a PASS, WARN, or FAIL verdict, "
+    "along with the relevant security standard reference."
+))
+
+# Layer color map
+LAYER_COLORS = {
+    "L1": "BDD7EE",   # blue
+    "L2": "D9B3FF",   # purple
+    "L3": "B3FFFF",   # cyan
+    "L4": "FFD966",   # orange/yellow
+    "L5": "C6EFCE",   # green
+}
+
+success_rows = [
+    # (Tool, Layer, PASS, WARN, FAIL, Ref)
+    ("gitleaks",                    "L1", "0 secrets/tokens detected",                    "—",                                         "Any credential, API key, or token found",              "OWASP A02, CWE-798"),
+    ("detect-secrets",              "L1", "0 high-entropy strings",                       "—",                                         "Shannon entropy anomaly detected",                     "OWASP A02, CWE-798"),
+    ("ClamAV",                      "L1", "No malware signature matched",                 "Tool absent",                               "Any virus/malware/trojan signature matched",            "—"),
+    ("YARA",                        "L1", "No IOC rule matched",                          "No .yar rules present",                     "Any custom IOC rule matched",                          "—"),
+    ("Semgrep p/owasp-top-ten",     "L2", "0 findings",                                   "—",                                         "Any OWASP Top 10 vulnerability found",                 "OWASP A01–A10"),
+    ("Semgrep p/cwe-top-25",        "L2", "0 findings",                                   "—",                                         "Any CWE Top 25 weakness found",                        "CWE Top 25"),
+    ("Semgrep p/security-audit",    "L2", "0 findings",                                   "—",                                         "Any security audit finding",                           "Multiple CWE"),
+    ("Semgrep p/secrets",           "L2", "0 findings",                                   "—",                                         "Additional secret pattern detected",                   "CWE-798"),
+    ("trivy fs",                    "L3", "0 known CVEs in dependencies",                 "Tool absent",                               "≥1 CVE in any dependency manifest",                    "OWASP A06"),
+    ("pip-audit / safety",          "L3", "0 vulnerabilities in requirements*.txt",       "Tool absent",                               "≥1 CVE in Python dependency",                          "OWASP A06"),
+    ("npm audit",                   "L3", "0 vulnerabilities in package-lock.json",       "Tool absent",                               "≥1 vulnerable npm package",                            "OWASP A06"),
+    ("Hardcoded credentials (grep)","L4", "No password/secret/token literal found",       "—",                                         "Credential literal in source code",                    "CWE-798, CWE-259"),
+    ("Hardcoded crypto key (grep)", "L4", "No PEM/private key block found",               "—",                                         "BEGIN RSA/EC/OPENSSH PRIVATE KEY found",               "CWE-321"),
+    ("Path traversal (grep)",       "L4", "No ../ pattern found",                         "—",                                         "../ or %2e%2e%2f found in code",                       "CWE-22"),
+    ("Potential SSRF (grep)",       "L4", "—",                                             "URL parameter passed to HTTP client",        "—",                                                    "CWE-918"),
+    ("Weak crypto algorithm (grep)","L4", "—",                                             "MD5/SHA1/DES/RC4 usage found",              "—",                                                    "CWE-327"),
+    ("Weak PRNG (grep)",            "L4", "—",                                             "Math.random() / rand() used",               "—",                                                    "CWE-338"),
+    ("Logging suppression (grep)",  "L4", "—",                                             "logging.disable() found",                   "—",                                                    "OWASP A09"),
+    ("Bandit (Python)",             "L5", "0 MEDIUM/HIGH findings",                        "LOW severity only",                         "Severity MEDIUM or HIGH",                              "CWE-78, CWE-89, CWE-502"),
+    ("eval/exec (Python)",          "L5", "Not present",                                   "—",                                         "eval() or exec() call found",                          "CWE-95"),
+    ("pickle/yaml.load (Python)",   "L5", "Not present",                                   "—",                                         "pickle.loads or yaml.load(unsafe) found",              "CWE-502"),
+    ("os.system/subprocess (Python)","L5","Not present",                                   "—",                                         "os.system() or subprocess.call() found",               "CWE-78"),
+    ("assert for auth (Python)",    "L5", "Not present",                                   "—",                                         "assert is_admin / assert user.is_ found",              "CWE-703"),
+    ("Semgrep JS",                  "L5", "0 findings",                                    "—",                                         "Any JS security finding",                              "CWE-79, CWE-89"),
+    ("innerHTML/document.write (JS)","L5","Not present",                                   "—",                                         "innerHTML or document.write assignment",                "CWE-79"),
+    ("child_process (JS)",          "L5", "Not present",                                   "—",                                         "child_process / execSync found",                       "CWE-78"),
+    ("Prototype pollution (JS)",    "L5", "Not present",                                   "—",                                         "__proto__ or constructor[prototype]",                  "CWE-1321"),
+    ("cppcheck (C/C++)",            "L5", "0 errors/warnings",                             "Tool absent",                               "Any error: or warning: in output",                     "CWE-120, CWE-190"),
+    ("gets/strcpy/sprintf (C/C++)", "L5", "Not present",                                   "—",                                         "Unsafe string function call found",                    "CWE-120, CERT STR31-C"),
+    ("system/popen (C/C++)",        "L5", "Not present",                                   "—",                                         "OS execution function call found",                     "CWE-78, CERT ENV33-C"),
+    ("Format string (C/C++)",       "L5", "Not present",                                   "—",                                         "printf(user_input) without format arg",                "CWE-134"),
+    ("tmpnam (C/C++)",              "L5", "Not present",                                   "—",                                         "tmpnam() or mktemp() found",                           "CWE-377"),
+    ("ShellCheck",                  "L5", "0 warnings at \"warning\" level",               "Tool absent",                               "Any ShellCheck warning found",                         "CWE-78, CWE-88"),
+    ("curl pipe bash (Shell)",      "L5", "Not present",                                   "—",                                         "curl ... | bash or wget ... | sh",                     "CWE-78"),
+    ("eval $var (Shell)",           "L5", "Not present",                                   "—",                                         "eval $variable found",                                 "CWE-88"),
+    ("Runtime.exec (Java)",         "L5", "Not present",                                   "—",                                         "Runtime.getRuntime().exec() found",                    "CWE-78"),
+    ("ObjectInputStream (Java)",    "L5", "Not present",                                   "—",                                         "ObjectInputStream or XStream used",                    "CWE-502"),
+    ("Log4Shell JNDI (Java)",       "L5", "Not present",                                   "—",                                         "jndi: or ${jndi pattern found",                        "CVE-2021-44228"),
+    ("TrustAllCerts (Java)",        "L5", "Not present",                                   "—",                                         "X509TrustManager / TrustAllCerts",                     "CWE-295"),
+    ("shell_exec (PHP)",            "L5", "Not present",                                   "—",                                         "shell_exec / exec / system call",                      "CWE-78"),
+    ("echo $_GET (PHP)",            "L5", "Not present",                                   "—",                                         "echo $_ superglobal without sanitization",             "CWE-79"),
+    ("unserialize (PHP)",           "L5", "Not present",                                   "—",                                         "unserialize($_GET/POST/COOKIE)",                        "CWE-502"),
+    ("system/exec (Ruby)",          "L5", "Not present",                                   "—",                                         "system() / exec() / backtick found",                   "CWE-78"),
+    ("fmt.Sprintf SQL (Go)",        "L5", "Not present",                                   "—",                                         "fmt.Sprintf with SELECT/INSERT/UPDATE",                "CWE-89"),
+    ("math/rand (Go)",              "L5", "Not present",                                   "—",                                         "\"math/rand\" import found",                           "CWE-338"),
+    ("DOCTYPE/ENTITY (XML)",        "L5", "Not present",                                   "—",                                         "<!DOCTYPE or <!ENTITY declaration",                    "CWE-611"),
+    ("hadolint (Dockerfile)",       "L5", "0 findings",                                    "Tool absent",                               "Any hadolint lint error",                              "OWASP A05"),
+    (":latest tag (Dockerfile)",    "L5", "Not present",                                   "—",                                         "FROM image:latest used",                               "OWASP A05"),
+    ("ENV secrets (Dockerfile)",    "L5", "Not present",                                   "—",                                         "ENV PASSWORD= or ENV TOKEN=",                          "CWE-798, CWE-250"),
+    ("checkov (Terraform)",         "L5", "0 FAILED checks",                               "Tool absent",                               "Any CIS check FAILED",                                 "OWASP A05"),
+    ("S3 public ACL (Terraform)",   "L5", "Not present",                                   "—",                                         "acl = \"public-read\"",                                "OWASP A05"),
+    ("Unpinned action (YAML)",      "L5", "All actions pinned to SHA",                     "—",                                         "uses: action@main or @master",                         "OWASP A08"),
+    ("privileged:true (YAML)",      "L5", "Not present",                                   "—",                                         "privileged: true in pod spec",                         "OWASP A05"),
+    ("Binary file (.so/.exe/.elf)", "L5", "—",                                             "—",                                         "Any binary present → always FAIL",                     "CWE-494"),
+    ("Archive (.zip/.tar.gz)",      "L5", "—",                                             "—",                                         "Any archive → always FAIL (rescan needed)",            "CWE-22"),
+    ("xp_cmdshell (SQL)",           "L5", "Not present",                                   "—",                                         "xp_cmdshell or sp_OACreate",                           "CWE-78"),
+    ("UNION SELECT (SQL)",          "L5", "Not present",                                   "—",                                         "UNION SELECT payload found",                           "CWE-89"),
+]
+
+# Build the table - 6 columns
+t = doc.add_table(rows=1, cols=6)
+t.style = "Table Grid"
+add_table_header(t, ["Tool", "Layer", "PASS Condition", "WARN Condition", "FAIL Condition", "CWE / OWASP Reference"])
+set_col_widths(t, [4.0, 1.2, 3.8, 3.8, 4.2, 3.5])
+
+for idx, (tool, layer, pass_cond, warn_cond, fail_cond, ref) in enumerate(success_rows):
+    row = t.add_row()
+    # Alternating row base color
+    alt_bg = "F2F2F2" if idx % 2 == 0 else "FFFFFF"
+
+    # Col 0 — Tool
+    cell = row.cells[0]
+    cell.text = tool
+    run = cell.paragraphs[0].runs[0]
+    run.font.size = Pt(9)
+    run.font.bold = True
+    set_cell_bg(cell, alt_bg)
+    set_cell_border(cell)
+
+    # Col 1 — Layer (colored by layer)
+    cell = row.cells[1]
+    cell.text = layer
+    run = cell.paragraphs[0].runs[0]
+    run.font.size = Pt(9)
+    run.font.bold = True
+    cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    layer_bg = LAYER_COLORS.get(layer, alt_bg)
+    set_cell_bg(cell, layer_bg)
+    set_cell_border(cell)
+
+    # Col 2 — PASS (light green if not "—")
+    cell = row.cells[2]
+    cell.text = pass_cond
+    run = cell.paragraphs[0].runs[0]
+    run.font.size = Pt(9)
+    if pass_cond != "—":
+        set_cell_bg(cell, GREEN_BG)
+    else:
+        set_cell_bg(cell, alt_bg)
+    set_cell_border(cell)
+
+    # Col 3 — WARN (light orange/yellow if not "—")
+    cell = row.cells[3]
+    cell.text = warn_cond
+    run = cell.paragraphs[0].runs[0]
+    run.font.size = Pt(9)
+    if warn_cond != "—":
+        set_cell_bg(cell, YELLOW_BG)
+    else:
+        set_cell_bg(cell, alt_bg)
+    set_cell_border(cell)
+
+    # Col 4 — FAIL (light red if not "—")
+    cell = row.cells[4]
+    cell.text = fail_cond
+    run = cell.paragraphs[0].runs[0]
+    run.font.size = Pt(9)
+    if fail_cond != "—":
+        set_cell_bg(cell, RED_BG)
+    else:
+        set_cell_bg(cell, alt_bg)
+    set_cell_border(cell)
+
+    # Col 5 — Reference
+    cell = row.cells[5]
+    cell.text = ref
+    run = cell.paragraphs[0].runs[0]
+    run.font.size = Pt(9)
+    set_cell_bg(cell, alt_bg)
+    set_cell_border(cell)
+
+doc.add_paragraph()
+
+page_break(doc)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9. RESULTS
+# ══════════════════════════════════════════════════════════════════════════════
+heading(doc, "9. Results — Archives and Reports", level=1)
+
+heading(doc, "9.1 Approved ZIP Archive (Good/ directory)", level=2)
 para(doc, (
     "When the scan completes with a PASS verdict (no critical findings), "
     "the pipeline produces a ZIP archive in the Good/ subdirectory located "
@@ -1470,7 +1628,7 @@ bullets_archive = [
 for b in bullets_archive:
     bullet(doc, b)
 
-heading(doc, "8.2 Excel Scan Report (generate_excel_report.py)", level=2)
+heading(doc, "9.2 Excel Scan Report (generate_excel_report.py)", level=2)
 para(doc, (
     "The Excel report is generated by the Python script generate_excel_report.py "
     "from the JSON report. It is included in the approved ZIP archive and "
@@ -1521,7 +1679,7 @@ para(doc, (
     "to facilitate navigation in large reports."
 ))
 
-heading(doc, "8.3 JSON Report", level=2)
+heading(doc, "9.3 JSON Report", level=2)
 para(doc, "A complete JSON report is generated in ${WORK_DIR}/reports/ at each execution:")
 json_example = """\
 {
@@ -1542,7 +1700,7 @@ json_example = """\
 }"""
 code_block(doc, json_example)
 
-heading(doc, "8.4 HTML Report", level=2)
+heading(doc, "9.4 HTML Report", level=2)
 para(doc, (
     "A dark-themed HTML report is generated alongside the JSON. "
     "It can be viewed directly in a browser on the transit machine "
@@ -1557,7 +1715,7 @@ page_break(doc)
 # ══════════════════════════════════════════════════════════════════════════════
 # 9. SECURITY RULES
 # ══════════════════════════════════════════════════════════════════════════════
-heading(doc, "9. Absolute Security Rules", level=1)
+heading(doc, "10. Absolute Security Rules", level=1)
 
 para(doc, (
     "These rules must never be modified. They constitute the fundamental "
@@ -1606,7 +1764,7 @@ page_break(doc)
 # ══════════════════════════════════════════════════════════════════════════════
 # 10. PREREQUISITES
 # ══════════════════════════════════════════════════════════════════════════════
-heading(doc, "10. Prerequisites and Installation", level=1)
+heading(doc, "11. Prerequisites and Installation", level=1)
 
 heading(doc, "Operating System", level=2)
 bullet(doc, "Ubuntu 22.04 LTS or Debian 12 (recommended)")
