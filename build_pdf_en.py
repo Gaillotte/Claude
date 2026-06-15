@@ -972,6 +972,251 @@ cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SUCCESS CRITERIA SLIDES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Shared table-drawing helper for success-criteria slides
+PASS_BG  = HexColor("#E8F5E9")
+WARN_BG  = HexColor("#FFF8E1")
+FAIL_BG  = HexColor("#FFEBEE")
+HDR_NAVY = HexColor("#1F3864")
+
+# Layer badge colors
+L1_BADGE = HexColor("#0070A8")   # blue
+L2_BADGE = HexColor("#8E44AD")   # purple
+L3_BADGE = HexColor("#007B7B")   # teal
+L4_BADGE = HexColor("#C06010")   # orange
+L5_BADGE = HexColor("#2E7D32")   # green
+
+
+def sc_header(cv, subtitle):
+    bg(cv)
+    rect(cv, 0, H - 80, W, 80, HDR_NAVY)
+    text(cv, "Success Criteria per Tool", 35, H - 53, size=30, color=WHITE, bold=True)
+    text(cv, subtitle, W - 35, H - 53, size=13, color=HexColor("#A0B8D0"), bold=False, align="right")
+    line(cv, 30, H - 82, W - 30, H - 82, ACCENT, 1.5)
+
+
+def draw_layer_pill(cv, label, x, y, w, h, color):
+    rect(cv, x, y, w, h, color, radius=5)
+    cx = x + w / 2
+    cy = y + h / 2 - 5
+    cv.setFillColor(WHITE)
+    cv.setFont("Helvetica-Bold", 9)
+    cv.drawCentredString(cx, cy, label)
+
+
+def sc_table(cv, table_y, col_defs, rows, row_h=30):
+    """Draw a success-criteria table.
+    col_defs: list of (header_str, x, width)
+    rows: list of (layer_label, layer_color, tool, pass_txt, warn_txt, fail_txt, standard)
+    """
+    # header row
+    for hdr, hx, hw in col_defs:
+        rect(cv, hx, table_y, hw, 28, HDR_NAVY)
+        cv.setFillColor(WHITE)
+        cv.setFont("Helvetica-Bold", 10)
+        cv.drawCentredString(hx + hw / 2, table_y + 9, hdr)
+
+    cur_y = table_y - row_h
+    for ri, row in enumerate(rows):
+        layer_lbl, layer_col, tool, pass_t, warn_t, fail_t, standard = row
+        bg_row = ALT_ROW1 if ri % 2 == 0 else ALT_ROW2
+        # draw row background spanning all columns
+        x0 = col_defs[0][1]
+        x_end = col_defs[-1][1] + col_defs[-1][2]
+        rect(cv, x0, cur_y, x_end - x0, row_h - 1, bg_row)
+
+        # layer pill — first col
+        pill_x = col_defs[0][1] + 3
+        draw_layer_pill(cv, layer_lbl, pill_x, cur_y + 5, col_defs[0][2] - 6, row_h - 11, layer_col)
+
+        # tool
+        cv.setFillColor(DARK)
+        cv.setFont("Helvetica-Bold", 9)
+        cv.drawString(col_defs[1][1] + 4, cur_y + 9, tool)
+
+        # PASS cell
+        if pass_t:
+            rect(cv, col_defs[2][1], cur_y + 2, col_defs[2][2] - 2, row_h - 5, PASS_BG)
+            cv.setFillColor(HexColor("#1B5E20"))
+            cv.setFont("Helvetica", 8)
+            cv.drawCentredString(col_defs[2][1] + col_defs[2][2] / 2, cur_y + 9, pass_t)
+
+        # WARN cell
+        if warn_t:
+            rect(cv, col_defs[3][1], cur_y + 2, col_defs[3][2] - 2, row_h - 5, WARN_BG)
+            cv.setFillColor(HexColor("#5D4037"))
+            cv.setFont("Helvetica", 8)
+            cv.drawCentredString(col_defs[3][1] + col_defs[3][2] / 2, cur_y + 9, warn_t)
+
+        # FAIL cell
+        if fail_t:
+            rect(cv, col_defs[4][1], cur_y + 2, col_defs[4][2] - 2, row_h - 5, FAIL_BG)
+            cv.setFillColor(HexColor("#B71C1C"))
+            cv.setFont("Helvetica", 8)
+            cv.drawCentredString(col_defs[4][1] + col_defs[4][2] / 2, cur_y + 9, fail_t)
+
+        # standard
+        cv.setFillColor(GRAY)
+        cv.setFont("Helvetica", 8)
+        cv.drawString(col_defs[5][1] + 4, cur_y + 9, standard)
+
+        cur_y -= row_h
+
+
+# ── SLIDE A: Layer 1 (Global) & Layer 2 (OWASP/CWE) ──────────────────────────
+sc_header(cv, "Slide A — Layer 1 & Layer 2")
+
+text(cv, "Success Criteria — Layer 1 (Global) & Layer 2 (OWASP/CWE)",
+     W / 2, H - 103, size=16, color=DARK, bold=True, align="center")
+
+# column definitions: (header, x, width)
+col_A = [
+    ("Layer",    20,  60),
+    ("Tool",     82, 190),
+    ("PASS",    274, 220),
+    ("WARN",    496, 200),
+    ("FAIL",    698, 200),
+    ("Standard",900, 413),
+]
+
+rows_A = [
+    # layer_lbl, layer_col, tool, pass, warn, fail, standard
+    ("L1", L1_BADGE, "gitleaks",        "0 secrets found",        "—",                  "≥1 credential match",   "CWE-798 / OWASP A02"),
+    ("L1", L1_BADGE, "detect-secrets",  "0 high-entropy hits",    "—",                  "≥1 entropy hit",        "CWE-798 / OWASP A02"),
+    ("L1", L1_BADGE, "ClamAV",          "0 signatures matched",   "DB not updated",     "≥1 malware signature",  "OWASP A08 / CERT"),
+    ("L1", L1_BADGE, "YARA",            "0 IOC rules triggered",  "Custom rules absent","≥1 YARA rule hit",      "MITRE ATT&CK / IOC"),
+    ("L2", L2_BADGE, "Semgrep p/owasp-top-ten", "0 findings",    "Semgrep not found",  "≥1 HIGH/CRITICAL",      "OWASP Top 10 2021"),
+    ("L2", L2_BADGE, "Semgrep p/cwe-top-25",    "0 findings",    "—",                  "≥1 HIGH/CRITICAL",      "CWE Top 25"),
+    ("L2", L2_BADGE, "Semgrep p/security-audit", "0 findings",   "—",                  "≥1 HIGH/CRITICAL",      "OWASP / CERT"),
+    ("L2", L2_BADGE, "Semgrep p/secrets",        "0 findings",   "—",                  "≥1 secret detected",    "CWE-798 / OWASP A02"),
+]
+
+sc_table(cv, H - 135, col_A, rows_A, row_h=56)
+
+text(cv, "All L1 findings → FAIL  |  L2 findings scored by severity: HIGH/CRITICAL → FAIL, MEDIUM → WARN",
+     W / 2, 30, size=11, color=GRAY, align="center")
+cv.showPage()
+
+
+# ── SLIDE B: Layer 3 (SCA) & Layer 4 (Universal Patterns) ────────────────────
+sc_header(cv, "Slide B — Layer 3 & Layer 4")
+
+text(cv, "Success Criteria — Layer 3 (SCA) & Layer 4 (Universal Patterns)",
+     W / 2, H - 103, size=16, color=DARK, bold=True, align="center")
+
+col_B = [
+    ("Layer",    20,  60),
+    ("Tool",     82, 200),
+    ("PASS",    284, 210),
+    ("WARN",    496, 195),
+    ("FAIL",    693, 205),
+    ("CWE / OWASP", 900, 413),
+]
+
+rows_B = [
+    ("L3", L3_BADGE, "trivy",            "0 CVEs CRITICAL/HIGH",  "MEDIUM CVE found",   "≥1 CRITICAL/HIGH CVE",  "OWASP A06 / NVD"),
+    ("L3", L3_BADGE, "pip-audit / safety","0 vulnerable pkgs",    "Outdated package",   "≥1 known CVE in reqs",  "OWASP A06 / PyPA"),
+    ("L3", L3_BADGE, "npm audit",         "0 critical/high",      "moderate advisory",  "critical or high vuln", "OWASP A06 / npm"),
+    ("L4", L4_BADGE, "Hardcoded creds",   "0 matches",            "—",                  "password= / api_key=",  "CWE-798"),
+    ("L4", L4_BADGE, "Hardcoded crypto",  "0 matches",            "—",                  "BEGIN RSA PRIVATE KEY", "CWE-321"),
+    ("L4", L4_BADGE, "Path traversal",    "0 matches",            "—",                  "../../etc/passwd",      "CWE-22"),
+    ("L4", L4_BADGE, "SSRF pattern",      "0 matches",            "user_input in URL",  "—",                     "CWE-918 / OWASP A10"),
+    ("L4", L4_BADGE, "Weak crypto",       "0 matches",            "md5 / sha1 / rc4",   "—",                     "CWE-327"),
+    ("L4", L4_BADGE, "Weak PRNG",         "0 matches",            "Math.random()/rand()","—",                    "CWE-338"),
+    ("L4", L4_BADGE, "Logging disabled",  "0 matches",            "logging.disable(…)", "—",                     "OWASP A09"),
+]
+
+sc_table(cv, H - 135, col_B, rows_B, row_h=49)
+
+text(cv, "L3: CRITICAL/HIGH CVE → FAIL  |  L4: hardcoded secrets/traversal → FAIL; weak patterns → WARN",
+     W / 2, 30, size=11, color=GRAY, align="center")
+cv.showPage()
+
+
+# ── SLIDE C: Layer 5 (Per-type SAST) — Summary Matrix ────────────────────────
+sc_header(cv, "Slide C — Layer 5 Summary")
+
+text(cv, "Success Criteria — Layer 5 (Per-type SAST) — Summary Matrix",
+     W / 2, H - 103, size=16, color=DARK, bold=True, align="center")
+
+# Column definitions for the L5 matrix
+col_C = [
+    ("Lang / Type",    20,  120),
+    ("Key Tool",      142,  145),
+    ("# Checks",      289,   80),
+    ("Verdict if triggered", 371, 190),
+    ("Key Standards",  563,  750),
+]
+
+# header row
+table_y_C = H - 135
+for hdr, hx, hw in col_C:
+    rect(cv, hx, table_y_C, hw, 26, HDR_NAVY)
+    cv.setFillColor(WHITE)
+    cv.setFont("Helvetica-Bold", 9)
+    cv.drawCentredString(hx + hw / 2, table_y_C + 8, hdr)
+
+rows_C = [
+    ("Python .py",        "Bandit",       "50+",  "FAIL",   "CWE-78, CWE-89, CWE-94, OWASP A03"),
+    ("JS / TS .js .ts",   "Semgrep",      "40+",  "FAIL",   "CWE-79, CWE-94, OWASP A03 XSS/Injection"),
+    ("C / C++ .c .cpp",   "cppcheck",     "30+",  "FAIL",   "CWE-120, CWE-125, CWE-416, CERT-C"),
+    ("Shell .sh .bash",   "ShellCheck",   "20+",  "FAIL",   "CWE-78, OWASP A03, CERT"),
+    ("Java .java",        "Semgrep",      "25+",  "FAIL",   "CWE-78, CWE-502, CVE-2021-44228, CWE-295"),
+    ("PHP .php",          "Semgrep",      "20+",  "FAIL",   "CWE-78, CWE-79, CWE-22, CWE-502"),
+    ("Ruby .rb",          "Semgrep",      "15+",  "FAIL",   "CWE-78, CWE-89, CWE-95"),
+    ("Go .go",            "Semgrep",      "15+",  "FAIL/WARN","CWE-89, CWE-326, CWE-338"),
+    ("XML .xml",          "grep (regex)", "2",    "FAIL",   "CWE-611 (XXE)"),
+    ("YAML .yml",         "—  (regex)",   "2",    "FAIL",   "Supply-chain / OWASP A08"),
+    ("Terraform .tf",     "checkov",      "50+",  "FAIL",   "CIS Benchmarks, OWASP A05, CWE-798"),
+    ("Dockerfile",        "hadolint",     "30+",  "FAIL",   "CIS Docker Benchmark, OWASP A05"),
+    ("SQL .sql",          "grep (regex)", "3",    "FAIL",   "CWE-89, CWE-78"),
+    ("Binary .so .exe",   "strings+Auto", "—",    "FAIL ⚠","Auto-FAIL policy — no binaries in AI repos"),
+    ("Archive .zip .tar", "—  (policy)",  "—",    "FAIL ⚠","Auto-FAIL — re-scan after extraction"),
+]
+
+row_h_C = 36
+cur_y_C = table_y_C - row_h_C
+for ri, (lang, tool, num_checks, verdict, standards) in enumerate(rows_C):
+    bg_row = ALT_ROW1 if ri % 2 == 0 else ALT_ROW2
+    x0 = col_C[0][1]
+    x_end = col_C[-1][1] + col_C[-1][2]
+    rect(cv, x0, cur_y_C, x_end - x0, row_h_C - 1, bg_row)
+
+    # layer badge (always L5)
+    draw_layer_pill(cv, "L5", x0 + 2, cur_y_C + 6, 28, row_h_C - 13, L5_BADGE)
+
+    cv.setFillColor(DARK)
+    cv.setFont("Helvetica-Bold", 9)
+    cv.drawString(col_C[0][1] + 33, cur_y_C + 12, lang)
+
+    cv.setFont("Helvetica", 9)
+    cv.drawCentredString(col_C[1][1] + col_C[1][2] / 2, cur_y_C + 12, tool)
+
+    cv.setFillColor(ACCENT)
+    cv.setFont("Helvetica-Bold", 9)
+    cv.drawCentredString(col_C[2][1] + col_C[2][2] / 2, cur_y_C + 12, num_checks)
+
+    vcolor = RED if "FAIL" in verdict else ORANGE
+    rect(cv, col_C[3][1] + 2, cur_y_C + 4, col_C[3][2] - 4, row_h_C - 9,
+         FAIL_BG if "FAIL" in verdict else WARN_BG)
+    cv.setFillColor(vcolor)
+    cv.setFont("Helvetica-Bold", 9)
+    cv.drawCentredString(col_C[3][1] + col_C[3][2] / 2, cur_y_C + 12, verdict)
+
+    cv.setFillColor(GRAY)
+    cv.setFont("Helvetica", 8)
+    cv.drawString(col_C[4][1] + 4, cur_y_C + 12, standards)
+
+    cur_y_C -= row_h_C
+
+text(cv, "All L5 positive findings → FAIL  |  Missing tool → WARN (degraded mode)  |  Binaries & Archives → Auto-FAIL",
+     W / 2, 20, size=10, color=GRAY, align="center")
+cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SLIDE — CONCLUSION (updated)
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
