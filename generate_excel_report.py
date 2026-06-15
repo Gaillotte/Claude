@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""
+Génère un rapport Excel (.xlsx) à partir du rapport JSON du pipeline AI Transit.
+
+Onglet 0 — Résumé  : lien du repo, date du scan, hash global du repo
+Onglet 1 — Fichiers : une ligne par fichier scanné avec statut et message
+"""
+
+import json
+import sys
+from pathlib import Path
+from datetime import datetime
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import (
+        PatternFill, Font, Alignment, Border, Side
+    )
+except ImportError:
+    print("[ERREUR] openpyxl manquant — installez-le avec : pip install openpyxl",
+          file=sys.stderr)
+    sys.exit(1)
+
+# ── Couleurs ─────────────────────────────────────────────────────────────────
+COLOR_HEADER   = "1F3864"   # bleu marine
+COLOR_PASS     = "C6EFCE"   # vert clair
+COLOR_FAIL     = "FFC7CE"   # rouge clair
+COLOR_WARN     = "FFEB9C"   # jaune clair
+COLOR_TITLE_BG = "2E4057"
+FONT_WHITE     = Font(color="FFFFFF", bold=True, name="Calibri")
+FONT_BOLD      = Font(bold=True, name="Calibri")
+FONT_NORMAL    = Font(name="Calibri")
+
+THIN_BORDER = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin"),
+)
+
+
+def _fill(hex_color: str) -> PatternFill:
+    return PatternFill("solid", fgColor=hex_color)
+
+
+def _set_col_width(ws, col_letter: str, width: float) -> None:
+    ws.column_dimensions[col_letter].width = width
+
+
+def _header_cell(ws, row: int, col: int, value: str) -> None:
+    cell = ws.cell(row=row, column=col, value=value)
+    cell.font = FONT_WHITE
+    cell.fill = _fill(COLOR_HEADER)
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    cell.border = THIN_BORDER
+
+
+def _data_cell(ws, row: int, col: int, value: str,
+               fill_color: str | None = None) -> None:
+    cell = ws.cell(row=row, column=col, value=value)
+    cell.font = FONT_NORMAL
+    cell.alignment = Alignment(vertical="center", wrap_text=True)
+    cell.border = THIN_BORDER
+    if fill_color:
+        cell.fill = _fill(fill_color)
+
+
+def _verdict_fill(status: str) -> str | None:
+    return {
+        "PASS": COLOR_PASS,
+        "FAIL": COLOR_FAIL,
+        "WARN": COLOR_WARN,
+    }.get(status.upper())
+
+
+# ── Onglet 0 : Résumé ────────────────────────────────────────────────────────
+def build_sheet_summary(wb: Workbook, data: dict) -> None:
+    ws = wb.active
+    ws.title = "Résumé"
+
+    title_fill  = _fill(COLOR_TITLE_BG)
+    title_font  = Font(color="FFFFFF", bold=True, size=14, name="Calibri")
+
+    ws.merge_cells("A1:B1")
+    title = ws["A1"]
+    title.value = "AI Transit Pipeline — Rapport de scan"
+    title.font  = title_font
+    title.fill  = title_fill
+    title.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 30
+
+    rows = [
+        ("Dépôt / Source",  data.get("repo_input") or data.get("directory", "—")),
+        ("Date du scan",    data.get("timestamp", "—")),
+        ("Hash global SHA-256", data.get("repo_hash", "—")),
+        ("Verdict",         data.get("verdict", "—")),
+        ("Fichiers PASS",   data.get("summary", {}).get("pass", 0)),
+        ("Fichiers WARN",   data.get("summary", {}).get("warn", 0)),
+        ("Fichiers FAIL",   data.get("summary", {}).get("fail", 0)),
+        ("Répertoire scanné", data.get("directory", "—")),
+    ]
+
+    for i, (label, value) in enumerate(rows, start=2):
+        label_cell = ws.cell(row=i, column=1, value=label)
+        label_cell.font  = FONT_BOLD
+        label_cell.fill  = _fill("D9E1F2")
+        label_cell.border = THIN_BORDER
+        label_cell.alignment = Alignment(vertical="center")
+
+        value_cell = ws.cell(row=i, column=2, value=str(value))
+        value_cell.font   = FONT_NORMAL
+        value_cell.border = THIN_BORDER
+        value_cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+        if label == "Verdict":
+            value_cell.fill = _fill(
+                COLOR_PASS if value == "PASS" else COLOR_FAIL
+            )
+            value_cell.font = Font(bold=True, name="Calibri")
+
+        ws.row_dimensions[i].height = 20
+
+    _set_col_width(ws, "A", 28)
+    _set_col_width(ws, "B", 80)
+
+
+# ── Onglet 1 : Fichiers ───────────────────────────────────────────────────────
+def build_sheet_files(wb: Workbook, data: dict) -> None:
+    ws = wb.create_sheet(title="Fichiers")
+
+    headers = ["#", "Fichier", "Type", "Statut", "Message / Finding"]
+    for col, h in enumerate(headers, start=1):
+        _header_cell(ws, 1, col, h)
+    ws.row_dimensions[1].height = 22
+
+    file_results: dict = data.get("file_results", {})
+
+    # Tri : FAIL en premier, puis WARN, puis PASS
+    order = {"FAIL": 0, "WARN": 1, "PASS": 2}
+    sorted_files = sorted(
+        file_results.items(),
+        key=lambda kv: order.get(kv[1].get("status", "PASS").upper(), 3)
+    )
+
+    for idx, (filepath, info) in enumerate(sorted_files, start=1):
+        row = idx + 1
+        status  = info.get("status", "?").upper()
+        message = info.get("message", "").rstrip(" | ")
+        suffix  = Path(filepath).suffix.lower() or Path(filepath).name
+        fill    = _verdict_fill(status)
+
+        _data_cell(ws, row, 1, idx)
+        _data_cell(ws, row, 2, filepath, fill)
+        _data_cell(ws, row, 3, suffix, fill)
+        _data_cell(ws, row, 4, status, fill)
+        _data_cell(ws, row, 5, message, fill)
+
+        ws.row_dimensions[row].height = 18
+
+    _set_col_width(ws, "A", 6)
+    _set_col_width(ws, "B", 70)
+    _set_col_width(ws, "C", 12)
+    _set_col_width(ws, "D", 10)
+    _set_col_width(ws, "E", 60)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:E{len(file_results) + 1}"
+
+
+# ── Point d'entrée ────────────────────────────────────────────────────────────
+def main() -> None:
+    if len(sys.argv) < 3:
+        print(f"Usage : {sys.argv[0]} <rapport.json> <sortie.xlsx>", file=sys.stderr)
+        sys.exit(1)
+
+    json_path  = Path(sys.argv[1])
+    xlsx_path  = Path(sys.argv[2])
+
+    if not json_path.exists():
+        print(f"[ERREUR] Fichier JSON introuvable : {json_path}", file=sys.stderr)
+        sys.exit(1)
+
+    with json_path.open(encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    wb = Workbook()
+    build_sheet_summary(wb, data)
+    build_sheet_files(wb, data)
+
+    wb.save(xlsx_path)
+    print(f"[OK] Rapport Excel généré : {xlsx_path}")
+
+
+if __name__ == "__main__":
+    main()

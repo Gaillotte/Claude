@@ -74,29 +74,45 @@ echo
 
 # ── Phase 2 : Scan ───────────────────────────────────────────────────────────
 echo -e "${BOLD}── Phase 2 : Scan de sécurité ─────────────────${RESET}"
-SCAN_OUTPUT=$(WORK_DIR="$WORK_DIR" bash "${SCRIPT_DIR}/scan_pipeline.sh" "$FETCH_DIR" 2>&1) || true
+SCAN_OUTPUT=$(REPO_INPUT="$REPO_INPUT" WORK_DIR="$WORK_DIR" \
+    bash "${SCRIPT_DIR}/scan_pipeline.sh" "$FETCH_DIR" 2>&1) || true
 
 VERDICT=$(echo "$SCAN_OUTPUT" | grep -E '^(PASS|FAIL)$' | tail -1 || echo "FAIL")
-echo "$SCAN_OUTPUT" | grep -v -E '^(PASS|FAIL)$'   # logs sans la ligne verdict
+REPORT_JSON=$(echo "$SCAN_OUTPUT" | grep -E '^/.+\.json$' | tail -1 || true)
+# affiche les logs (sans les lignes de métadonnées)
+echo "$SCAN_OUTPUT" | grep -vE '^(PASS|FAIL|/.+\.json)$'
 
 echo
 echo -e "${BOLD}── Verdict ────────────────────────────────────${RESET}"
 
 # ── Décision finale ───────────────────────────────────────────────────────────
 if [[ "$VERDICT" == "PASS" ]]; then
-    # Création de l'archive ZIP dans Good/
     TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
     REPO_NAME=$(basename "$FETCH_DIR")
     ARCHIVE="${OUTPUT_DIR}/${REPO_NAME}_${TIMESTAMP}.zip"
 
+    # Génération du rapport Excel (inclus dans le ZIP)
+    EXCEL_PATH="${FETCH_DIR}/scan_report_${TIMESTAMP}.xlsx"
+    if [[ -n "$REPORT_JSON" && -f "$REPORT_JSON" ]]; then
+        info "Génération du rapport Excel…"
+        if python3 "${SCRIPT_DIR}/generate_excel_report.py" \
+                "$REPORT_JSON" "$EXCEL_PATH" 2>/dev/null; then
+            ok "Rapport Excel : $EXCEL_PATH"
+        else
+            warn "Rapport Excel non généré (openpyxl manquant ?)"
+        fi
+    fi
+
     info "Archivage en cours…"
-    zip -r "$ARCHIVE" "$FETCH_DIR" -x "*.manifest_sha256.txt" > /dev/null
+    zip -r "$ARCHIVE" "$FETCH_DIR" \
+        -x "*.manifest_sha256.txt" > /dev/null
 
     echo
     echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
     echo -e "${GREEN}${BOLD}║              ✔  SCAN RÉUSSI (PASS)          ║${RESET}"
     echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
-    ok "Archive créée : $ARCHIVE"
+    ok "Archive créée    : $ARCHIVE"
+    [[ -f "$EXCEL_PATH" ]] && ok "Rapport Excel inclus : scan_report_${TIMESTAMP}.xlsx"
     echo
 else
     # Déplacement en quarantaine

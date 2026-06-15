@@ -11,7 +11,6 @@ info()   { echo -e "\033[34m[INFO]\033[0m  $*"; }
 warn()   { echo -e "\033[33m[WARN]\033[0m  $*" >&2; }
 ok()     { echo -e "\033[32m[OK]\033[0m    $*"; }
 fail()   { echo -e "\033[31m[FAIL]\033[0m  $*" >&2; exit 1; }
-# fail fichier : enregistre un finding sans quitter
 fail_f() { echo -e "\033[31m[FAIL]\033[0m  $*" >&2; GLOBAL_VERDICT="FAIL"; }
 
 has_cmd() { command -v "$1" &>/dev/null; }
@@ -25,7 +24,9 @@ SCAN_DIR="$1"
 [[ -d "$SCAN_DIR" ]] || fail "Répertoire introuvable : $SCAN_DIR"
 
 GLOBAL_VERDICT="PASS"
-declare -A FINDINGS
+declare -A FINDINGS      # chemin → messages FAIL concaténés
+declare -A FILE_STATUS   # chemin → PASS | FAIL | WARN
+declare -A FILE_MSG      # chemin → message (vide si PASS)
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
@@ -37,12 +38,31 @@ REPORT_JSON="${WORK_DIR}/reports/report_${TIMESTAMP}.json"
 REPORT_HTML="${WORK_DIR}/reports/report_${TIMESTAMP}.html"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-record_pass() { (( PASS_COUNT++ )) || true; }
-record_warn() { (( WARN_COUNT++ )) || true; warn "$*"; }
+record_pass() {
+    local file="${1:-}"
+    (( PASS_COUNT++ )) || true
+    if [[ -n "$file" && -z "${FILE_STATUS[$file]:-}" ]]; then
+        FILE_STATUS["$file"]="PASS"
+        FILE_MSG["$file"]=""
+    fi
+}
+
+record_warn() {
+    local file="${1:-__global__}"; shift
+    (( WARN_COUNT++ )) || true
+    warn "$*"
+    if [[ -z "${FILE_STATUS[$file]:-}" ]]; then
+        FILE_STATUS["$file"]="WARN"
+        FILE_MSG["$file"]="$*"
+    fi
+}
+
 record_fail() {
     local file="$1"; shift
     local msg="$*"
     FINDINGS["$file"]+="${msg} | "
+    FILE_STATUS["$file"]="FAIL"
+    FILE_MSG["$file"]+="${msg} | "
     (( FAIL_COUNT++ )) || true
     fail_f "[$file] $msg"
 }
@@ -51,52 +71,49 @@ record_fail() {
 scan_global() {
     info "=== Couche globale ==="
 
-    # Gitleaks
     if has_cmd gitleaks; then
         info "gitleaks…"
         if ! gitleaks detect --source "$SCAN_DIR" --no-git -q 2>/dev/null; then
             record_fail "$SCAN_DIR" "gitleaks:secrets_detected"
         else
-            record_pass
+            record_pass "$SCAN_DIR"
             ok "gitleaks : aucun secret"
         fi
     else
-        record_warn "gitleaks absent — scan secrets ignoré"
+        record_warn "__global__" "gitleaks absent — scan secrets ignoré"
     fi
 
-    # detect-secrets
     if has_cmd detect-secrets; then
         info "detect-secrets…"
-        DSEC_OUT=$(detect-secrets scan "$SCAN_DIR" 2>/dev/null || true)
-        if echo "$DSEC_OUT" | grep -q '"type"'; then
+        local dsec_out
+        dsec_out=$(detect-secrets scan "$SCAN_DIR" 2>/dev/null || true)
+        if echo "$dsec_out" | grep -q '"type"'; then
             record_fail "$SCAN_DIR" "detect-secrets:high_entropy_string"
         else
-            record_pass
+            record_pass "$SCAN_DIR"
             ok "detect-secrets : aucune anomalie"
         fi
     else
-        record_warn "detect-secrets absent"
+        record_warn "__global__" "detect-secrets absent"
     fi
 
-    # ClamAV
     if has_cmd clamscan; then
         info "clamscan…"
         if ! clamscan -r --quiet "$SCAN_DIR" 2>/dev/null; then
             record_fail "$SCAN_DIR" "clamav:malware_detected"
         else
-            record_pass
+            record_pass "$SCAN_DIR"
             ok "ClamAV : propre"
         fi
     else
-        record_warn "clamscan absent"
+        record_warn "__global__" "clamscan absent"
     fi
 
-    # YARA
     if has_cmd yara && [[ -d "${WORK_DIR}/yara-rules" ]]; then
-        YARA_FILES=( "${WORK_DIR}/yara-rules/"*.yar )
-        if [[ -f "${YARA_FILES[0]:-}" ]]; then
+        local yara_files=( "${WORK_DIR}/yara-rules/"*.yar )
+        if [[ -f "${yara_files[0]:-}" ]]; then
             info "yara…"
-            for rule in "${YARA_FILES[@]}"; do
+            for rule in "${yara_files[@]}"; do
                 if yara -r "$rule" "$SCAN_DIR" 2>/dev/null | grep -q .; then
                     record_fail "$SCAN_DIR" "yara:ioc_match:$(basename "$rule")"
                 fi
@@ -104,7 +121,7 @@ scan_global() {
             ok "YARA : aucun IOC"
         fi
     else
-        record_warn "yara ou répertoire de règles absent"
+        record_warn "__global__" "yara ou répertoire de règles absent"
     fi
 }
 
@@ -117,16 +134,16 @@ scan_python() {
         if echo "$out" | grep -qE 'Severity: (MEDIUM|HIGH)'; then
             record_fail "$f" "bandit:$(echo "$out" | grep -oE 'Severity: \w+' | head -1)"
         else
-            record_pass
+            record_pass "$f"
         fi
     else
-        record_warn "bandit absent"
+        record_warn "$f" "bandit absent"
     fi
     if grep -qE '\beval\s*\(|\bexec\s*\(' "$f" 2>/dev/null; then
         record_fail "$f" "dynamic_exec:eval/exec"
     fi
     if grep -qE 'import\s+(os|subprocess|pty)\b' "$f" 2>/dev/null; then
-        record_warn "[$f] import module système (os/subprocess/pty)"
+        record_warn "$f" "import module système (os/subprocess/pty)"
     fi
 }
 
@@ -138,12 +155,12 @@ scan_javascript() {
         if echo "$out" | grep -q '"results":\s*\[.\]' 2>/dev/null; then
             record_fail "$f" "semgrep:js_finding"
         else
-            record_pass
+            record_pass "$f"
         fi
     else
-        record_warn "semgrep absent"
+        record_warn "$f" "semgrep absent"
     fi
-    if grep -qE '\beval\s*\(|\bchild_process\b|require\s*\(\s*['\''"]child_process' "$f" 2>/dev/null; then
+    if grep -qE '\beval\s*\(|\bchild_process\b' "$f" 2>/dev/null; then
         record_fail "$f" "js_dangerous:eval/child_process"
     fi
 }
@@ -156,10 +173,10 @@ scan_c_cpp() {
         if echo "$out" | grep -qE 'error:|warning:'; then
             record_fail "$f" "cppcheck:$(echo "$out" | grep -oE 'error:[^$]+' | head -1)"
         else
-            record_pass
+            record_pass "$f"
         fi
     else
-        record_warn "cppcheck absent"
+        record_warn "$f" "cppcheck absent"
     fi
     if grep -qE '\b(gets|strcpy|system|popen)\s*\(' "$f" 2>/dev/null; then
         record_fail "$f" "c_dangerous_func:gets/strcpy/system/popen"
@@ -172,10 +189,10 @@ scan_shell() {
         if ! shellcheck -S warning "$f" 2>/dev/null; then
             record_fail "$f" "shellcheck:warnings"
         else
-            record_pass
+            record_pass "$f"
         fi
     else
-        record_warn "shellcheck absent"
+        record_warn "$f" "shellcheck absent"
     fi
     if grep -qE 'curl\s+.*\|\s*bash|wget\s+.*\|\s*sh|eval\s+\$' "$f" 2>/dev/null; then
         record_fail "$f" "shell_dangerous:curl|bash or eval \$var"
@@ -184,13 +201,14 @@ scan_shell() {
 
 scan_yaml() {
     local f="$1"
+    local failed=false
     if grep -qE 'uses:\s+\w+/[^@]+$' "$f" 2>/dev/null; then
-        record_fail "$f" "yaml:unpinned_action"
+        record_fail "$f" "yaml:unpinned_action"; failed=true
     fi
     if grep -qE '(password|secret|token|key)\s*:\s*[^${\s]' "$f" 2>/dev/null; then
-        record_fail "$f" "yaml:inline_secret"
+        record_fail "$f" "yaml:inline_secret"; failed=true
     fi
-    record_pass
+    $failed || record_pass "$f"
 }
 
 scan_terraform() {
@@ -201,10 +219,10 @@ scan_terraform() {
         if echo "$out" | grep -q 'FAILED'; then
             record_fail "$f" "checkov:iac_finding"
         else
-            record_pass
+            record_pass "$f"
         fi
     else
-        record_warn "checkov absent"
+        record_warn "$f" "checkov absent"
     fi
     if grep -qE '(password|secret|token)\s*=\s*"[^"]+"' "$f" 2>/dev/null; then
         record_fail "$f" "terraform:hardcoded_secret"
@@ -217,10 +235,10 @@ scan_docker() {
         if ! hadolint "$f" 2>/dev/null; then
             record_fail "$f" "hadolint:dockerfile_issue"
         else
-            record_pass
+            record_pass "$f"
         fi
     else
-        record_warn "hadolint absent"
+        record_warn "$f" "hadolint absent"
     fi
     if grep -qE ':\s*latest\b|ADD\s+https?://|RUN\s+curl.*\|\s*bash' "$f" 2>/dev/null; then
         record_fail "$f" "docker_dangerous::latest/ADD_http/curl|bash"
@@ -229,11 +247,11 @@ scan_docker() {
 
 scan_binary() {
     local f="$1"
-    # Les binaires sont toujours FAIL dans un repo IA
     record_fail "$f" "binary:unexpected_binary_in_ai_repo"
     if has_cmd strings; then
         local iocs
-        iocs=$(strings "$f" 2>/dev/null | grep -iE '(http://|https://|/etc/passwd|/bin/sh|exec|shell)' || true)
+        iocs=$(strings "$f" 2>/dev/null \
+            | grep -iE '(http://|https://|/etc/passwd|/bin/sh|exec|shell)' || true)
         if [[ -n "$iocs" ]]; then
             record_fail "$f" "binary:ioc_strings_detected"
         fi
@@ -250,7 +268,7 @@ scan_sql() {
     if grep -qiE 'xp_cmdshell|DROP\s+(TABLE|DATABASE)|;\s*--' "$f" 2>/dev/null; then
         record_fail "$f" "sql:dangerous_statement"
     else
-        record_pass
+        record_pass "$f"
     fi
 }
 
@@ -259,11 +277,13 @@ scan_unknown() {
     if has_cmd file; then
         local mime
         mime=$(file --mime-type -b "$f" 2>/dev/null || echo "unknown")
-        if echo "$mime" | grep -qE '^(application/x-executable|application/x-sharedlib|application/x-dosexec)'; then
+        if echo "$mime" | grep -qE \
+            '^(application/x-executable|application/x-sharedlib|application/x-dosexec)'; then
             record_fail "$f" "unknown:binary_mime:$mime"
+            return
         fi
     fi
-    record_pass
+    record_pass "$f"
 }
 
 # ── Classification ───────────────────────────────────────────────────────────
@@ -278,23 +298,24 @@ classify_file() {
     esac
 
     case ".$ext" in
-        .py)                          scan_python      "$f" ;;
-        .js|.ts|.jsx|.tsx)            scan_javascript  "$f" ;;
-        .c|.cpp|.h|.hpp)             scan_c_cpp       "$f" ;;
-        .sh|.bash|.zsh|.ps1|.psm1)  scan_shell       "$f" ;;
-        .yml|.yaml)                   scan_yaml        "$f" ;;
-        .tf|.tfvars|.hcl)            scan_terraform   "$f" ;;
-        .so|.dll|.dylib|.exe|.elf|.bin) scan_binary   "$f" ;;
-        .zip|.tar|.gz|.tgz|.bz2)    scan_archive     "$f" ;;
-        .sql)                         scan_sql         "$f" ;;
+        .py)                             scan_python      "$f" ;;
+        .js|.ts|.jsx|.tsx)              scan_javascript  "$f" ;;
+        .c|.cpp|.h|.hpp)               scan_c_cpp       "$f" ;;
+        .sh|.bash|.zsh|.ps1|.psm1)    scan_shell       "$f" ;;
+        .yml|.yaml)                      scan_yaml        "$f" ;;
+        .tf|.tfvars|.hcl)              scan_terraform   "$f" ;;
+        .so|.dll|.dylib|.exe|.elf|.bin) scan_binary     "$f" ;;
+        .zip|.tar|.gz|.tgz|.bz2)       scan_archive     "$f" ;;
+        .sql)                            scan_sql         "$f" ;;
         .json|.xml|.md|.txt)
-            if grep -qE '(password|secret|token|api_key)\s*[=:]\s*[^${\s]' "$f" 2>/dev/null; then
+            if grep -qE \
+                '(password|secret|token|api_key)\s*[=:]\s*[^${\s]' "$f" 2>/dev/null; then
                 record_fail "$f" "docs:inline_secret"
             else
-                record_pass
+                record_pass "$f"
             fi
             ;;
-        *)                            scan_unknown     "$f" ;;
+        *)                               scan_unknown     "$f" ;;
     esac
 }
 
@@ -310,23 +331,45 @@ scan_by_type() {
 
 # ── Rapport JSON ─────────────────────────────────────────────────────────────
 generate_report_json() {
+    # findings (fichiers en FAIL uniquement)
     local findings_json="{"
     local first=true
     for path in "${!FINDINGS[@]}"; do
         local msg="${FINDINGS[$path]%' | '}"
         $first || findings_json+=","
-        findings_json+="\"$path\":\"$msg\""
+        # échappement basique des guillemets
+        msg="${msg//\"/\\\"}"
+        path_esc="${path//\"/\\\"}"
+        findings_json+="\"${path_esc}\":\"${msg}\""
         first=false
     done
     findings_json+="}"
+
+    # file_results : tous les fichiers tracés
+    local file_results_json="{"
+    first=true
+    for path in "${!FILE_STATUS[@]}"; do
+        local status="${FILE_STATUS[$path]}"
+        local msg="${FILE_MSG[$path]:-}"
+        msg="${msg%' | '}"
+        msg="${msg//\"/\\\"}"
+        path_esc="${path//\"/\\\"}"
+        $first || file_results_json+=","
+        file_results_json+="\"${path_esc}\":{\"status\":\"${status}\",\"message\":\"${msg}\"}"
+        first=false
+    done
+    file_results_json+="}"
 
     cat > "$REPORT_JSON" <<JSON
 {
   "verdict": "${GLOBAL_VERDICT}",
   "timestamp": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "repo_input": "${REPO_INPUT:-}",
   "directory": "${SCAN_DIR}",
+  "repo_hash": "$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')",
   "summary": { "pass": ${PASS_COUNT}, "warn": ${WARN_COUNT}, "fail": ${FAIL_COUNT} },
-  "findings": ${findings_json}
+  "findings": ${findings_json},
+  "file_results": ${file_results_json}
 }
 JSON
 }
@@ -340,24 +383,28 @@ generate_report_html() {
         echo "<title>AI Transit Report — ${TIMESTAMP}</title>"
         echo "<style>body{background:#1a1a2e;color:#eee;font-family:monospace;padding:2rem}"
         echo "h1{color:${color}} table{border-collapse:collapse;width:100%}"
-        echo "th,td{border:1px solid #444;padding:.5rem} tr:nth-child(even){background:#16213e}</style>"
+        echo "th,td{border:1px solid #444;padding:.5rem} tr:nth-child(even){background:#16213e}"
+        echo ".pass{color:#2ecc71} .fail{color:#e74c3c} .warn{color:#f39c12}</style>"
         echo "</head><body>"
         echo "<h1>Verdict : ${GLOBAL_VERDICT}</h1>"
         echo "<p>Répertoire : <code>${SCAN_DIR}</code></p>"
         echo "<p>Date : ${TIMESTAMP}</p>"
         echo "<p>PASS: ${PASS_COUNT} | WARN: ${WARN_COUNT} | FAIL: ${FAIL_COUNT}</p>"
-        if (( ${#FINDINGS[@]} > 0 )); then
-            echo "<h2>Findings</h2><table><tr><th>Fichier</th><th>Problème</th></tr>"
-            for path in "${!FINDINGS[@]}"; do
-                echo "<tr><td>${path}</td><td>${FINDINGS[$path]}</td></tr>"
-            done
-            echo "</table>"
-        fi
-        echo "</body></html>"
+        echo "<h2>Résultats par fichier</h2>"
+        echo "<table><tr><th>Fichier</th><th>Statut</th><th>Message</th></tr>"
+        for path in "${!FILE_STATUS[@]}"; do
+            local status="${FILE_STATUS[$path]}"
+            local msg="${FILE_MSG[$path]:-}"
+            local cls
+            case "$status" in PASS) cls="pass";; FAIL) cls="fail";; *) cls="warn";; esac
+            echo "<tr><td>${path}</td><td class='${cls}'>${status}</td><td>${msg}</td></tr>"
+        done
+        echo "</table></body></html>"
     } > "$REPORT_HTML"
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+REPO_INPUT="${REPO_INPUT:-}"
 info "Démarrage du scan : $SCAN_DIR"
 scan_global
 scan_by_type
@@ -366,4 +413,5 @@ generate_report_html
 
 info "Rapport JSON : $REPORT_JSON"
 info "Rapport HTML : $REPORT_HTML"
+echo "$REPORT_JSON"   # chemin du rapport pour les scripts aval
 echo "$GLOBAL_VERDICT"
