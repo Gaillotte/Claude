@@ -16,6 +16,7 @@
 8. [Running the Pipeline](#running-the-pipeline)
 9. [Security Hardening Recommendations](#security-hardening-recommendations)
 10. [Troubleshooting](#troubleshooting)
+11. [Self-Scan: Verifying the Installation is Safe](#self-scan)
 
 ---
 
@@ -578,6 +579,257 @@ curl -sSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/inst
 sudo freshclam && \
 echo "Installation complete"
 ```
+
+---
+
+---
+
+## 11. Self-Scan: Verifying the Installation is Safe {#self-scan}
+
+Before deploying the pipeline in a production or enterprise environment, you should verify that:
+
+1. The **bundle scripts and Python files** are themselves free of malicious patterns.
+2. The **third-party binaries** you installed match their published checksums.
+3. The **Python packages** you pulled from PyPI do not carry known CVEs.
+4. The **installed tools** have not been tampered with after installation.
+
+This section walks through each of these verification steps.
+
+---
+
+### 11.1 Run the pipeline against its own source code (meta-scan)
+
+The most natural way to validate the bundle is to scan it with itself.
+
+```bash
+# Point the pipeline at the directory containing the scripts
+./ai_transit.sh /path/to/ai-transit-bundle
+```
+
+A clean installation will produce a **PASS** result. Any unexpected FAIL or WARN finding on the bundle's own files should be investigated before deployment.
+
+> **What this checks:**
+> - L1: gitleaks / detect-secrets scan the `.sh` and `.py` files for accidentally embedded secrets or credentials.
+> - L2: Semgrep applies OWASP / CWE / CERT rules to the Python source (`generate_excel_report.py`, `build_*.py`).
+> - L4: Universal pattern checks run on every file (hardcoded credentials, path traversal, dangerous calls).
+> - L5: Bandit runs on every `.py` file; ShellCheck runs on every `.sh` file.
+
+---
+
+### 11.2 Verify binary checksums
+
+For each third-party binary you downloaded manually, compare its SHA-256 hash against the value published on the official release page before first use.
+
+```bash
+#!/usr/bin/env bash
+# check_binaries.sh — verify installed binary hashes
+
+PASS=0; FAIL=0
+
+verify() {
+    local name="$1" path="$2" expected_sha="$3"
+    if [[ ! -f "$path" ]]; then
+        echo "[SKIP]  $name — not installed"
+        return
+    fi
+    actual=$(sha256sum "$path" | awk '{print $1}')
+    if [[ "$actual" == "$expected_sha" ]]; then
+        echo -e "\033[32m[OK]\033[0m    $name — checksum matches"
+        (( PASS++ ))
+    else
+        echo -e "\033[31m[FAIL]\033[0m  $name — CHECKSUM MISMATCH"
+        echo "         Expected : $expected_sha"
+        echo "         Got      : $actual"
+        (( FAIL++ ))
+    fi
+}
+
+# Replace the SHA values below with those published on each tool's GitHub release page
+# for the exact version you installed.
+echo "=== Binary integrity check ==="
+verify "gitleaks" "/usr/local/bin/gitleaks" \
+    "<SHA256_FROM_GITLEAKS_RELEASE_PAGE>"
+
+verify "trivy" "/usr/local/bin/trivy" \
+    "<SHA256_FROM_TRIVY_RELEASE_PAGE>"
+
+verify "hadolint" "/usr/local/bin/hadolint" \
+    "<SHA256_FROM_HADOLINT_RELEASE_PAGE>"
+
+echo ""
+echo "Result: OK=$PASS  FAIL=$FAIL"
+[[ $FAIL -eq 0 ]] && echo "All checksums verified." \
+                  || echo "STOP — do not use tampered binaries."
+```
+
+**How to get the expected SHA:**
+- **gitleaks**: `https://github.com/gitleaks/gitleaks/releases` → `checksums.txt` attached to the release.
+- **trivy**: `https://github.com/aquasecurity/trivy/releases` → `trivy_<version>_Linux-64bit.tar.gz.sha256`.
+- **hadolint**: `https://github.com/hadolint/hadolint/releases` → SHA-256 listed next to the binary download link.
+
+```bash
+chmod +x check_binaries.sh && ./check_binaries.sh
+```
+
+---
+
+### 11.3 Verify GPG signatures (optional but recommended)
+
+Several tools publish GPG-signed release artifacts. Verifying the signature provides a stronger guarantee than a checksum alone (the checksum file itself could be tampered with).
+
+**Example for gitleaks:**
+
+```bash
+# Import the gitleaks signing key
+curl -sSL https://github.com/gitleaks.gpg | gpg --import
+
+# Download the release signature alongside the binary
+GITLEAKS_VERSION="8.18.4"
+curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz.sig" \
+    -o /tmp/gitleaks.sig
+
+curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+    -o /tmp/gitleaks.tar.gz
+
+# Verify
+gpg --verify /tmp/gitleaks.sig /tmp/gitleaks.tar.gz \
+    && echo "Signature OK" \
+    || echo "SIGNATURE INVALID — do not install"
+```
+
+**Example for trivy (cosign — supply chain verification):**
+
+```bash
+# Install cosign
+curl -sSL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \
+    -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
+
+# Verify trivy binary with cosign transparency log
+TRIVY_VERSION=$(trivy --version | head -1 | awk '{print $2}')
+cosign verify-blob \
+    --certificate "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz.pem" \
+    --signature "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz.sig" \
+    --certificate-identity-regexp "https://github.com/aquasecurity/trivy" \
+    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+    /usr/local/bin/trivy \
+    && echo "trivy supply-chain signature OK"
+```
+
+---
+
+### 11.4 Audit Python dependencies (PyPI supply-chain check)
+
+The Python packages installed for the pipeline should be scanned for known CVEs and typosquatting risks.
+
+```bash
+# Activate the virtual environment first
+source /opt/ai-transit/venv/bin/activate
+
+# Generate a requirements file from the installed packages
+pip freeze > /tmp/ai-transit-requirements.txt
+
+# CVE scan with pip-audit
+pip-audit -r /tmp/ai-transit-requirements.txt
+
+# Advisory scan with safety
+safety check -r /tmp/ai-transit-requirements.txt
+
+# Optional: use trivy to scan the venv as a filesystem target
+trivy fs /opt/ai-transit/venv \
+    --scanners vuln \
+    --severity HIGH,CRITICAL \
+    --exit-code 1
+```
+
+A clean environment will return exit code 0 with no findings. Any HIGH or CRITICAL CVE in `openpyxl`, `semgrep`, `bandit`, `detect-secrets`, `pip-audit`, or `safety` itself should be remediated by upgrading the affected package before using the pipeline.
+
+```bash
+pip install --upgrade openpyxl semgrep bandit detect-secrets pip-audit safety checkov
+```
+
+---
+
+### 11.5 Scan installed system packages for CVEs
+
+```bash
+# Use trivy to audit the OS package list
+trivy rootfs / \
+    --scanners vuln \
+    --severity HIGH,CRITICAL \
+    --ignore-unfixed \
+    --output /opt/ai-transit/reports/host_cve_report.json \
+    --format json
+
+# Human-readable summary
+trivy rootfs / \
+    --scanners vuln \
+    --severity HIGH,CRITICAL \
+    --ignore-unfixed
+```
+
+> This does not require root. `trivy` reads `/var/lib/dpkg/status` (Debian/Ubuntu) or `/var/lib/rpm/Packages` (RHEL/CentOS) to enumerate installed packages and cross-references them with the NVD/OSV/GitHub Advisory databases.
+
+---
+
+### 11.6 Detect post-install tampering (AIDE / file integrity)
+
+For production environments, configure a file integrity monitor on the pipeline scripts to detect any modification after installation.
+
+```bash
+# Install AIDE (Advanced Intrusion Detection Environment)
+sudo apt-get install -y aide
+
+# Initialize the AIDE database covering only the pipeline directory
+sudo aide --config=/etc/aide/aide.conf --init \
+    --rule "Dir=/path/to/ai-transit-bundle p+i+n+u+g+s+b+md5+sha256"
+
+sudo mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+
+# Run a check at any time (e.g. from cron or before each pipeline run)
+sudo aide --check
+```
+
+A simpler alternative — store SHA-256 hashes of all bundle files at install time and re-verify before each run:
+
+```bash
+#!/usr/bin/env bash
+# generate_bundle_manifest.sh — run once at install time
+BUNDLE_DIR="$(dirname "$0")"
+sha256sum "${BUNDLE_DIR}"/*.sh "${BUNDLE_DIR}"/*.py > "${BUNDLE_DIR}/.bundle_manifest.sha256"
+echo "Manifest saved to .bundle_manifest.sha256"
+
+# verify_bundle.sh — run before each pipeline execution
+sha256sum --check "${BUNDLE_DIR}/.bundle_manifest.sha256" \
+    && echo "Bundle integrity OK" \
+    || { echo "TAMPERING DETECTED — do not run the pipeline"; exit 1; }
+```
+
+Add the integrity check at the top of `ai_transit.sh` to make it automatic:
+
+```bash
+# Add to ai_transit.sh, before the first phase
+if [[ -f "${SCRIPT_DIR}/.bundle_manifest.sha256" ]]; then
+    sha256sum --check --quiet "${SCRIPT_DIR}/.bundle_manifest.sha256" \
+        || die "Bundle integrity check failed — scripts may have been tampered with."
+fi
+```
+
+---
+
+### 11.7 Summary — self-scan checklist
+
+| Step | Command / Tool | Expected result |
+|------|---------------|----------------|
+| Meta-scan of bundle | `./ai_transit.sh /path/to/bundle` | PASS |
+| Binary checksums | `./check_binaries.sh` | All OK, no FAIL |
+| GPG / cosign signatures | `gpg --verify` / `cosign verify-blob` | Signature valid |
+| Python CVE scan | `pip-audit` + `safety check` | No HIGH/CRITICAL |
+| Python trivy scan | `trivy fs /opt/ai-transit/venv` | Exit code 0 |
+| Host OS CVE scan | `trivy rootfs /` | No unpatched HIGH/CRITICAL |
+| Bundle integrity | `sha256sum --check .bundle_manifest.sha256` | OK |
+| AIDE check (production) | `sudo aide --check` | No modifications |
+
+> **Recommended practice:** run steps 1, 4, and 7 automatically before each pipeline execution by wrapping them in a pre-flight script called by `ai_transit.sh`.
 
 ---
 
