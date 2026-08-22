@@ -1217,6 +1217,451 @@ cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TOOL SLIDES — one per tool
+# ═══════════════════════════════════════════════════════════════════════════════
+
+L6_COLOR = HexColor("#1A6B8A")   # teal for Layer 6
+
+TOOL_CATALOG = [
+    # (tool_name, layer_label, layer_color, install_cmd, purpose, offline, scan_cmd,
+    #  pass_condition, fail_condition, warn_condition)
+    (
+        "betterleaks", "Layer 1 — Secrets & Credentials", L1_COLOR,
+        "go install github.com/betterleaks/betterleaks@latest\n  brew install betterleaks",
+        "Detects secrets, credentials and API keys embedded in source files.\n"
+        "Successor to gitleaks — maintained by the same author with a more\n"
+        "expressive allowlist system. Scans all file types, not just git history.",
+        True,   # offline
+        "betterleaks dir <repo_dir> -v",
+        "Exit code 0 — no secrets or credentials detected in any file.",
+        "Exit code ≠ 0 — at least one secret pattern matched (API key, token,\n"
+        "password, private key …). → Pipeline verdict: FAIL.",
+        "Tool not installed → scan skipped, WARN logged (degraded mode).",
+    ),
+    (
+        "detect-secrets", "Layer 1 — Secrets & Credentials", L1_COLOR,
+        "pip install detect-secrets",
+        "Entropy-based secret detector — complements betterleaks with a\n"
+        "different detection engine. Uses Shannon entropy and regex rules\n"
+        "to find high-entropy strings that look like secrets.",
+        True,
+        "detect-secrets scan <repo_dir>",
+        "JSON output with empty 'results' dict — no high-entropy secrets found.",
+        "JSON output lists one or more findings → Pipeline verdict: FAIL.",
+        "Tool not installed → scan skipped, WARN logged.",
+    ),
+    (
+        "ClamAV  (clamscan)", "Layer 1 — Antivirus", L1_COLOR,
+        "sudo apt-get install clamav clamav-daemon\nsudo freshclam   # update DB",
+        "Open-source antivirus engine. Scans all files against a database\n"
+        "of known malware signatures. Requires periodic DB updates via freshclam\n"
+        "to stay effective against recent threats.",
+        True,   # works offline once DB is updated
+        "clamscan -r --no-summary <repo_dir>",
+        "Exit code 0 — no virus signatures matched.",
+        "Exit code 1 — at least one infected file found → Pipeline verdict: FAIL.",
+        "freshclam DB not updated (>7 days) → WARN. Tool missing → WARN.",
+    ),
+    (
+        "YARA", "Layer 1 — Custom IOC Rules", L1_COLOR,
+        "sudo apt-get install yara",
+        "Pattern-matching engine for malware and IOC detection. Loads all\n"
+        ".yar rule files from yara-rules/ and matches them against every file.\n"
+        "Rules are fully customisable — add organisation-specific IOC patterns.",
+        True,
+        "yara -r <rules_dir>/*.yar <repo_dir>",
+        "No output — no rule matched any file.",
+        "At least one YARA rule matched → Pipeline verdict: FAIL.",
+        "No .yar files in yara-rules/ → WARN. Tool missing → WARN.",
+    ),
+    (
+        "Semgrep", "Layer 2 — OWASP / CWE / CERT", L2_COLOR,
+        "pip install semgrep",
+        "Static analysis engine with a large open rule library.\n"
+        "Runs four rulesets: p/owasp-top-ten, p/cwe-top-25,\n"
+        "p/security-audit, p/secrets. Covers injection, XSS, insecure\n"
+        "deserialization, SSRF, weak crypto and 100+ more patterns.",
+        False,  # needs internet for rule download first time
+        "semgrep --config p/owasp-top-ten --config p/cwe-top-25\n"
+        "  --config p/security-audit --config p/secrets\n"
+        "  --json <repo_dir>",
+        "JSON output with empty 'results' list — no rule matched.",
+        "ERROR or WARNING severity findings → Pipeline verdict: FAIL.",
+        "INFO severity → WARN. Tool missing or no internet → WARN.",
+    ),
+    (
+        "trivy", "Layer 3 — SCA / CVE", L3_COLOR,
+        "curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/\n"
+        "  main/contrib/install.sh | sh -s -- -b /usr/local/bin",
+        "Software Composition Analysis — scans dependency manifests\n"
+        "(requirements.txt, package-lock.json, go.sum, pom.xml …) and\n"
+        "cross-references installed packages against NVD, OSV and GitHub\n"
+        "Advisory databases to find known CVEs.",
+        False,  # needs DB download first time
+        "trivy fs <repo_dir> --scanners vuln\n"
+        "  --severity HIGH,CRITICAL --format json",
+        "JSON output with no vulnerabilities at HIGH or CRITICAL severity.",
+        "CRITICAL or HIGH CVE found in a dependency → Pipeline verdict: FAIL.",
+        "MEDIUM/LOW CVE → WARN. DB not up to date → WARN. Missing → WARN.",
+    ),
+    (
+        "pip-audit", "Layer 3 — Python CVE", L3_COLOR,
+        "pip install pip-audit",
+        "Audits Python requirements files against the Python Packaging\n"
+        "Advisory Database (PyPA) and OSV. Checks requirements.txt,\n"
+        "requirements*.txt and setup.cfg for packages with known CVEs.",
+        False,
+        "pip-audit -r requirements.txt --format json",
+        "JSON output with no vulnerabilities listed.",
+        "Any CVE found in a Python dependency → Pipeline verdict: FAIL.",
+        "Tool missing → WARN, scan skipped.",
+    ),
+    (
+        "safety", "Layer 3 — Python Advisories", L3_COLOR,
+        "pip install safety",
+        "Checks Python dependencies against the Safety DB — a curated\n"
+        "advisory database maintained by PyUp.io. Complements pip-audit\n"
+        "with additional advisories not always in OSV.",
+        False,
+        "safety check -r requirements.txt --json",
+        "Exit code 0 — no advisories matched.",
+        "Any advisory matched → Pipeline verdict: FAIL.",
+        "Tool missing or DB unreachable → WARN.",
+    ),
+    (
+        "npm audit", "Layer 3 — Node.js CVE", L3_COLOR,
+        "sudo apt-get install nodejs npm\n(or: nvm install --lts)",
+        "Built into npm — audits package-lock.json against the npm security\n"
+        "advisory registry. Finds known CVEs in Node.js dependencies\n"
+        "and their transitive dependencies.",
+        False,
+        "npm audit --json   (run in dir with package-lock.json)",
+        "JSON output with 0 vulnerabilities at high or critical level.",
+        "Critical or high severity advisory found → Pipeline verdict: FAIL.",
+        "Moderate/low → WARN. No package-lock.json → scan skipped.",
+    ),
+    (
+        "grep  (universal patterns)", "Layer 4 — Universal Pattern Scan", L4_COLOR,
+        "Built-in — no installation required",
+        "Runs on every file regardless of extension. Checks for:\n"
+        "CWE-798 (hardcoded credentials), CWE-22 (path traversal),\n"
+        "CWE-918 (SSRF patterns), CWE-327 (weak crypto constants),\n"
+        "CWE-338 (weak PRNG), OWASP-A09 (logging of sensitive data).",
+        True,
+        "grep -rE '<pattern>' <file>   (run per-pattern, per-file)",
+        "No pattern matches across all CWE checks for this file.",
+        "Any pattern match → finding recorded. Severity determines WARN or FAIL.",
+        "N/A — grep is always available.",
+    ),
+    (
+        "Bandit", "Layer 5 — Python SAST", L5_COLOR,
+        "pip install bandit",
+        "Python-specific static analyser. Detects common security issues:\n"
+        "use of assert, subprocess with shell=True, hardcoded passwords,\n"
+        "use of pickle, XML vulnerabilities, SQL injection via string format,\n"
+        "insecure random, weak hashing, and more (100+ plugins).",
+        True,
+        "bandit -ll -r <python_file_or_dir>",
+        "Exit code 0 — no medium or high confidence issues found.",
+        "MEDIUM or HIGH severity + MEDIUM or HIGH confidence → FAIL.",
+        "LOW confidence findings → WARN. Tool missing → WARN.",
+    ),
+    (
+        "ShellCheck", "Layer 5 — Shell Script SAST", L5_COLOR,
+        "sudo apt-get install shellcheck",
+        "Static analyser for Bash/sh/dash/ksh scripts. Detects quoting\n"
+        "errors, injection risks, undefined variables, deprecated syntax,\n"
+        "unintended word splitting, and unsafe patterns that could lead\n"
+        "to command injection or data leakage.",
+        True,
+        "shellcheck --severity=warning <script.sh>",
+        "Exit code 0 — no warnings or errors.",
+        "Exit code ≠ 0 (errors/warnings at warning level or above) → FAIL.",
+        "Tool missing → WARN.",
+    ),
+    (
+        "cppcheck", "Layer 5 — C/C++ SAST", L5_COLOR,
+        "sudo apt-get install cppcheck",
+        "Static analyser for C and C++. Detects buffer overflows, memory\n"
+        "leaks, null-pointer dereferences, use-after-free, out-of-bounds\n"
+        "array access, and undefined behaviour — without compiling the code.",
+        True,
+        "cppcheck --enable=warning,security --error-exitcode=1 <file.cpp>",
+        "Exit code 0 — no errors or security warnings.",
+        "Exit code 1 — at least one security or error finding → FAIL.",
+        "Tool missing → WARN.",
+    ),
+    (
+        "hadolint", "Layer 5 — Dockerfile Linter", L5_COLOR,
+        "curl -sSL https://github.com/hadolint/hadolint/releases/\n"
+        "  download/v2.12.0/hadolint-Linux-x86_64 -o /usr/local/bin/hadolint",
+        "Linter for Dockerfiles. Enforces Dockerfile best practices and\n"
+        "detects security misconfigurations: running as root, using :latest\n"
+        "tags, unnecessary privileges, secrets in ENV/ARG, ADD vs COPY,\n"
+        "and shell injection risks.",
+        True,
+        "hadolint --failure-threshold warning <Dockerfile>",
+        "Exit code 0 — no warnings or errors.",
+        "DL or SC rules triggered at warning level or above → FAIL.",
+        "Tool missing → WARN.",
+    ),
+    (
+        "checkov", "Layer 5 — Terraform / IaC SAST", L5_COLOR,
+        "pip install checkov",
+        "Static analysis for Infrastructure-as-Code: Terraform (.tf),\n"
+        "CloudFormation, Kubernetes YAML, Ansible, ARM templates.\n"
+        "Maps findings to CIS Benchmarks, NIST, SOC2 and OWASP.\n"
+        "Over 1000 built-in checks.",
+        True,
+        "checkov -d <dir> --framework terraform --output json",
+        "All checks pass — no FAILED checks in JSON output.",
+        "At least one FAILED check → Pipeline verdict: FAIL.",
+        "SKIPPED checks → WARN. Tool missing → WARN.",
+    ),
+    (
+        "ScanCode Toolkit", "Layer 6 — Licence, Copyright & CVE", L6_COLOR,
+        "pip install scancode-toolkit",
+        "Full-text licence and copyright analyser. Detects SPDX licence\n"
+        "expressions across all source files using a library of 30 000+\n"
+        "licence texts. Also detects package manifests and CVEs in detected\n"
+        "packages. Produces JSON / SPDX / CycloneDX reports.",
+        True,
+        "scancode --license --copyright --vulnerability\n"
+        "  --package --json-pp report.json <repo_dir>",
+        "No risky licences (GPL/AGPL/LGPL/SSPL …) detected AND no\n"
+        "HIGH/CRITICAL CVE in detected packages.",
+        "CRITICAL or HIGH CVE in a detected package → FAIL.",
+        "Risky licence detected (score ≥ 70) → WARN (legal review required).\n"
+        "LOW/MEDIUM CVE → WARN. Tool missing → WARN.",
+    ),
+]
+
+
+def tool_slide(cv, tool_data):
+    (name, layer, lcolor, install, purpose, offline,
+     scan_cmd, pass_cond, fail_cond, warn_cond) = tool_data
+
+    bg(cv)
+    # Header bar
+    rect(cv, 0, H - 72, W, 72, lcolor)
+    text(cv, name, 28, H - 48, size=30, color=WHITE, bold=True)
+    text(cv, layer, W - 28, H - 48, size=14, color=HexColor("#CCDDEE"),
+         align="right")
+    divider_line(cv, H - 75, lcolor)
+
+    COL1 = 28
+    COL2 = 680
+    CW   = 630
+
+    # ── Purpose ──────────────────────────────────────────────────────────────
+    rect(cv, COL1, H - 90, CW, 20, HexColor("#E8EEF8"), radius=0)
+    text(cv, "PURPOSE", COL1 + 8, H - 104, size=9, color=lcolor, bold=True)
+    card(cv, COL1, H - 270, CW, 170, HexColor("#F5F8FF"), radius=6)
+    y = H - 125
+    for line_txt in purpose.split("\n"):
+        text(cv, line_txt.strip(), COL1 + 12, y, size=11, color=DARK)
+        y -= 22
+
+    # ── Install ───────────────────────────────────────────────────────────────
+    text(cv, "INSTALL", COL1 + 8, H - 292, size=9, color=lcolor, bold=True)
+    mono_box(cv, install.split("\n"), COL1, H - 390, CW, 90, size=9)
+
+    # ── Scan command ─────────────────────────────────────────────────────────
+    text(cv, "SCAN COMMAND", COL1 + 8, H - 415, size=9, color=lcolor, bold=True)
+    mono_box(cv, scan_cmd.split("\n"), COL1, H - 510, CW, 90, size=9)
+
+    # ── Offline badge ─────────────────────────────────────────────────────────
+    offline_color = GREEN if offline else ORANGE
+    offline_label = "✔  Works OFFLINE" if offline else "⚠  Requires INTERNET (first run)"
+    badge(cv, offline_label, COL1, H - 545, 320, 26,
+          HexColor("#D4EDDA") if offline else HexColor("#FFF3CD"),
+          text_color=HexColor("#155724") if offline else HexColor("#856404"),
+          size=10)
+
+    # ── Right column: PASS / WARN / FAIL ─────────────────────────────────────
+    # PASS
+    rect(cv, COL2, H - 90, CW, 20, HexColor("#E8EEF8"), radius=0)
+    text(cv, "✔  PASS condition", COL2 + 8, H - 104, size=9,
+         color=HexColor("#1A7A40"), bold=True)
+    card(cv, COL2, H - 230, CW, 130, HexColor("#F0FBF4"), radius=6)
+    y = H - 125
+    for line_txt in pass_cond.split("\n"):
+        text(cv, line_txt.strip(), COL2 + 12, y, size=10,
+             color=HexColor("#1A5C30"))
+        y -= 20
+
+    # FAIL
+    text(cv, "✘  FAIL condition  →  pipeline blocked", COL2 + 8, H - 252,
+         size=9, color=RED, bold=True)
+    card(cv, COL2, H - 400, CW, 140, HexColor("#FFF5F5"), radius=6)
+    y = H - 275
+    for line_txt in fail_cond.split("\n"):
+        text(cv, line_txt.strip(), COL2 + 12, y, size=10,
+             color=HexColor("#7B1818"))
+        y -= 20
+
+    # WARN
+    text(cv, "⚠  WARN condition  →  logged, pipeline continues",
+         COL2 + 8, H - 422, size=9, color=ORANGE, bold=True)
+    card(cv, COL2, H - 560, CW, 132, HexColor("#FFFDF0"), radius=6)
+    y = H - 445
+    for line_txt in warn_cond.split("\n"):
+        text(cv, line_txt.strip(), COL2 + 12, y, size=10,
+             color=HexColor("#7A5800"))
+        y -= 20
+
+    # Footer
+    text(cv, f"AI Transit Pipeline  —  {name}  —  {layer}",
+         W / 2, 18, size=9, color=GRAY, align="center")
+    cv.showPage()
+
+
+for tool_data in TOOL_CATALOG:
+    tool_slide(cv, tool_data)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE — TOOL SUMMARY TABLE (all tools + success/fail rationale)
+# ═══════════════════════════════════════════════════════════════════════════════
+bg(cv)
+rect(cv, 0, H - 72, W, 72, DARK)
+text(cv, "Tool Summary — Acceptance Rationale", 28, H - 48,
+     size=28, color=WHITE, bold=True)
+divider_line(cv, H - 75, ACCENT)
+
+SUMMARY_TOOLS = [
+    # (tool, layer, offline, pass_short, fail_short, warn_short)
+    ("betterleaks",       "L1", True,
+     "Exit 0 — no secrets",
+     "Secret/key detected → FAIL",
+     "Not installed → WARN"),
+    ("detect-secrets",    "L1", True,
+     "Empty results JSON",
+     "High-entropy string found → FAIL",
+     "Not installed → WARN"),
+    ("ClamAV",            "L1", True,
+     "Exit 0 — no virus",
+     "Infected file found → FAIL",
+     "DB outdated / missing → WARN"),
+    ("YARA",              "L1", True,
+     "No rule matched",
+     "IOC rule matched → FAIL",
+     "No rules / missing → WARN"),
+    ("Semgrep",           "L2", False,
+     "Empty results list",
+     "ERROR/WARNING severity → FAIL",
+     "INFO / no internet → WARN"),
+    ("trivy",             "L3", False,
+     "No HIGH/CRITICAL CVE",
+     "CRITICAL or HIGH CVE → FAIL",
+     "MEDIUM/LOW CVE → WARN"),
+    ("pip-audit",         "L3", False,
+     "No CVE in Python deps",
+     "Any Python CVE → FAIL",
+     "Not installed → WARN"),
+    ("safety",            "L3", False,
+     "No advisory matched",
+     "Advisory matched → FAIL",
+     "Not installed → WARN"),
+    ("npm audit",         "L3", False,
+     "0 critical/high vulns",
+     "Critical/high vuln → FAIL",
+     "No package-lock.json → skip"),
+    ("grep (patterns)",   "L4", True,
+     "No CWE pattern matched",
+     "CWE-798/22/918/327/338 hit → FAIL",
+     "N/A — always available"),
+    ("Bandit",            "L5", True,
+     "No medium/high issues",
+     "Medium+ severity + confidence → FAIL",
+     "Low confidence → WARN"),
+    ("ShellCheck",        "L5", True,
+     "Exit 0 — no warnings",
+     "Warning-level finding → FAIL",
+     "Not installed → WARN"),
+    ("cppcheck",          "L5", True,
+     "No errors/security warns",
+     "Security/error finding → FAIL",
+     "Not installed → WARN"),
+    ("hadolint",          "L5", True,
+     "Exit 0 — no warnings",
+     "DL/SC rule triggered → FAIL",
+     "Not installed → WARN"),
+    ("checkov",           "L5", True,
+     "All IaC checks pass",
+     "Any FAILED check → FAIL",
+     "SKIPPED checks → WARN"),
+    ("ScanCode",          "L6", True,
+     "No risky licence, no CVE",
+     "CRITICAL/HIGH CVE in pkg → FAIL",
+     "Risky licence (GPL…) → WARN"),
+]
+
+# Column layout
+HDR_Y = H - 90
+row_h = 36
+cols = [
+    ("Tool",        28,  155),
+    ("Layer",      188,   46),
+    ("Offline",    240,   60),
+    ("✔ PASS",     308,  270),
+    ("✘ FAIL",     585,  310),
+    ("⚠ WARN",     902,  400),
+]
+
+# Header
+rect(cv, 25, HDR_Y - 4, W - 50, row_h - 2, DARK)
+for hdr, hx, hw in cols:
+    cv.setFillColor(WHITE)
+    cv.setFont("Helvetica-Bold", 9)
+    cv.drawCentredString(hx + hw / 2, HDR_Y + 9, hdr)
+
+# Rows
+for ri, (tool, layer, offline, pass_s, fail_s, warn_s) in enumerate(SUMMARY_TOOLS):
+    ry = HDR_Y - row_h - ri * row_h
+    row_bg = HexColor("#F5F8FF") if ri % 2 == 0 else WHITE
+    rect(cv, 25, ry, W - 50, row_h - 1, row_bg)
+
+    lcolor_map = {"L1": L1_COLOR, "L2": L2_COLOR, "L3": L3_COLOR,
+                  "L4": L4_COLOR, "L5": L5_COLOR, "L6": L6_COLOR}
+    lc = lcolor_map.get(layer, DARK)
+
+    def cell(txt, hx, hw, color=DARK, bold=False, center=False):
+        cv.setFillColor(color)
+        cv.setFont("Helvetica-Bold" if bold else "Helvetica", 8)
+        if center:
+            cv.drawCentredString(hx + hw / 2, ry + 12, txt)
+        else:
+            cv.drawString(hx + 4, ry + 12, txt)
+
+    cell(tool,   28,  155, lc, bold=True)
+    # Layer badge
+    rect(cv, 190, ry + 6, 40, 22, lc, radius=4)
+    cv.setFillColor(WHITE)
+    cv.setFont("Helvetica-Bold", 8)
+    cv.drawCentredString(210, ry + 14, layer)
+    # Offline
+    ol_c = HexColor("#1A7A40") if offline else ORANGE
+    cv.setFillColor(ol_c)
+    cv.setFont("Helvetica-Bold", 9)
+    cv.drawCentredString(270, ry + 14, "✔" if offline else "⚠")
+    # Pass
+    cell(pass_s, 308, 270, HexColor("#1A5C30"))
+    # Fail
+    cell(fail_s, 585, 310, HexColor("#7B1818"))
+    # Warn
+    cell(warn_s, 902, 400, HexColor("#7A5800"))
+
+# Bottom note
+text(cv,
+     "FAIL = package blocked, moved to quarantine  |  "
+     "WARN = logged, pipeline continues (degraded mode)  |  "
+     "All layers must PASS for the ZIP to be released",
+     W / 2, 18, size=9, color=GRAY, align="center")
+cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SLIDE — CONCLUSION (updated)
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
@@ -1227,7 +1672,7 @@ divider_line(cv, H - 83, ACCENT2)
 recap = [
     ("🌐", "Source",   "GitHub (whitelist)\nor local path",           ACCENT),
     ("⬇",  "Fetch",    "Minimal clone\n.git removed · SHA-256",       ACCENT2),
-    ("🔍", "5 Layers", "L1→L2→L3→L4→L5\n11 languages · SCA · CWE",  ORANGE),
+    ("🔍", "6 Layers", "L1→L2→L3→L4→L5→L6\n16 tools · SCA · Licence",  ORANGE),
     ("📦", "PASS",     "ZIP in Good/\nwith Excel included",           GREEN),
     ("🚨", "FAIL",     "Quarantine\nchmod 700 + report",              RED),
 ]
@@ -1248,7 +1693,7 @@ badge_colors = [L2_COLOR, L2_COLOR, PURPLE, L3_COLOR]
 for bi, (bl, bc) in enumerate(zip(badge_labels, badge_colors)):
     badge(cv, bl, 280 + bi * 200, H - 645, 160, 34, bc)
 
-text(cv, "5-layer pipeline · OWASP · CWE · CERT · SCA · Degraded mode · Timestamped reports",
+text(cv, "6-layer pipeline · OWASP · CWE · CERT · SCA · Licence (ScanCode) · Degraded mode · Timestamped reports",
      W/2, H - 680, size=13, color=GRAY, align="center")
 text(cv, "github.com/Gaillotte/Claude  —  branch claude/vigilant-carson-f8twy0",
      W/2, H - 710, size=11, color=HexColor("#557799"), align="center")
