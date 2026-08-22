@@ -29,14 +29,12 @@ RUN pip3 install --no-cache-dir \
     semgrep \
     checkov
 
-# ── gitleaks ──────────────────────────────────────────────────────────────────
-ARG GITLEAKS_VERSION=8.18.4
-RUN curl -sSL \
-    "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-    -o /tmp/gitleaks.tar.gz \
-    && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
-    && chmod +x /usr/local/bin/gitleaks \
-    && rm /tmp/gitleaks.tar.gz
+# ── betterleaks ───────────────────────────────────────────────────────────────
+RUN apt-get install -y --no-install-recommends golang-go \
+    && go install github.com/betterleaks/betterleaks@latest \
+    && cp /root/go/bin/betterleaks /usr/local/bin/betterleaks \
+    && apt-get remove -y golang-go && apt-get autoremove -y \
+    && rm -rf /root/go/pkg /root/go/src /var/lib/apt/lists/*
 
 # ── trivy ─────────────────────────────────────────────────────────────────────
 RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \

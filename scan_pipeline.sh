@@ -76,16 +76,16 @@ grep_check() { grep -qE "$1" "$2" 2>/dev/null; }
 scan_global() {
     info "=== Layer 1: Global (AV, secrets, IOC) ==="
 
-    if has_cmd gitleaks; then
-        info "gitleaks…"
-        if ! gitleaks detect --source "$SCAN_DIR" --no-git -q 2>/dev/null; then
-            record_fail "$SCAN_DIR" "gitleaks:secrets_detected"
+    if has_cmd betterleaks; then
+        info "betterleaks…"
+        if ! betterleaks dir "$SCAN_DIR" -v 2>/dev/null; then
+            record_fail "$SCAN_DIR" "betterleaks:secrets_detected"
         else
             record_pass "$SCAN_DIR"
-            ok "gitleaks: no secrets"
+            ok "betterleaks: no secrets"
         fi
     else
-        record_warn "__global__" "gitleaks missing — secret scan skipped"
+        record_warn "__global__" "betterleaks missing — secret scan skipped"
     fi
 
     if has_cmd detect-secrets; then

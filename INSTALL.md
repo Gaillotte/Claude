@@ -66,7 +66,7 @@ The AI Transit Pipeline is a Bash-based security gateway designed to scan AI-gen
 
 | Tool | Purpose | Layer |
 |------|---------|-------|
-| gitleaks | Secret/credential leak detection | L1 |
+| betterleaks | Secret/credential leak detection | L1 |
 | detect-secrets | Entropy-based secret detection | L1 |
 | ClamAV (clamscan) | Antivirus scan | L1 |
 | YARA | Custom malware rule matching | L1 |
@@ -125,17 +125,20 @@ pip install semgrep           # L2: OWASP/CWE/CERT analysis
 > export PATH="/opt/ai-transit/venv/bin:$PATH"
 > ```
 
-### 3.3 gitleaks (L1 — secret scanning)
+### 3.3 betterleaks (L1 — secret scanning)
 
 ```bash
-# Download latest release from GitHub
-GITLEAKS_VERSION="8.18.4"
-curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-    -o /tmp/gitleaks.tar.gz
-tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
-sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
-sudo chmod +x /usr/local/bin/gitleaks
-gitleaks version
+# Via Go (recommended)
+go install github.com/betterleaks/betterleaks@latest
+sudo cp ~/go/bin/betterleaks /usr/local/bin/betterleaks
+
+# Via Homebrew (macOS / Linux with brew)
+brew install betterleaks
+
+# Via Fedora
+sudo dnf install betterleaks
+
+betterleaks --version
 ```
 
 ### 3.4 trivy (L3 — SCA / CVE)
@@ -253,7 +256,7 @@ pip install openpyxl detect-secrets bandit pip-audit semgrep checkov
 > **Limitations of native Windows / Git Bash:**
 > - Associative arrays (`declare -A`) require Bash 4+; Git Bash ships Bash 3.x on some versions.
 > - `file --mime-type` may not be available.
-> - `clamav`, `yara`, `gitleaks`, `trivy` require manual binary placement.
+> - `clamav`, `yara`, `betterleaks`, `trivy` require manual binary placement.
 > - Line endings (CRLF vs LF) can break shell scripts — always convert with `dos2unix`.
 >
 > **For production use, WSL2 is mandatory.**
@@ -363,7 +366,7 @@ python3 -c "import openpyxl" 2>/dev/null \
 
 echo ""
 echo "=== Security tools — Layer 1 ==="
-check "gitleaks"       gitleaks
+check "betterleaks"    betterleaks
 check "detect-secrets" detect-secrets
 check "ClamAV"         clamscan
 check "YARA"           yara
@@ -609,7 +612,7 @@ The most natural way to validate the bundle is to scan it with itself.
 A clean installation will produce a **PASS** result. Any unexpected FAIL or WARN finding on the bundle's own files should be investigated before deployment.
 
 > **What this checks:**
-> - L1: gitleaks / detect-secrets scan the `.sh` and `.py` files for accidentally embedded secrets or credentials.
+> - L1: betterleaks / detect-secrets scan the `.sh` and `.py` files for accidentally embedded secrets or credentials.
 > - L2: Semgrep applies OWASP / CWE / CERT rules to the Python source (`generate_excel_report.py`, `build_*.py`).
 > - L4: Universal pattern checks run on every file (hardcoded credentials, path traversal, dangerous calls).
 > - L5: Bandit runs on every `.py` file; ShellCheck runs on every `.sh` file.
@@ -647,8 +650,8 @@ verify() {
 # Replace the SHA values below with those published on each tool's GitHub release page
 # for the exact version you installed.
 echo "=== Binary integrity check ==="
-verify "gitleaks" "/usr/local/bin/gitleaks" \
-    "<SHA256_FROM_GITLEAKS_RELEASE_PAGE>"
+verify "betterleaks" "/usr/local/bin/betterleaks" \
+    "<SHA256_FROM_BETTERLEAKS_RELEASE_PAGE>"
 
 verify "trivy" "/usr/local/bin/trivy" \
     "<SHA256_FROM_TRIVY_RELEASE_PAGE>"
@@ -663,7 +666,7 @@ echo "Result: OK=$PASS  FAIL=$FAIL"
 ```
 
 **How to get the expected SHA:**
-- **gitleaks**: `https://github.com/gitleaks/gitleaks/releases` → `checksums.txt` attached to the release.
+- **betterleaks**: `https://github.com/betterleaks/betterleaks/releases` → `checksums.txt` attached to the release.
 - **trivy**: `https://github.com/aquasecurity/trivy/releases` → `trivy_<version>_Linux-64bit.tar.gz.sha256`.
 - **hadolint**: `https://github.com/hadolint/hadolint/releases` → SHA-256 listed next to the binary download link.
 
@@ -677,22 +680,22 @@ chmod +x check_binaries.sh && ./check_binaries.sh
 
 Several tools publish GPG-signed release artifacts. Verifying the signature provides a stronger guarantee than a checksum alone (the checksum file itself could be tampered with).
 
-**Example for gitleaks:**
+**Example for betterleaks:**
 
 ```bash
-# Import the gitleaks signing key
-curl -sSL https://github.com/gitleaks.gpg | gpg --import
+# Import the betterleaks signing key
+curl -sSL https://github.com/betterleaks.gpg | gpg --import
 
-# Download the release signature alongside the binary
-GITLEAKS_VERSION="8.18.4"
-curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz.sig" \
-    -o /tmp/gitleaks.sig
+# Download the release binary and its signature
+BETTERLEAKS_VERSION="latest"
+curl -sSL "https://github.com/betterleaks/betterleaks/releases/latest/download/betterleaks_linux_x64.tar.gz.sig" \
+    -o /tmp/betterleaks.sig
 
-curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-    -o /tmp/gitleaks.tar.gz
+curl -sSL "https://github.com/betterleaks/betterleaks/releases/latest/download/betterleaks_linux_x64.tar.gz" \
+    -o /tmp/betterleaks.tar.gz
 
 # Verify
-gpg --verify /tmp/gitleaks.sig /tmp/gitleaks.tar.gz \
+gpg --verify /tmp/betterleaks.sig /tmp/betterleaks.tar.gz \
     && echo "Signature OK" \
     || echo "SIGNATURE INVALID — do not install"
 ```

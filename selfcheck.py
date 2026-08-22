@@ -658,7 +658,7 @@ def main() -> None:
     parser.add_argument(
         "--checksums",
         help="Path to a JSON file mapping binary paths to their expected SHA-256 hashes. "
-             "Example: {\"/usr/local/bin/gitleaks\": \"abc123...\"}",
+             "Example: {\"/usr/local/bin/betterleaks\": \"abc123...\"}",
         default=None
     )
     args = parser.parse_args()
