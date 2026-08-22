@@ -80,6 +80,7 @@ The AI Transit Pipeline is a Bash-based security gateway designed to scan AI-gen
 | hadolint | Dockerfile linter | L5 |
 | cppcheck | C/C++ static analysis | L5 |
 | checkov | Terraform / IaC security scan | L5 |
+| scancode-toolkit | Licence, copyright & vulnerability detection | L6 |
 
 ---
 
@@ -166,6 +167,19 @@ hadolint --version
 pip install checkov
 checkov --version
 ```
+
+### 3.7 scancode-toolkit (L6 — licence, copyright & vulnerability)
+
+```bash
+pip install scancode-toolkit
+scancode --version
+```
+
+> ScanCode detects licences (SPDX), copyright notices, package manifests and known CVEs in
+> detected packages. It runs as Layer 6 at the end of the pipeline and produces a dedicated
+> JSON report alongside the main scan report. Findings are treated as **WARN** (licence) or
+> **FAIL** (CRITICAL/HIGH CVE) — they do not replace the SCA checks in Layer 3 but complement
+> them with full-text licence analysis across all source files.
 
 ### 3.7 ClamAV — update virus database
 
@@ -389,6 +403,7 @@ check "ShellCheck"     shellcheck
 check "cppcheck"       cppcheck
 check "hadolint"       hadolint
 check "checkov"        checkov
+check "scancode"       scancode
 
 echo ""
 echo "=== Summary ==="
@@ -577,7 +592,7 @@ sudo apt-get install -y bash git curl jq zip unzip file coreutils \
     python3 python3-pip python3-venv shellcheck cppcheck clamav yara nodejs && \
 python3 -m venv /opt/ai-transit/venv && \
 source /opt/ai-transit/venv/bin/activate && \
-pip install openpyxl detect-secrets bandit pip-audit safety semgrep checkov && \
+pip install openpyxl detect-secrets bandit pip-audit safety semgrep checkov scancode-toolkit && \
 curl -sSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin && \
 sudo freshclam && \
 echo "Installation complete"
@@ -614,6 +629,7 @@ A clean installation will produce a **PASS** result. Any unexpected FAIL or WARN
 > **What this checks:**
 > - L1: betterleaks / detect-secrets scan the `.sh` and `.py` files for accidentally embedded secrets or credentials.
 > - L2: Semgrep applies OWASP / CWE / CERT rules to the Python source (`generate_excel_report.py`, `build_*.py`).
+> - L6: ScanCode scans all files for licences (SPDX), copyrights, and CVEs in detected packages.
 > - L4: Universal pattern checks run on every file (hardcoded credentials, path traversal, dangerous calls).
 > - L5: Bandit runs on every `.py` file; ShellCheck runs on every `.sh` file.
 

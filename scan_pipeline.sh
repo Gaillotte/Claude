@@ -1045,6 +1045,152 @@ scan_by_type() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # REPORTS
 # ═══════════════════════════════════════════════════════════════════════════════
+scan_scancode() {
+    info "=== Layer 6: ScanCode — licence, copyright & vulnerability ==="
+
+    if ! has_cmd scancode; then
+        record_warn "__global__" "scancode missing — licence/copyright layer skipped (pip install scancode-toolkit)"
+        return
+    fi
+
+    local sc_report="${WORK_DIR}/reports/scancode_${TIMESTAMP}.json"
+
+    info "Running scancode on ${SCAN_DIR} …"
+    # --license   : detect licences (SPDX ids)
+    # --copyright : detect copyright notices
+    # --vulnerability : detect known CVEs in detected packages
+    # --package   : detect package manifests
+    # --json-pp   : pretty-printed JSON output
+    # --quiet     : suppress progress bar
+    # --timeout   : per-file timeout in seconds
+    if ! scancode \
+            --license \
+            --copyright \
+            --vulnerability \
+            --package \
+            --json-pp "$sc_report" \
+            --quiet \
+            --timeout 120 \
+            "$SCAN_DIR" 2>/dev/null; then
+        record_warn "__global__" "scancode:scan_error — check ${sc_report}"
+        return
+    fi
+
+    [[ -f "$sc_report" ]] || { record_warn "__global__" "scancode:no_report_generated"; return; }
+
+    # ── Parse findings ────────────────────────────────────────────────────────
+    if ! has_cmd python3; then
+        record_warn "__global__" "scancode:python3_missing — cannot parse report"
+        return
+    fi
+
+    python3 - "$sc_report" "$SCAN_DIR" <<'PYEOF'
+import json, sys, os
+
+report_path = sys.argv[1]
+scan_dir    = sys.argv[2]
+
+with open(report_path) as fh:
+    data = json.load(fh)
+
+issues = []
+
+for file in data.get("files", []):
+    path = file.get("path", "")
+    rel  = os.path.relpath(path, scan_dir) if os.path.isabs(path) else path
+
+    # Licence findings
+    for lic in file.get("license_detections", []):
+        for match in lic.get("matches", []):
+            spdx = match.get("spdx_license_expression") or match.get("license_expression", "unknown")
+            score = match.get("score", 0)
+            # Flag licences that may restrict enterprise use
+            risky = any(k in spdx.upper() for k in (
+                "GPL", "AGPL", "LGPL", "SSPL", "BUSL", "EUPL", "CDDL", "CC-BY-SA", "CC-BY-NC"
+            ))
+            if risky and score >= 70:
+                issues.append(f"WARN|{rel}|licence:{spdx} (score:{score:.0f})")
+
+    # Copyright findings — informational only
+    copyrights = file.get("copyrights", [])
+    if copyrights:
+        holders = ", ".join(c.get("copyright", "") for c in copyrights[:3])
+        issues.append(f"INFO|{rel}|copyright:{holders}")
+
+    # Vulnerability findings — FAIL on HIGH/CRITICAL
+    for pkg in file.get("packages", []):
+        for vuln in pkg.get("vulnerabilities", []):
+            vid      = vuln.get("vulnerability_id", "?")
+            severity = vuln.get("max_severity", "").upper()
+            pkg_name = pkg.get("name", "?")
+            pkg_ver  = pkg.get("version", "?")
+            if severity in ("CRITICAL", "HIGH"):
+                issues.append(f"FAIL|{rel}|scancode_vuln:{vid}[{severity}] in {pkg_name}=={pkg_ver}")
+            else:
+                issues.append(f"WARN|{rel}|scancode_vuln:{vid}[{severity}] in {pkg_name}=={pkg_ver}")
+
+for item in issues:
+    print(item)
+PYEOF
+
+    # ── Feed results back into the pipeline ───────────────────────────────────
+    local sc_out
+    sc_out=$(python3 - "$sc_report" "$SCAN_DIR" <<'PYEOF2'
+import json, sys, os
+
+report_path = sys.argv[1]
+scan_dir    = sys.argv[2]
+
+with open(report_path) as fh:
+    data = json.load(fh)
+
+for file in data.get("files", []):
+    path = file.get("path", "")
+    rel  = os.path.relpath(path, scan_dir) if os.path.isabs(path) else path
+
+    for lic in file.get("license_detections", []):
+        for match in lic.get("matches", []):
+            spdx  = match.get("spdx_license_expression") or match.get("license_expression", "unknown")
+            score = match.get("score", 0)
+            risky = any(k in spdx.upper() for k in (
+                "GPL", "AGPL", "LGPL", "SSPL", "BUSL", "EUPL", "CDDL", "CC-BY-SA", "CC-BY-NC"
+            ))
+            if risky and score >= 70:
+                print(f"WARN|{rel}|licence:{spdx}")
+
+    for pkg in file.get("packages", []):
+        for vuln in pkg.get("vulnerabilities", []):
+            vid      = vuln.get("vulnerability_id", "?")
+            severity = vuln.get("max_severity", "").upper()
+            pkg_name = pkg.get("name", "?")
+            pkg_ver  = pkg.get("version", "?")
+            if severity in ("CRITICAL", "HIGH"):
+                print(f"FAIL|{rel}|scancode_vuln:{vid}[{severity}] in {pkg_name}=={pkg_ver}")
+            else:
+                print(f"WARN|{rel}|scancode_vuln:{vid}[{severity}] in {pkg_name}=={pkg_ver}")
+PYEOF2
+    ) 2>/dev/null
+
+    local warn_count=0 fail_count=0
+    while IFS='|' read -r level rel_path msg; do
+        [[ -z "$level" ]] && continue
+        case "$level" in
+            FAIL) record_fail "$rel_path" "$msg"; (( fail_count++ )) || true ;;
+            WARN) record_warn "$rel_path" "$msg"; (( warn_count++ )) || true ;;
+        esac
+    done <<< "$sc_out"
+
+    if (( fail_count > 0 )); then
+        fail_f "scancode: ${fail_count} CRITICAL/HIGH vulnerability finding(s)"
+    elif (( warn_count > 0 )); then
+        warn "scancode: ${warn_count} licence/vulnerability warning(s) — review before enterprise use"
+    else
+        ok "scancode: no risky licences or vulnerabilities detected"
+    fi
+
+    ok "ScanCode report: ${sc_report}"
+}
+
 generate_report_json() {
     local findings_json="{"
     local first=true
@@ -1079,7 +1225,7 @@ generate_report_json() {
   "repo_input": "${REPO_INPUT:-}",
   "directory": "${SCAN_DIR}",
   "repo_hash": "$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')",
-  "standards": ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding", "SCA-CVE"],
+  "standards": ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding", "SCA-CVE", "ScanCode-Licence-Copyright"],
   "summary": { "pass": ${PASS_COUNT}, "warn": ${WARN_COUNT}, "fail": ${FAIL_COUNT} },
   "findings": ${findings_json},
   "file_results": ${file_results_json}
@@ -1138,6 +1284,7 @@ scan_owasp_cwe          # Layer 2: Semgrep OWASP/CWE rulesets
 scan_dependencies       # Layer 3: SCA — vulnerable dependency CVEs
                         # Layer 4: universal patterns run inside classify_file()
 scan_by_type            # Layer 5: per-language SAST
+scan_scancode           # Layer 6: licence, copyright & vulnerability (ScanCode)
 
 generate_report_json
 generate_report_html

@@ -27,7 +27,8 @@ RUN pip3 install --no-cache-dir \
     pip-audit \
     safety \
     semgrep \
-    checkov
+    checkov \
+    scancode-toolkit
 
 # ── betterleaks ───────────────────────────────────────────────────────────────
 RUN apt-get install -y --no-install-recommends golang-go \
