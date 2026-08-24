@@ -1,6 +1,6 @@
-# AI Transit Pipeline — Installation Guide
+# AI Transit Pipeline — Complete Installation Guide
 
-**Version 2.0 | Applicable to: fetch_repo.sh, scan_pipeline.sh, ai_transit.sh, generate_excel_report.py**
+**Version 2.1 | Scripts: fetch_repo.sh · scan_pipeline.sh · ai_transit.sh · generate_excel_report.py · selfcheck.py**
 
 ---
 
@@ -8,181 +8,232 @@
 
 1. [Overview](#overview)
 2. [Prerequisites](#prerequisites)
-3. [Linux Installation (Ubuntu / Debian)](#linux-installation)
-4. [Windows Installation (WSL2 — Recommended)](#windows-installation)
-5. [Directory Structure Setup](#directory-structure-setup)
-6. [Environment Variables](#environment-variables)
-7. [Verification Checklist](#verification-checklist)
-8. [Running the Pipeline](#running-the-pipeline)
-9. [Security Hardening Recommendations](#security-hardening-recommendations)
-10. [Troubleshooting](#troubleshooting)
-11. [Self-Scan: Verifying the Installation is Safe](#self-scan)
+3. [Core System Packages](#core-system-packages)
+4. [Python Environment](#python-environment)
+5. [Tool-by-Tool Installation](#tool-by-tool)
+   - 5.1 [betterleaks — secret detection (L1)](#betterleaks)
+   - 5.2 [detect-secrets — entropy scanning (L1)](#detect-secrets)
+   - 5.3 [ClamAV — antivirus (L1)](#clamav)
+   - 5.4 [YARA — custom IOC rules (L1)](#yara)
+   - 5.5 [Semgrep — OWASP / CWE / CERT (L2)](#semgrep)
+   - 5.6 [trivy — SCA / CVE (L3)](#trivy)
+   - 5.7 [pip-audit — Python CVE (L3)](#pip-audit)
+   - 5.8 [safety — Python advisories (L3)](#safety)
+   - 5.9 [npm + npm audit — Node.js CVE (L3)](#npm-audit)
+   - 5.10 [Bandit — Python SAST (L5)](#bandit)
+   - 5.11 [ShellCheck — shell SAST (L5)](#shellcheck)
+   - 5.12 [cppcheck — C/C++ SAST (L5)](#cppcheck)
+   - 5.13 [hadolint — Dockerfile linter (L5)](#hadolint)
+   - 5.14 [checkov — Terraform / IaC (L5)](#checkov)
+   - 5.15 [ScanCode Toolkit — licence & copyright (L6)](#scancode)
+6. [Pipeline Scripts Installation](#scripts)
+7. [Directory Structure Setup](#directories)
+8. [Environment Variables](#env-vars)
+9. [Full Installation Verification](#verification)
+10. [Offline Operation](#offline)
+11. [Sample Scans — Testing the Pipeline](#samples)
+12. [Self-Scan: Verifying the Installation is Safe](#self-scan)
+13. [Security Hardening Recommendations](#hardening)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
-## 1. Overview
+## 1. Overview {#overview}
 
-The AI Transit Pipeline is a Bash-based security gateway designed to scan AI-generated code repositories before integration into an enterprise network. The bundle consists of:
+The AI Transit Pipeline is a 6-layer security gateway that scans AI-generated code before enterprise import.
 
-| File | Role |
-|------|------|
-| `fetch_repo.sh` | Clone/copy the target repository |
-| `scan_pipeline.sh` | 5-layer static analysis engine |
-| `ai_transit.sh` | Main orchestrator (calls fetch + scan) |
-| `generate_excel_report.py` | Excel report generator (openpyxl) |
+| Layer | Tools | Blocks on |
+|-------|-------|-----------|
+| L1 — Secrets & AV | betterleaks, detect-secrets, ClamAV, YARA | Secret/credential/malware detected |
+| L2 — OWASP/CWE | Semgrep | ERROR/WARNING severity finding |
+| L3 — SCA/CVE | trivy, pip-audit, safety, npm audit | HIGH/CRITICAL CVE in dependency |
+| L4 — Patterns | grep (built-in) | CWE-798/22/918/327/338 match |
+| L5 — Per-type SAST | Bandit, ShellCheck, cppcheck, hadolint, checkov | Tool-specific finding |
+| L6 — Licence | ScanCode Toolkit | CRITICAL/HIGH CVE in detected package |
 
-**Supported platforms:**
-- Linux (Ubuntu 22.04 LTS / Debian 12 — **recommended production platform**)
-- Windows 11 via WSL2 (development / evaluation only)
-
----
-
-## 2. Prerequisites
-
-### Minimum system requirements
-
-| Resource | Minimum | Recommended |
-|----------|---------|-------------|
-| CPU | 2 cores | 4 cores |
-| RAM | 4 GB | 8 GB |
-| Disk | 20 GB free | 50 GB free |
-| OS | Ubuntu 22.04 / Debian 12 | Ubuntu 24.04 LTS |
-
-### Required tools (all platforms)
-
-| Tool | Minimum version | Purpose |
-|------|----------------|---------|
-| Bash | 5.0 | Pipeline runtime |
-| Git | 2.30 | Repository cloning |
-| Python | 3.10 | Excel report generation |
-| pip | 23.x | Python package manager |
-| curl | 7.x | GitHub API size check |
-| jq | 1.6 | JSON parsing |
-| zip / unzip | any | Archive creation |
-| file | any | MIME-type detection |
-| sha256sum | any | Integrity manifests |
-
-### Optional but strongly recommended tools
-
-| Tool | Purpose | Layer |
-|------|---------|-------|
-| betterleaks | Secret/credential leak detection | L1 |
-| detect-secrets | Entropy-based secret detection | L1 |
-| ClamAV (clamscan) | Antivirus scan | L1 |
-| YARA | Custom malware rule matching | L1 |
-| Semgrep | OWASP / CWE / CERT static analysis | L2 |
-| trivy | SCA — CVE in dependencies | L3 |
-| pip-audit | Python dependency CVE check | L3 |
-| safety | Python dependency advisory check | L3 |
-| npm audit | Node.js dependency CVE check | L3 |
-| Bandit | Python SAST | L5 |
-| ShellCheck | Shell script SAST | L5 |
-| hadolint | Dockerfile linter | L5 |
-| cppcheck | C/C++ static analysis | L5 |
-| checkov | Terraform / IaC security scan | L5 |
-| scancode-toolkit | Licence, copyright & vulnerability detection | L6 |
+**Verdict:** any FAIL in any layer → package quarantined. WARNs are logged but do not block.
 
 ---
 
-## 3. Linux Installation
+## 2. Prerequisites {#prerequisites}
 
-### 3.1 System packages
+**Supported platforms:** Ubuntu 22.04 LTS / Debian 12 (production), Ubuntu 24.04 LTS (recommended).
+Windows users: install via **WSL2** (see Section 4 of base guide).
+
+**Minimum hardware:** 4-core CPU, 8 GB RAM, 20 GB free disk.
+
+---
+
+## 3. Core System Packages {#core-system-packages}
+
+Install the baseline packages first. These are required for the pipeline to run at all.
 
 ```bash
 sudo apt-get update && sudo apt-get upgrade -y
 
-# Core dependencies
 sudo apt-get install -y \
-    bash git curl jq zip unzip file coreutils \
+    bash git curl ca-certificates wget gpg \
+    jq zip unzip file coreutils \
     python3 python3-pip python3-venv \
-    build-essential
-
-# Security tools — Layer 1
-sudo apt-get install -y clamav clamav-daemon yara
-
-# Security tools — Layer 5
-sudo apt-get install -y shellcheck cppcheck
+    build-essential golang-go \
+    nodejs npm
 ```
 
-### 3.2 Python packages
+**Verify:**
+```bash
+bash   --version | head -1   # expect: GNU bash, version 5.x
+git    --version              # expect: git version 2.x
+python3 --version             # expect: Python 3.10+
+go     version                # expect: go1.21+
+node   --version              # expect: v18+ or v20+
+jq     --version              # expect: jq-1.6+
+```
+
+---
+
+## 4. Python Virtual Environment {#python-environment}
+
+Using a dedicated venv avoids conflicts with system packages and makes the installation self-contained.
 
 ```bash
-# Create and activate a dedicated virtual environment (recommended)
 python3 -m venv /opt/ai-transit/venv
+echo 'source /opt/ai-transit/venv/bin/activate' >> ~/.bashrc
 source /opt/ai-transit/venv/bin/activate
-
-# Install required Python packages
 pip install --upgrade pip
-pip install openpyxl          # Excel report generation
-pip install detect-secrets    # L1: secret detection
-pip install bandit            # L5: Python SAST
-pip install pip-audit         # L3: Python CVE check
-pip install safety            # L3: Python advisory check
-pip install semgrep           # L2: OWASP/CWE/CERT analysis
 ```
 
-> **Note:** If you use a virtual environment, ensure `activate` is called before running `ai_transit.sh`, or use the full path to the venv's Python:
-> ```bash
-> export PATH="/opt/ai-transit/venv/bin:$PATH"
-> ```
+> All `pip install` commands in this guide assume the venv is active.
 
-### 3.3 betterleaks (L1 — secret scanning)
-
+**Verify:**
 ```bash
-# Via Go (recommended)
+which python3     # must show /opt/ai-transit/venv/bin/python3
+python3 --version # Python 3.10+
+```
+
+---
+
+## 5. Tool-by-Tool Installation {#tool-by-tool}
+
+Each section covers: finding the latest version, installing, verifying, offline setup, and a functional test.
+
+---
+
+### 5.1 betterleaks — Secret Detection (Layer 1) {#betterleaks}
+
+**What it does:** scans all file types for secrets, API keys, credentials and tokens. Successor to gitleaks with a more expressive allowlist system.
+
+#### Find the latest version
+```bash
+# Query GitHub API for latest release tag
+curl -s https://api.github.com/repos/betterleaks/betterleaks/releases/latest \
+    | jq -r '.tag_name'
+```
+
+#### Install (Go — recommended, produces a static binary)
+```bash
 go install github.com/betterleaks/betterleaks@latest
 sudo cp ~/go/bin/betterleaks /usr/local/bin/betterleaks
+```
 
-# Via Homebrew (macOS / Linux with brew)
+#### Install (Homebrew — macOS / Linux with brew)
+```bash
 brew install betterleaks
+```
 
-# Via Fedora
+#### Install (Fedora / RHEL)
+```bash
 sudo dnf install betterleaks
+```
 
+#### Verify installation
+```bash
 betterleaks --version
+# Expected output: betterleaks version x.y.z
 ```
 
-### 3.4 trivy (L3 — SCA / CVE)
+#### Offline operation
+betterleaks has **no external database** — all detection rules are embedded in the binary. Once installed, it works fully offline.
 
+#### Functional test
 ```bash
-# Aqua Security official install script
-curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-    | sudo sh -s -- -b /usr/local/bin
-trivy --version
+# Create a test file with a fake secret
+mkdir /tmp/bl-test
+echo 'AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"' \
+    > /tmp/bl-test/config.py
+
+betterleaks dir /tmp/bl-test -v
+# Expected: non-zero exit code, finding reported for config.py
+
+# Clean file — should PASS
+echo 'import os; key = os.environ["AWS_SECRET_ACCESS_KEY"]' \
+    > /tmp/bl-test/config_clean.py
+betterleaks dir /tmp/bl-test/config_clean.py -v
+# Expected: exit code 0
+
+rm -rf /tmp/bl-test
 ```
 
-### 3.5 hadolint (L5 — Dockerfile)
+---
 
+### 5.2 detect-secrets — Entropy Scanning (Layer 1) {#detect-secrets}
+
+**What it does:** complements betterleaks with Shannon entropy analysis and regex-based patterns to find high-entropy strings that look like secrets.
+
+#### Find the latest version
 ```bash
-HADOLINT_VERSION="2.12.0"
-curl -sSL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
-    -o /usr/local/bin/hadolint
-sudo chmod +x /usr/local/bin/hadolint
-hadolint --version
+pip index versions detect-secrets 2>/dev/null | head -1
+# or:
+curl -s https://pypi.org/pypi/detect-secrets/json | jq -r '.info.version'
 ```
 
-### 3.6 checkov (L5 — Terraform / IaC)
-
+#### Install
 ```bash
-pip install checkov
-checkov --version
+pip install detect-secrets
 ```
 
-### 3.7 scancode-toolkit (L6 — licence, copyright & vulnerability)
-
+#### Verify installation
 ```bash
-pip install scancode-toolkit
-scancode --version
+detect-secrets --version
+# Expected: x.y.z
 ```
 
-> ScanCode detects licences (SPDX), copyright notices, package manifests and known CVEs in
-> detected packages. It runs as Layer 6 at the end of the pipeline and produces a dedicated
-> JSON report alongside the main scan report. Findings are treated as **WARN** (licence) or
-> **FAIL** (CRITICAL/HIGH CVE) — they do not replace the SCA checks in Layer 3 but complement
-> them with full-text licence analysis across all source files.
+#### Offline operation
+No external database. Works fully offline once installed.
 
-### 3.7 ClamAV — update virus database
+#### Functional test
+```bash
+mkdir /tmp/ds-test
+echo 'password = "Sup3rS3cr3tP@ssw0rd!"' > /tmp/ds-test/app.py
 
+detect-secrets scan /tmp/ds-test/app.py
+# Expected: JSON with non-empty "results" containing app.py
+
+echo 'password = os.getenv("PASSWORD")' > /tmp/ds-test/app_clean.py
+detect-secrets scan /tmp/ds-test/app_clean.py
+# Expected: JSON with empty "results" {}
+
+rm -rf /tmp/ds-test
+```
+
+---
+
+### 5.3 ClamAV — Antivirus (Layer 1) {#clamav}
+
+**What it does:** scans files against a database of known malware signatures. Requires regular DB updates to stay effective.
+
+#### Find the latest version
+```bash
+apt-cache policy clamav | grep Candidate
+# or for the latest upstream:
+curl -s https://www.clamav.net/downloads | grep -oP 'clamav-\K[0-9.]+(?=\.tar)' | head -1
+```
+
+#### Install
+```bash
+sudo apt-get install -y clamav clamav-daemon clamav-freshclam
+```
+
+#### Update virus database (required before first use)
 ```bash
 sudo systemctl stop clamav-freshclam
 sudo freshclam
@@ -190,344 +241,79 @@ sudo systemctl start clamav-freshclam
 sudo systemctl enable clamav-freshclam
 ```
 
-### 3.8 Node.js + npm (for npm audit — L3)
-
+#### Verify installation
 ```bash
-# Via NodeSource (LTS)
-curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-sudo apt-get install -y nodejs
-node --version && npm --version
+clamscan --version
+# Expected: ClamAV x.y.z/NNNNN/...
+freshclam --version
+# Expected: ClamAV x.y.z
+```
+
+#### Offline operation
+ClamAV works offline once the virus DB is downloaded. To prepare for offline use:
+```bash
+# On a machine with internet access, download the DB files
+sudo freshclam
+
+# The DB files are stored at (copy these to the offline machine):
+ls /var/lib/clamav/
+# main.cvd (or main.cld), daily.cvd (or daily.cld), bytecode.cvd
+
+# On the offline machine, copy the DB files to /var/lib/clamav/
+# then reload:
+sudo systemctl restart clamav-daemon
+```
+
+#### Functional test
+```bash
+# ClamAV includes the EICAR test signature — a safe test virus string
+echo 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' \
+    > /tmp/eicar.txt
+
+clamscan /tmp/eicar.txt
+# Expected: /tmp/eicar.txt: Eicar-Signature FOUND
+# Expected exit code: 1
+
+clamscan /bin/ls
+# Expected: /bin/ls: OK
+# Expected exit code: 0
+
+rm /tmp/eicar.txt
 ```
 
 ---
 
-## 4. Windows Installation
+### 5.4 YARA — Custom IOC Rules (Layer 1) {#yara}
 
-> **Strong recommendation:** Use **WSL2 (Windows Subsystem for Linux)** with Ubuntu 22.04. The pipeline relies on Bash features (associative arrays, process substitution, POSIX tools) that are not reliably available in native Windows environments such as Git Bash or Cygwin.
+**What it does:** loads organisation-specific YARA rules from `yara-rules/` and matches them against every file. Fully customisable pattern engine.
 
-### 4.1 Enable WSL2
-
-Run the following in PowerShell **as Administrator**:
-
-```powershell
-# Enable WSL2
-wsl --install
-
-# Install Ubuntu 22.04 LTS
-wsl --install -d Ubuntu-22.04
-
-# Set WSL2 as default version
-wsl --set-default-version 2
-
-# Restart your machine, then launch Ubuntu from the Start menu
-```
-
-After the Ubuntu terminal opens and you have set up your UNIX username and password, follow the **Linux Installation** steps above inside the WSL2 terminal.
-
-### 4.2 Accessing files from Windows
-
-- WSL2 home directory: `\\wsl$\Ubuntu-22.04\home\<your-user>\`
-- Place your pipeline scripts under the WSL2 filesystem (not `/mnt/c/...`) to avoid permission and line-ending issues.
-
+#### Find the latest version
 ```bash
-# Inside WSL2 terminal
-mkdir -p ~/ai-transit
-cp /mnt/c/Users/<you>/Downloads/ai-transit-bundle/* ~/ai-transit/
-cd ~/ai-transit
-chmod +x *.sh
+apt-cache policy yara | grep Candidate
+# or from GitHub:
+curl -s https://api.github.com/repos/VirusTotal/yara/releases/latest \
+    | jq -r '.tag_name'
 ```
 
-### 4.3 Windows Terminal (recommended)
-
-Install **Windows Terminal** from the Microsoft Store for a better experience. Set the Ubuntu profile as the default.
-
-### 4.4 Docker Desktop (optional — for trivy)
-
-If you prefer running trivy via Docker instead of installing the binary:
-
+#### Install
 ```bash
-# Inside WSL2
-docker pull aquasec/trivy:latest
-alias trivy='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-    -v $HOME/.cache/trivy:/root/.cache/trivy aquasec/trivy'
+sudo apt-get install -y yara
 ```
 
-### 4.5 Native Windows — not recommended
-
-If WSL2 is not available (e.g., corporate policy blocks Hyper-V), the following partial approach may work using **Git Bash** + **Chocolatey**:
-
-```powershell
-# Install Chocolatey
-Set-ExecutionPolicy Bypass -Scope Process -Force
-[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-# Install tools
-choco install git python3 jq curl zip nodejs -y
-pip install openpyxl detect-secrets bandit pip-audit semgrep checkov
-```
-
-> **Limitations of native Windows / Git Bash:**
-> - Associative arrays (`declare -A`) require Bash 4+; Git Bash ships Bash 3.x on some versions.
-> - `file --mime-type` may not be available.
-> - `clamav`, `yara`, `betterleaks`, `trivy` require manual binary placement.
-> - Line endings (CRLF vs LF) can break shell scripts — always convert with `dos2unix`.
->
-> **For production use, WSL2 is mandatory.**
-
----
-
-## 5. Directory Structure Setup
-
-The pipeline uses the following directory layout (configurable via `WORK_DIR`):
-
-```
-/opt/ai-transit/           ← WORK_DIR (default)
-├── fetch/                 ← Cloned repositories (temporary)
-├── quarantine/            ← Failed repos (chmod 700, isolated)
-├── approved/              ← (optional) Approved repos mirror
-├── reports/               ← JSON scan reports
-├── logs/                  ← Pipeline logs
-├── yara-rules/            ← Custom YARA rule files (.yar)
-└── venv/                  ← Python virtual environment (recommended)
-
-<script_dir>/Good/         ← OUTPUT_DIR — approved ZIP archives
-```
-
-Create the structure:
-
+#### Verify installation
 ```bash
-sudo mkdir -p /opt/ai-transit/{fetch,quarantine,approved,reports,logs,yara-rules}
-sudo chmod 700 /opt/ai-transit/quarantine
-sudo chown -R $USER:$USER /opt/ai-transit
-
-# Create output directory next to scripts
-mkdir -p ~/ai-transit/Good
+yara --version
+# Expected: x.y.z
 ```
 
----
+#### Offline operation
+YARA has no external database — all rules are local `.yar` files. Works fully offline.
 
-## 6. Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WORK_DIR` | `/opt/ai-transit` | Root working directory |
-| `OUTPUT_DIR` | `<script_dir>/Good` | Output directory for approved ZIPs |
-
-Set them in your shell profile (`~/.bashrc` or `~/.zshrc`):
-
+#### Create a minimal test rule
 ```bash
-export WORK_DIR="/opt/ai-transit"
-export OUTPUT_DIR="/opt/ai-transit/approved"
-```
+mkdir -p /opt/ai-transit/yara-rules
 
-Or pass them inline per execution:
-
-```bash
-WORK_DIR=/data/ai-transit OUTPUT_DIR=/data/approved ./ai_transit.sh https://github.com/org/repo
-```
-
----
-
-## 7. Verification Checklist
-
-Run this script to verify your installation:
-
-```bash
-#!/usr/bin/env bash
-# verify_install.sh — checks all required and optional tools
-
-PASS=0; WARN=0; FAIL=0
-
-check() {
-    local name="$1" cmd="$2"
-    if command -v "$cmd" &>/dev/null; then
-        echo -e "\033[32m[OK]\033[0m    $name ($cmd)"
-        (( PASS++ ))
-    else
-        echo -e "\033[33m[MISS]\033[0m  $name ($cmd) — optional"
-        (( WARN++ ))
-    fi
-}
-
-require() {
-    local name="$1" cmd="$2"
-    if command -v "$cmd" &>/dev/null; then
-        echo -e "\033[32m[OK]\033[0m    $name ($cmd)"
-        (( PASS++ ))
-    else
-        echo -e "\033[31m[FAIL]\033[0m  $name ($cmd) — REQUIRED"
-        (( FAIL++ ))
-    fi
-}
-
-echo "=== Required tools ==="
-require "Bash 5+"      bash
-require "Git"          git
-require "Python 3"     python3
-require "pip"          pip
-require "curl"         curl
-require "jq"           jq
-require "zip"          zip
-require "sha256sum"    sha256sum
-require "file (MIME)"  file
-
-echo ""
-echo "=== Python packages ==="
-python3 -c "import openpyxl" 2>/dev/null \
-    && echo -e "\033[32m[OK]\033[0m    openpyxl" && (( PASS++ )) \
-    || { echo -e "\033[31m[FAIL]\033[0m  openpyxl — run: pip install openpyxl"; (( FAIL++ )); }
-
-echo ""
-echo "=== Security tools — Layer 1 ==="
-check "betterleaks"    betterleaks
-check "detect-secrets" detect-secrets
-check "ClamAV"         clamscan
-check "YARA"           yara
-
-echo ""
-echo "=== Security tools — Layer 2 ==="
-check "Semgrep"        semgrep
-
-echo ""
-echo "=== Security tools — Layer 3 ==="
-check "trivy"          trivy
-check "pip-audit"      pip-audit
-check "safety"         safety
-check "npm audit"      npm
-
-echo ""
-echo "=== Security tools — Layer 5 ==="
-check "Bandit"         bandit
-check "ShellCheck"     shellcheck
-check "cppcheck"       cppcheck
-check "hadolint"       hadolint
-check "checkov"        checkov
-check "scancode"       scancode
-
-echo ""
-echo "=== Summary ==="
-echo -e "  \033[32mOK: $PASS\033[0m  |  \033[33mOptional missing: $WARN\033[0m  |  \033[31mRequired missing: $FAIL\033[0m"
-[[ $FAIL -eq 0 ]] && echo -e "\033[32mInstallation OK — pipeline ready\033[0m" \
-                  || echo -e "\033[31mInstallation INCOMPLETE — fix FAIL items above\033[0m"
-```
-
-Run it:
-
-```bash
-chmod +x verify_install.sh && ./verify_install.sh
-```
-
----
-
-## 8. Running the Pipeline
-
-### 8.1 Grant execution permissions
-
-```bash
-chmod +x fetch_repo.sh scan_pipeline.sh ai_transit.sh
-```
-
-### 8.2 Basic usage
-
-```bash
-# Scan a public GitHub repository (default branch)
-./ai_transit.sh https://github.com/org/my-ai-project
-
-# Scan a specific branch
-./ai_transit.sh https://github.com/org/my-ai-project main
-
-# Scan a local directory
-./ai_transit.sh /path/to/local/repo
-```
-
-### 8.3 Expected output (PASS case)
-
-```
-══════════════════════════════════════════════
-       AI Transit Pipeline — Démarrage
-══════════════════════════════════════════════
-
-[INFO]  Source   : https://github.com/org/repo
-[INFO]  Work dir : /opt/ai-transit
-
-── Phase 1 : Récupération ─────────────────────
-[INFO]  Clonage : https://github.com/org/repo → /opt/ai-transit/fetch/repo_20250812_143022
-[OK]    Métadonnées .git supprimées
-[OK]    Manifest écrit
-
-── Phase 2 : Scan de sécurité ─────────────────
-...
-
-╔══════════════════════════════════════════════╗
-║              ✔  SCAN RÉUSSI (PASS)          ║
-╚══════════════════════════════════════════════╝
-[OK]    Archive créée    : ./Good/repo_20250812_143022_20250812_143045.zip
-[OK]    Rapport Excel inclus : scan_report_20250812_143045.xlsx
-```
-
-### 8.4 Expected output (FAIL case)
-
-```
-╔══════════════════════════════════════════════╗
-║           ✘  SCAN ÉCHOUÉ (FAIL)             ║
-╚══════════════════════════════════════════════╝
-
-[ERREUR] Le dépôt n'a pas passé le scan de sécurité.
-[ERREUR] Les fichiers ont été déplacés en quarantaine : /opt/ai-transit/quarantine
-[ERREUR] Rapport détaillé : /opt/ai-transit/reports/report_20250812_143210.json
-```
-
----
-
-## 9. Security Hardening Recommendations
-
-### 9.1 Run as a dedicated non-root user
-
-```bash
-# Create a dedicated service account
-sudo useradd -r -m -d /opt/ai-transit -s /bin/bash aitransit
-sudo chown -R aitransit:aitransit /opt/ai-transit
-
-# Run the pipeline as that user
-sudo -u aitransit ./ai_transit.sh https://github.com/org/repo
-```
-
-### 9.2 Network isolation (Linux — recommended for production)
-
-The pipeline only needs outbound HTTPS to `github.com` and `api.github.com`. Restrict all other outbound traffic:
-
-```bash
-# Using ufw
-sudo ufw default deny outgoing
-sudo ufw allow out 443 comment "HTTPS for GitHub"
-sudo ufw allow out 53 comment "DNS"
-sudo ufw enable
-```
-
-For air-gapped environments, use a forward proxy (e.g., Squid) with a whitelist:
-```
-acl github_whitelist dstdomain .github.com .githubusercontent.com
-http_access allow github_whitelist
-http_access deny all
-```
-
-### 9.3 Quarantine directory isolation
-
-The `quarantine/` directory is set to `chmod 700` automatically. For additional isolation, mount it on a separate filesystem with `noexec`:
-
-```bash
-# /etc/fstab entry
-tmpfs /opt/ai-transit/quarantine tmpfs rw,noexec,nosuid,nodev,size=2G 0 0
-```
-
-### 9.4 YARA custom rules
-
-Place your organization's YARA rules in `/opt/ai-transit/yara-rules/*.yar`. The pipeline automatically loads all `.yar` files in that directory during the L1 scan.
-
-Example minimal rule:
-
-```yara
+cat > /opt/ai-transit/yara-rules/test.yar << 'EOF'
 rule Suspicious_Base64_Exec {
     meta:
         description = "Detects base64-encoded exec calls"
@@ -536,10 +322,1140 @@ rule Suspicious_Base64_Exec {
     condition:
         $b64_exec
 }
+EOF
 ```
 
-### 9.5 Log rotation
+#### Functional test
+```bash
+echo '<?php eval(base64_decode("dW5saW5r...")); ?>' > /tmp/test.php
 
+yara /opt/ai-transit/yara-rules/test.yar /tmp/test.php
+# Expected: Suspicious_Base64_Exec /tmp/test.php
+
+echo '<?php echo "Hello World"; ?>' > /tmp/clean.php
+yara /opt/ai-transit/yara-rules/test.yar /tmp/clean.php
+# Expected: (no output — no match)
+
+rm /tmp/test.php /tmp/clean.php
+```
+
+---
+
+### 5.5 Semgrep — OWASP / CWE / CERT Static Analysis (Layer 2) {#semgrep}
+
+**What it does:** runs four security rulesets (OWASP Top 10, CWE Top 25, security-audit, secrets) across all supported languages using pattern matching on the AST.
+
+#### Find the latest version
+```bash
+curl -s https://pypi.org/pypi/semgrep/json | jq -r '.info.version'
+```
+
+#### Install
+```bash
+pip install semgrep
+```
+
+#### Verify installation
+```bash
+semgrep --version
+# Expected: 1.x.x
+```
+
+#### Offline operation
+Semgrep needs internet access **only on the first run** to download rules. Prepare for offline:
+```bash
+# On a machine with internet, pre-download rules to a local directory
+mkdir -p /opt/ai-transit/semgrep-rules
+semgrep --config p/owasp-top-ten   --dump-config > /opt/ai-transit/semgrep-rules/owasp.yaml
+semgrep --config p/cwe-top-25      --dump-config > /opt/ai-transit/semgrep-rules/cwe.yaml
+semgrep --config p/security-audit  --dump-config > /opt/ai-transit/semgrep-rules/audit.yaml
+semgrep --config p/secrets         --dump-config > /opt/ai-transit/semgrep-rules/secrets.yaml
+
+# On the offline machine, run against local rules:
+semgrep --config /opt/ai-transit/semgrep-rules/ <repo_dir>
+```
+
+#### Functional test
+```bash
+cat > /tmp/test_sqli.py << 'EOF'
+import sqlite3
+def get_user(username):
+    conn = sqlite3.connect("db.sqlite3")
+    query = "SELECT * FROM users WHERE name = '" + username + "'"
+    return conn.execute(query).fetchall()
+EOF
+
+semgrep --config p/owasp-top-ten --json /tmp/test_sqli.py \
+    | jq '.results | length'
+# Expected: 1 or more (SQL injection detected)
+
+cat > /tmp/test_clean.py << 'EOF'
+import sqlite3
+def get_user(username):
+    conn = sqlite3.connect("db.sqlite3")
+    return conn.execute("SELECT * FROM users WHERE name = ?", (username,)).fetchall()
+EOF
+
+semgrep --config p/owasp-top-ten --json /tmp/test_clean.py \
+    | jq '.results | length'
+# Expected: 0
+
+rm /tmp/test_sqli.py /tmp/test_clean.py
+```
+
+---
+
+### 5.6 trivy — SCA / CVE (Layer 3) {#trivy}
+
+**What it does:** scans dependency manifests (requirements.txt, package-lock.json, go.sum, pom.xml, Cargo.lock …) against NVD, OSV and GitHub Advisory databases.
+
+#### Find the latest version
+```bash
+curl -s https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+    | jq -r '.tag_name'
+```
+
+#### Install (official script — recommended)
+```bash
+curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+    | sudo sh -s -- -b /usr/local/bin
+```
+
+#### Install (apt repository)
+```bash
+sudo apt-get install -y wget gnupg
+wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+    | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] \
+    https://aquasecurity.github.io/trivy-repo/deb generic main" \
+    | sudo tee /etc/apt/sources.list.d/trivy.list
+sudo apt-get update && sudo apt-get install -y trivy
+```
+
+#### Verify installation
+```bash
+trivy --version
+# Expected: Version: x.y.z
+```
+
+#### Download vulnerability database (required before first offline use)
+```bash
+# Pre-download the CVE database (requires internet)
+trivy image --download-db-only
+trivy image --download-java-db-only
+
+# DB is cached at:
+ls ~/.cache/trivy/db/
+```
+
+#### Offline operation
+```bash
+# After downloading the DB, run offline:
+trivy fs <repo_dir> \
+    --scanners vuln \
+    --severity HIGH,CRITICAL \
+    --skip-db-update \
+    --offline-scan
+```
+
+#### Functional test
+```bash
+mkdir /tmp/trivy-test
+
+# Create a requirements.txt with a known vulnerable package
+cat > /tmp/trivy-test/requirements.txt << 'EOF'
+Pillow==9.0.0
+requests==2.18.0
+EOF
+
+trivy fs /tmp/trivy-test \
+    --scanners vuln \
+    --severity HIGH,CRITICAL \
+    --format table
+# Expected: findings for known CVEs in Pillow 9.0.0 and requests 2.18.0
+
+# Clean requirements
+cat > /tmp/trivy-test/requirements_clean.txt << 'EOF'
+Pillow==10.3.0
+requests==2.32.3
+EOF
+
+trivy fs /tmp/trivy-test/requirements_clean.txt \
+    --scanners vuln \
+    --severity HIGH,CRITICAL \
+    --format table
+# Expected: No vulnerabilities found
+
+rm -rf /tmp/trivy-test
+```
+
+---
+
+### 5.7 pip-audit — Python CVE (Layer 3) {#pip-audit}
+
+**What it does:** audits Python requirements files against the Python Packaging Advisory Database (PyPA) and OSV.
+
+#### Find the latest version
+```bash
+curl -s https://pypi.org/pypi/pip-audit/json | jq -r '.info.version'
+```
+
+#### Install
+```bash
+pip install pip-audit
+```
+
+#### Verify installation
+```bash
+pip-audit --version
+# Expected: pip-audit x.y.z
+```
+
+#### Offline operation
+pip-audit requires internet to query the PyPA/OSV database. For offline use, use trivy with `--offline-scan` instead (covers the same packages).
+
+#### Functional test
+```bash
+cat > /tmp/req_vuln.txt << 'EOF'
+Pillow==9.0.0
+requests==2.18.0
+EOF
+
+pip-audit -r /tmp/req_vuln.txt
+# Expected: one or more vulnerabilities listed, exit code 1
+
+cat > /tmp/req_clean.txt << 'EOF'
+Pillow==10.3.0
+requests==2.32.3
+EOF
+
+pip-audit -r /tmp/req_clean.txt
+# Expected: No known vulnerabilities found, exit code 0
+
+rm /tmp/req_vuln.txt /tmp/req_clean.txt
+```
+
+---
+
+### 5.8 safety — Python Advisories (Layer 3) {#safety}
+
+**What it does:** checks Python dependencies against the Safety DB (PyUp.io), a curated advisory database with additional entries not always in OSV.
+
+#### Find the latest version
+```bash
+curl -s https://pypi.org/pypi/safety/json | jq -r '.info.version'
+```
+
+#### Install
+```bash
+pip install safety
+```
+
+#### Verify installation
+```bash
+safety --version
+# Expected: safety, version x.y.z
+```
+
+#### Offline operation
+safety requires internet for DB queries. For offline environments, use trivy as the primary SCA scanner.
+
+#### Functional test
+```bash
+cat > /tmp/req_vuln.txt << 'EOF'
+Pillow==9.0.0
+EOF
+
+safety check -r /tmp/req_vuln.txt
+# Expected: vulnerabilities found, exit code 64
+
+cat > /tmp/req_clean.txt << 'EOF'
+Pillow==10.3.0
+EOF
+
+safety check -r /tmp/req_clean.txt
+# Expected: No known security vulnerabilities found, exit code 0
+
+rm /tmp/req_vuln.txt /tmp/req_clean.txt
+```
+
+---
+
+### 5.9 npm + npm audit — Node.js CVE (Layer 3) {#npm-audit}
+
+**What it does:** built into npm — audits `package-lock.json` against the npm security advisory registry for known CVEs in Node.js dependencies.
+
+#### Find the latest version
+```bash
+npm --version
+node --version
+# npm is bundled with Node.js; update both together
+```
+
+#### Install (via NodeSource — LTS)
+```bash
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+#### Verify installation
+```bash
+node --version    # Expected: v20.x.x or v22.x.x
+npm  --version    # Expected: 10.x.x or later
+npm audit --version 2>/dev/null || echo "npm audit is built-in"
+```
+
+#### Offline operation
+npm audit requires internet to query the npm advisory registry. No offline mode is available.
+
+#### Functional test
+```bash
+mkdir /tmp/npm-test && cd /tmp/npm-test
+
+# Create a package.json with a known vulnerable package
+cat > package.json << 'EOF'
+{
+  "name": "test",
+  "version": "1.0.0",
+  "dependencies": {
+    "lodash": "4.17.4"
+  }
+}
+EOF
+
+npm install --package-lock-only 2>/dev/null
+npm audit --json | jq '.metadata.vulnerabilities'
+# Expected: object with non-zero high/critical counts
+
+cd / && rm -rf /tmp/npm-test
+```
+
+---
+
+### 5.10 Bandit — Python SAST (Layer 5) {#bandit}
+
+**What it does:** Python-specific static analyser with 100+ plugins detecting SQL injection, shell injection, hardcoded passwords, weak crypto, insecure deserialization, and more.
+
+#### Find the latest version
+```bash
+curl -s https://pypi.org/pypi/bandit/json | jq -r '.info.version'
+```
+
+#### Install
+```bash
+pip install bandit
+```
+
+#### Verify installation
+```bash
+bandit --version
+# Expected: bandit x.y.z  (Python x.y.z)
+```
+
+#### Offline operation
+Bandit has no external database. Works fully offline.
+
+#### Functional test
+```bash
+cat > /tmp/test_bandit.py << 'EOF'
+import subprocess
+import hashlib
+
+# B602 - subprocess with shell=True
+def run(cmd):
+    subprocess.call(cmd, shell=True)
+
+# B324 - use of weak hash
+def hash_password(pwd):
+    return hashlib.md5(pwd.encode()).hexdigest()
+EOF
+
+bandit -ll /tmp/test_bandit.py
+# Expected: Issue: [B602] ... [B324] ... exit code 1
+
+cat > /tmp/test_bandit_clean.py << 'EOF'
+import subprocess
+import hashlib
+
+def run(cmd_list):
+    subprocess.call(cmd_list)
+
+def hash_password(pwd):
+    return hashlib.sha256(pwd.encode()).hexdigest()
+EOF
+
+bandit -ll /tmp/test_bandit_clean.py
+# Expected: No issues identified, exit code 0
+
+rm /tmp/test_bandit.py /tmp/test_bandit_clean.py
+```
+
+---
+
+### 5.11 ShellCheck — Shell Script SAST (Layer 5) {#shellcheck}
+
+**What it does:** static analyser for bash/sh/dash/ksh. Detects quoting errors, command injection risks, undefined variables, deprecated syntax, and unsafe patterns.
+
+#### Find the latest version
+```bash
+apt-cache policy shellcheck | grep Candidate
+# or latest binary from GitHub:
+curl -s https://api.github.com/repos/koalaman/shellcheck/releases/latest \
+    | jq -r '.tag_name'
+```
+
+#### Install (apt)
+```bash
+sudo apt-get install -y shellcheck
+```
+
+#### Install (latest binary from GitHub)
+```bash
+VERSION=$(curl -s https://api.github.com/repos/koalaman/shellcheck/releases/latest \
+    | jq -r '.tag_name')
+curl -sSL "https://github.com/koalaman/shellcheck/releases/download/${VERSION}/shellcheck-${VERSION}.linux.x86_64.tar.xz" \
+    | tar -xJ --strip-components=1 -C /tmp
+sudo mv /tmp/shellcheck /usr/local/bin/shellcheck
+```
+
+#### Verify installation
+```bash
+shellcheck --version
+# Expected: version: x.y.z
+```
+
+#### Offline operation
+ShellCheck has no external database. Works fully offline.
+
+#### Functional test
+```bash
+cat > /tmp/test.sh << 'EOF'
+#!/bin/bash
+filename=$1
+if [ $filename == "admin" ]; then
+  echo "Hello $filename"
+fi
+rm -rf /$filename
+EOF
+
+shellcheck --severity=warning /tmp/test.sh
+# Expected: SC2086 (unquoted variable), SC2115 (unsafe rm), exit code 1
+
+cat > /tmp/test_clean.sh << 'EOF'
+#!/bin/bash
+filename="$1"
+if [[ "$filename" == "admin" ]]; then
+  echo "Hello $filename"
+fi
+EOF
+
+shellcheck --severity=warning /tmp/test_clean.sh
+# Expected: exit code 0
+
+rm /tmp/test.sh /tmp/test_clean.sh
+```
+
+---
+
+### 5.12 cppcheck — C/C++ SAST (Layer 5) {#cppcheck}
+
+**What it does:** static analyser for C and C++ detecting buffer overflows, memory leaks, null-pointer dereferences, use-after-free, and undefined behaviour without compiling.
+
+#### Find the latest version
+```bash
+apt-cache policy cppcheck | grep Candidate
+# or from GitHub:
+curl -s https://api.github.com/repos/danmar/cppcheck/releases/latest \
+    | jq -r '.tag_name'
+```
+
+#### Install (apt)
+```bash
+sudo apt-get install -y cppcheck
+```
+
+#### Verify installation
+```bash
+cppcheck --version
+# Expected: Cppcheck x.y
+```
+
+#### Offline operation
+cppcheck has no external database. Works fully offline.
+
+#### Functional test
+```bash
+cat > /tmp/test.cpp << 'EOF'
+#include <string.h>
+void test() {
+    char buf[10];
+    strcpy(buf, "Hello, this string is too long and will overflow the buffer!");
+    int* p = new int(42);
+    delete p;
+    *p = 100;  // use after free
+}
+EOF
+
+cppcheck --enable=warning,security --error-exitcode=1 /tmp/test.cpp
+# Expected: errors for buffer overflow and use-after-free, exit code 1
+
+cat > /tmp/test_clean.cpp << 'EOF'
+#include <cstring>
+void test() {
+    char buf[100];
+    strncpy(buf, "Hello", sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+}
+EOF
+
+cppcheck --enable=warning,security --error-exitcode=1 /tmp/test_clean.cpp
+# Expected: no errors, exit code 0
+
+rm /tmp/test.cpp /tmp/test_clean.cpp
+```
+
+---
+
+### 5.13 hadolint — Dockerfile Linter (Layer 5) {#hadolint}
+
+**What it does:** enforces Dockerfile best practices and detects security misconfigurations: running as root, `:latest` tags, baked-in secrets, ADD vs COPY, shell injection.
+
+#### Find the latest version
+```bash
+curl -s https://api.github.com/repos/hadolint/hadolint/releases/latest \
+    | jq -r '.tag_name'
+```
+
+#### Install (binary)
+```bash
+VERSION=$(curl -s https://api.github.com/repos/hadolint/hadolint/releases/latest \
+    | jq -r '.tag_name')
+curl -sSL "https://github.com/hadolint/hadolint/releases/download/${VERSION}/hadolint-Linux-x86_64" \
+    -o /usr/local/bin/hadolint
+sudo chmod +x /usr/local/bin/hadolint
+```
+
+#### Verify installation
+```bash
+hadolint --version
+# Expected: Haskell Dockerfile Linter x.y.z
+```
+
+#### Offline operation
+hadolint has no external database. Works fully offline.
+
+#### Functional test
+```bash
+cat > /tmp/Dockerfile_bad << 'EOF'
+FROM ubuntu:latest
+RUN apt-get update && apt-get install -y curl
+ADD https://example.com/script.sh /tmp/
+ENV PASSWORD=mysecretpassword
+RUN /tmp/script.sh
+EOF
+
+hadolint /tmp/Dockerfile_bad
+# Expected: DL3007 (latest tag), DL3009 (delete apt cache), SC2046, etc.
+
+cat > /tmp/Dockerfile_good << 'EOF'
+FROM ubuntu:22.04
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY script.sh /tmp/script.sh
+USER nobody
+EOF
+
+hadolint /tmp/Dockerfile_good
+# Expected: no output or only style suggestions, exit code 0
+
+rm /tmp/Dockerfile_bad /tmp/Dockerfile_good
+```
+
+---
+
+### 5.14 checkov — Terraform / IaC SAST (Layer 5) {#checkov}
+
+**What it does:** static analysis for Terraform, CloudFormation, Kubernetes YAML, Ansible and ARM templates. Maps findings to CIS Benchmarks, NIST, SOC2, and OWASP. 1000+ built-in checks.
+
+#### Find the latest version
+```bash
+curl -s https://pypi.org/pypi/checkov/json | jq -r '.info.version'
+```
+
+#### Install
+```bash
+pip install checkov
+```
+
+#### Verify installation
+```bash
+checkov --version
+# Expected: x.y.z
+```
+
+#### Offline operation
+checkov uses local checks only — works fully offline. No external DB required.
+
+#### Functional test
+```bash
+mkdir /tmp/tf-test
+
+cat > /tmp/tf-test/main.tf << 'EOF'
+resource "aws_s3_bucket" "public_bucket" {
+  bucket = "my-public-bucket"
+  acl    = "public-read"
+}
+
+resource "aws_security_group" "open" {
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+EOF
+
+checkov -d /tmp/tf-test --framework terraform --compact
+# Expected: FAILED checks (public S3 bucket, open SSH to world)
+
+cat > /tmp/tf-test/main_secure.tf << 'EOF'
+resource "aws_s3_bucket" "private_bucket" {
+  bucket = "my-private-bucket"
+}
+resource "aws_s3_bucket_acl" "private" {
+  bucket = aws_s3_bucket.private_bucket.id
+  acl    = "private"
+}
+EOF
+
+checkov -f /tmp/tf-test/main_secure.tf --framework terraform --compact
+# Expected: all checks passed or significantly fewer failures
+
+rm -rf /tmp/tf-test
+```
+
+---
+
+### 5.15 ScanCode Toolkit — Licence & Copyright (Layer 6) {#scancode}
+
+**What it does:** full-text licence detection using 30 000+ licence texts (SPDX), copyright notice extraction, package manifest detection, and CVE lookup in detected packages. Produces JSON/SPDX/CycloneDX reports.
+
+#### Find the latest version
+```bash
+curl -s https://pypi.org/pypi/scancode-toolkit/json | jq -r '.info.version'
+```
+
+#### Install
+```bash
+pip install scancode-toolkit
+```
+
+> ScanCode is a large package (~500 MB installed). Installation may take 5–10 minutes.
+
+#### Verify installation
+```bash
+scancode --version
+# Expected: ScanCode version x.y.z
+```
+
+#### Offline operation
+ScanCode works **fully offline** — all licence texts and detection logic are bundled in the package. No external DB or internet required at scan time.
+
+#### Functional test
+```bash
+mkdir /tmp/sc-test
+
+# File with a GPL licence header
+cat > /tmp/sc-test/app.py << 'EOF'
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# Copyright (C) 2024 Example Corp.
+import os
+
+def main():
+    print("hello")
+EOF
+
+# File with a permissive MIT licence
+cat > /tmp/sc-test/lib.py << 'EOF'
+# MIT License
+# Copyright (c) 2024 Example Corp
+# Permission is hereby granted, free of charge, to any person obtaining a copy...
+def helper():
+    pass
+EOF
+
+scancode --license --copyright \
+    --json-pp /tmp/sc-report.json \
+    --quiet \
+    /tmp/sc-test
+
+# Check detections
+jq '.files[] | {path: .path, licenses: [.license_detections[].matches[].spdx_license_expression]}' \
+    /tmp/sc-report.json
+
+# Expected: GPL-3.0-or-later detected in app.py, MIT in lib.py
+
+rm -rf /tmp/sc-test /tmp/sc-report.json
+```
+
+---
+
+## 6. Pipeline Scripts Installation {#scripts}
+
+### 6.1 Clone from GitHub
+```bash
+git clone https://github.com/gaillotte/claude.git
+cd claude
+git checkout claude/vigilant-carson-f8twy0
+```
+
+### 6.2 Install Python dependencies for report generation
+```bash
+pip install openpyxl reportlab
+```
+
+### 6.3 Make scripts executable
+```bash
+chmod +x ai_transit.sh fetch_repo.sh scan_pipeline.sh
+```
+
+### 6.4 Verify scripts
+```bash
+bash -n ai_transit.sh    && echo "ai_transit.sh: syntax OK"
+bash -n fetch_repo.sh    && echo "fetch_repo.sh: syntax OK"
+bash -n scan_pipeline.sh && echo "scan_pipeline.sh: syntax OK"
+python3 -c "import ast; ast.parse(open('generate_excel_report.py').read())" \
+    && echo "generate_excel_report.py: syntax OK"
+python3 -c "import ast; ast.parse(open('selfcheck.py').read())" \
+    && echo "selfcheck.py: syntax OK"
+```
+
+---
+
+## 7. Directory Structure Setup {#directories}
+
+```bash
+sudo mkdir -p /opt/ai-transit/{fetch,quarantine,approved,reports,logs,yara-rules}
+sudo chmod 700 /opt/ai-transit/quarantine
+sudo chown -R $USER:$USER /opt/ai-transit
+mkdir -p Good
+```
+
+Copy your YARA rules to `/opt/ai-transit/yara-rules/` (see §5.4 for a minimal test rule).
+
+---
+
+## 8. Environment Variables {#env-vars}
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WORK_DIR` | `/opt/ai-transit` | Root working directory |
+| `OUTPUT_DIR` | `<script_dir>/Good` | Output directory for approved ZIPs |
+
+Add to `~/.bashrc`:
+```bash
+export WORK_DIR="/opt/ai-transit"
+export OUTPUT_DIR="/opt/ai-transit/approved"
+```
+
+Or pass inline:
+```bash
+WORK_DIR=/data/ai-transit ./ai_transit.sh https://github.com/org/repo
+```
+
+---
+
+## 9. Full Installation Verification {#verification}
+
+Save this as `verify_install.sh` and run it after completing all sections above:
+
+```bash
+#!/usr/bin/env bash
+# verify_install.sh — checks all required and optional tools
+
+PASS=0; WARN=0; FAIL=0
+
+check()   {
+    local name="$1" cmd="$2"
+    if command -v "$cmd" &>/dev/null; then
+        echo -e "\033[32m[OK]\033[0m    $name"
+        (( PASS++ ))
+    else
+        echo -e "\033[33m[WARN]\033[0m  $name — optional, not installed"
+        (( WARN++ ))
+    fi
+}
+
+require() {
+    local name="$1" cmd="$2"
+    if command -v "$cmd" &>/dev/null; then
+        echo -e "\033[32m[OK]\033[0m    $name"
+        (( PASS++ ))
+    else
+        echo -e "\033[31m[FAIL]\033[0m  $name — REQUIRED, not installed"
+        (( FAIL++ ))
+    fi
+}
+
+echo "=== Core system ==="
+require "bash"        bash
+require "git"         git
+require "python3"     python3
+require "pip"         pip
+require "curl"        curl
+require "jq"          jq
+require "zip"         zip
+require "sha256sum"   sha256sum
+require "file"        file
+
+echo ""
+echo "=== Python report packages ==="
+python3 -c "import openpyxl"  2>/dev/null \
+    && { echo -e "\033[32m[OK]\033[0m    openpyxl"; (( PASS++ )); } \
+    || { echo -e "\033[31m[FAIL]\033[0m  openpyxl — pip install openpyxl"; (( FAIL++ )); }
+python3 -c "import reportlab" 2>/dev/null \
+    && { echo -e "\033[32m[OK]\033[0m    reportlab"; (( PASS++ )); } \
+    || { echo -e "\033[31m[FAIL]\033[0m  reportlab — pip install reportlab"; (( FAIL++ )); }
+
+echo ""
+echo "=== Layer 1 — Secrets & AV ==="
+check "betterleaks"     betterleaks
+check "detect-secrets"  detect-secrets
+check "ClamAV"          clamscan
+check "YARA"            yara
+
+echo ""
+echo "=== Layer 2 — OWASP/CWE ==="
+check "Semgrep"         semgrep
+
+echo ""
+echo "=== Layer 3 — SCA/CVE ==="
+check "trivy"           trivy
+check "pip-audit"       pip-audit
+check "safety"          safety
+check "npm"             npm
+
+echo ""
+echo "=== Layer 5 — SAST ==="
+check "Bandit"          bandit
+check "ShellCheck"      shellcheck
+check "cppcheck"        cppcheck
+check "hadolint"        hadolint
+check "checkov"         checkov
+
+echo ""
+echo "=== Layer 6 — Licence ==="
+check "scancode"        scancode
+
+echo ""
+echo "=== Summary ==="
+echo -e "  \033[32mOK: $PASS\033[0m  |  \033[33mOptional missing: $WARN\033[0m  |  \033[31mRequired missing: $FAIL\033[0m"
+[[ $FAIL -eq 0 ]] \
+    && echo -e "\033[32mInstallation COMPLETE — pipeline ready\033[0m" \
+    || echo -e "\033[31mInstallation INCOMPLETE — fix FAIL items above\033[0m"
+```
+
+```bash
+chmod +x verify_install.sh && ./verify_install.sh
+```
+
+---
+
+## 10. Offline Operation {#offline}
+
+The table below summarises offline readiness for each tool:
+
+| Tool | Offline? | Preparation needed |
+|------|----------|--------------------|
+| betterleaks | ✔ Yes | None — rules embedded in binary |
+| detect-secrets | ✔ Yes | None — rules embedded |
+| ClamAV | ✔ Yes | Run `freshclam` on a connected machine, then copy `/var/lib/clamav/` DB files |
+| YARA | ✔ Yes | None — local `.yar` rule files only |
+| Semgrep | ✔ Yes* | Pre-download rules: `semgrep --config p/owasp-top-ten --dump-config > rules.yaml` |
+| trivy | ✔ Yes* | Run `trivy image --download-db-only` first; use `--skip-db-update --offline-scan` |
+| pip-audit | ✗ No | Use trivy offline as fallback |
+| safety | ✗ No | Use trivy offline as fallback |
+| npm audit | ✗ No | No offline mode available |
+| grep (L4) | ✔ Yes | Built-in — always available |
+| Bandit | ✔ Yes | None |
+| ShellCheck | ✔ Yes | None |
+| cppcheck | ✔ Yes | None |
+| hadolint | ✔ Yes | None |
+| checkov | ✔ Yes | None — local checks only |
+| ScanCode | ✔ Yes | None — all licence texts bundled |
+
+### Offline preparation script
+
+Run this once on a machine with internet access, then copy `/opt/ai-transit/offline-cache/` to the air-gapped host:
+
+```bash
+#!/usr/bin/env bash
+# prepare_offline_cache.sh
+CACHE="/opt/ai-transit/offline-cache"
+mkdir -p "${CACHE}/semgrep-rules" "${CACHE}/trivy-db"
+
+echo "[1/3] Downloading Semgrep rules..."
+semgrep --config p/owasp-top-ten  --dump-config > "${CACHE}/semgrep-rules/owasp.yaml"
+semgrep --config p/cwe-top-25     --dump-config > "${CACHE}/semgrep-rules/cwe.yaml"
+semgrep --config p/security-audit --dump-config > "${CACHE}/semgrep-rules/audit.yaml"
+semgrep --config p/secrets        --dump-config > "${CACHE}/semgrep-rules/secrets.yaml"
+
+echo "[2/3] Downloading trivy DB..."
+TRIVY_DB_REPOSITORY=ghcr.io/aquasecurity/trivy-db \
+    trivy image --download-db-only --cache-dir "${CACHE}/trivy-db"
+
+echo "[3/3] Copying ClamAV DB..."
+cp /var/lib/clamav/*.cvd  "${CACHE}/" 2>/dev/null || \
+cp /var/lib/clamav/*.cld  "${CACHE}/" 2>/dev/null || true
+
+echo "Done. Copy ${CACHE} to the offline host."
+```
+
+---
+
+## 11. Sample Scans — Testing the Pipeline {#samples}
+
+### 11.1 Quick smoke test (local directory)
+
+Create a small test repository to validate the pipeline end-to-end:
+
+```bash
+#!/usr/bin/env bash
+# create_test_repo.sh — creates a clean sample repo that should PASS
+
+mkdir -p /tmp/sample-repo/{src,tests,infra}
+
+# Python source
+cat > /tmp/sample-repo/src/app.py << 'EOF'
+import os
+import sqlite3
+
+def get_user(db_path: str, username: str) -> list:
+    """Retrieve user using parameterised query (safe)."""
+    conn = sqlite3.connect(db_path)
+    return conn.execute(
+        "SELECT * FROM users WHERE name = ?", (username,)
+    ).fetchall()
+
+def main():
+    db = os.environ.get("DB_PATH", "/tmp/app.db")
+    print(get_user(db, "alice"))
+EOF
+
+# Shell script
+cat > /tmp/sample-repo/src/setup.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+APP_DIR="${APP_DIR:-/opt/app}"
+mkdir -p "$APP_DIR"
+echo "Setup complete"
+EOF
+
+# Requirements file (up-to-date)
+cat > /tmp/sample-repo/requirements.txt << 'EOF'
+requests==2.32.3
+Pillow==10.3.0
+EOF
+
+# README
+echo "# Sample project" > /tmp/sample-repo/README.md
+
+echo "Test repo created at /tmp/sample-repo"
+```
+
+```bash
+bash create_test_repo.sh
+./ai_transit.sh /tmp/sample-repo
+# Expected: PASS — ZIP produced in ./Good/
+```
+
+---
+
+### 11.2 FAIL test — embedded secret
+
+```bash
+mkdir -p /tmp/fail-secret
+
+cat > /tmp/fail-secret/config.py << 'EOF'
+# Bad practice: hardcoded credential
+AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+EOF
+
+./ai_transit.sh /tmp/fail-secret
+# Expected: FAIL — betterleaks or detect-secrets detects the AWS keys
+# Files moved to /opt/ai-transit/quarantine/
+
+rm -rf /tmp/fail-secret
+```
+
+---
+
+### 11.3 FAIL test — SQL injection (OWASP A03)
+
+```bash
+mkdir -p /tmp/fail-sqli
+
+cat > /tmp/fail-sqli/db.py << 'EOF'
+import sqlite3
+
+def login(username, password):
+    conn = sqlite3.connect("app.db")
+    query = "SELECT * FROM users WHERE name='" + username + \
+            "' AND pass='" + password + "'"
+    return conn.execute(query).fetchall()
+EOF
+
+./ai_transit.sh /tmp/fail-sqli
+# Expected: FAIL — Semgrep detects SQL injection (OWASP A03 / CWE-89)
+
+rm -rf /tmp/fail-sqli
+```
+
+---
+
+### 11.4 FAIL test — vulnerable dependency (CVE)
+
+```bash
+mkdir -p /tmp/fail-cve
+
+cat > /tmp/fail-cve/requirements.txt << 'EOF'
+Pillow==9.0.0
+requests==2.18.0
+EOF
+
+./ai_transit.sh /tmp/fail-cve
+# Expected: FAIL — trivy/pip-audit detect CVEs in Pillow 9.0.0
+
+rm -rf /tmp/fail-cve
+```
+
+---
+
+### 11.5 WARN test — risky licence (GPL)
+
+```bash
+mkdir -p /tmp/warn-licence
+
+cat > /tmp/warn-licence/main.py << 'EOF'
+# This file is licensed under the GNU General Public License v3.0
+# Copyright (C) 2024 Example Corp.
+# You may redistribute and/or modify under the terms of the GPL.
+
+def hello():
+    print("hello")
+EOF
+
+./ai_transit.sh /tmp/warn-licence
+# Expected: PASS (WARN logged) — ScanCode detects GPL-3.0 licence
+# ZIP produced in ./Good/ but WARN logged for legal review
+
+rm -rf /tmp/warn-licence
+```
+
+---
+
+### 11.6 FAIL test — Dockerfile misconfigurations
+
+```bash
+mkdir -p /tmp/fail-docker
+
+cat > /tmp/fail-docker/Dockerfile << 'EOF'
+FROM ubuntu:latest
+ENV DB_PASSWORD=mysecretpassword
+RUN apt-get update && apt-get install -y curl
+ADD https://example.com/app.tar.gz /app/
+EOF
+
+./ai_transit.sh /tmp/fail-docker
+# Expected: FAIL — hadolint detects :latest tag, ENV secret, ADD from URL
+
+rm -rf /tmp/fail-docker
+```
+
+---
+
+### 11.7 Scan a real public GitHub repository
+
+```bash
+# Scan a small, well-known public repo (adjust URL as needed)
+./ai_transit.sh https://github.com/psf/requests main
+# Expected: PASS or WARN — clean repo, dependencies may have minor CVEs
+```
+
+---
+
+### 11.8 Run the self-check to verify the pipeline itself
+
+```bash
+python3 selfcheck.py \
+    --bundle-dir . \
+    --output selfcheck_report.pdf
+
+# Expected output:
+#   §11.1 Meta-scan      → PASS or WARN
+#   §11.2 Binary checks  → SKIP (unless --checksums provided)
+#   §11.3 GPG/cosign     → PASS or WARN
+#   §11.4 Python CVE     → PASS
+#   §11.5 Host OS CVE    → PASS or WARN
+#   §11.6 Bundle integrity → PASS
+#   §11.7 AIDE           → SKIP (unless AIDE installed)
+```
+
+---
+
+## 12. Self-Scan: Verifying the Installation is Safe {#self-scan}
+
+Before deploying in a production environment, run the full self-check:
+
+```bash
+python3 selfcheck.py --bundle-dir . --output selfcheck_report.pdf
+```
+
+This executes all §11 checks (meta-scan, binary checksums, GPG/cosign, Python CVE scan, host OS CVE, bundle integrity, AIDE) and produces a colour-coded PDF report. See `selfcheck.py --help` for all options.
+
+---
+
+## 13. Security Hardening Recommendations {#hardening}
+
+### Dedicated service account
+```bash
+sudo useradd -r -m -d /opt/ai-transit -s /bin/bash aitransit
+sudo chown -R aitransit:aitransit /opt/ai-transit
+sudo -u aitransit ./ai_transit.sh https://github.com/org/repo
+```
+
+### Network isolation (allow only github.com outbound)
+```bash
+sudo ufw default deny outgoing
+sudo ufw allow out 443 comment "HTTPS for GitHub"
+sudo ufw allow out 53  comment "DNS"
+sudo ufw enable
+```
+
+### Quarantine filesystem (noexec)
+```bash
+# /etc/fstab
+tmpfs /opt/ai-transit/quarantine tmpfs rw,noexec,nosuid,nodev,size=2G 0 0
+```
+
+### Weekly tool updates (cron)
+```bash
+# /etc/cron.weekly/ai-transit-update
+#!/bin/bash
+freshclam
+trivy image --download-db-only
+source /opt/ai-transit/venv/bin/activate
+pip install --upgrade betterleaks detect-secrets semgrep bandit \
+    pip-audit safety checkov scancode-toolkit
+```
+
+### Log rotation
 ```bash
 # /etc/logrotate.d/ai-transit
 /opt/ai-transit/logs/*.log {
@@ -551,305 +1467,67 @@ rule Suspicious_Base64_Exec {
 }
 ```
 
-### 9.6 Regular tool updates
-
-Schedule weekly updates for security tool databases:
-
-```bash
-# /etc/cron.weekly/ai-transit-update
-#!/bin/bash
-freshclam                    # ClamAV virus definitions
-trivy image --download-db-only  # trivy CVE database
-semgrep --update             # Semgrep rules
-```
-
 ---
 
-## 10. Troubleshooting
+## 14. Troubleshooting {#troubleshooting}
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| `fetch_repo.sh: Hôte refusé` | Non-GitHub URL passed | Only `github.com` URLs are accepted |
-| `Repo trop volumineux` | Repository exceeds 500 MB | Review the target repo; increase `MAX_SIZE_MB` in `fetch_repo.sh` if justified |
-| `openpyxl manquant` | Python package not installed | `pip install openpyxl` |
-| Excel file not in ZIP | `openpyxl` import fails silently | Run `python3 generate_excel_report.py` manually to see the error |
-| `declare -A: invalid option` | Bash < 4.0 (e.g., macOS default bash) | Install Bash 5 via Homebrew (`brew install bash`) or use WSL2 |
-| Semgrep not finding rules | Semgrep not logged in / no rules | `semgrep login` or use `--config auto` offline |
-| trivy DB not found | First run without internet | `trivy image --download-db-only` with internet access first |
-| `chmod 700` fails on quarantine | Running as non-owner | Run as the `aitransit` service account or with `sudo` |
+| `betterleaks: command not found` | Binary not in PATH | `sudo cp ~/go/bin/betterleaks /usr/local/bin/` |
+| `freshclam: connect refused` | clamav-freshclam not running | `sudo systemctl start clamav-freshclam` |
+| `semgrep: network error` | No internet — first run | Pre-download rules (see §10) |
+| `trivy: DB not found` | First run without internet | `trivy image --download-db-only` |
+| `scancode: takes too long` | Large repo | Use `--timeout 30` to limit per-file time |
+| `pip-audit: no vulnerabilities` on old packages | DB unreachable | Check internet; use trivy offline instead |
+| `npm audit: ENOLOCK` | No package-lock.json | Run `npm install --package-lock-only` first |
+| `openpyxl manquant` | Not installed in venv | `pip install openpyxl` |
+| `declare -A: invalid option` | Bash < 4.0 | Install bash 5: `brew install bash` / use WSL2 |
 | `zip: command not found` | zip not installed | `sudo apt-get install zip` |
-| Pipeline always FAILs on WARN | Strict mode not intended | WARNs do not block the pipeline; only FAIL findings block it |
-| Git clone fails on private repos | Private repo URL | Only public GitHub repositories are supported |
+| WARN on all files | Missing optional tools | Install missing tools; WARNs do not block |
+| Git clone fails | Private repo | Only public GitHub repos are supported |
 
 ---
 
-## Quick Reference — One-Line Install (Ubuntu 22.04)
+## Quick Reference — One-Line Install (Ubuntu 22.04 / 24.04)
 
 ```bash
-# Core + all optional tools in one command (Ubuntu 22.04)
-sudo apt-get update && \
-sudo apt-get install -y bash git curl jq zip unzip file coreutils \
-    python3 python3-pip python3-venv shellcheck cppcheck clamav yara nodejs && \
-python3 -m venv /opt/ai-transit/venv && \
-source /opt/ai-transit/venv/bin/activate && \
-pip install openpyxl detect-secrets bandit pip-audit safety semgrep checkov scancode-toolkit && \
-curl -sSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin && \
-sudo freshclam && \
-echo "Installation complete"
-```
+# Step 1: system packages
+sudo apt-get update && sudo apt-get install -y \
+    bash git curl jq zip unzip file coreutils wget gpg \
+    python3 python3-pip python3-venv build-essential golang-go \
+    nodejs npm shellcheck cppcheck clamav clamav-daemon yara
 
----
-
----
-
-## 11. Self-Scan: Verifying the Installation is Safe {#self-scan}
-
-Before deploying the pipeline in a production or enterprise environment, you should verify that:
-
-1. The **bundle scripts and Python files** are themselves free of malicious patterns.
-2. The **third-party binaries** you installed match their published checksums.
-3. The **Python packages** you pulled from PyPI do not carry known CVEs.
-4. The **installed tools** have not been tampered with after installation.
-
-This section walks through each of these verification steps.
-
----
-
-### 11.1 Run the pipeline against its own source code (meta-scan)
-
-The most natural way to validate the bundle is to scan it with itself.
-
-```bash
-# Point the pipeline at the directory containing the scripts
-./ai_transit.sh /path/to/ai-transit-bundle
-```
-
-A clean installation will produce a **PASS** result. Any unexpected FAIL or WARN finding on the bundle's own files should be investigated before deployment.
-
-> **What this checks:**
-> - L1: betterleaks / detect-secrets scan the `.sh` and `.py` files for accidentally embedded secrets or credentials.
-> - L2: Semgrep applies OWASP / CWE / CERT rules to the Python source (`generate_excel_report.py`, `build_*.py`).
-> - L6: ScanCode scans all files for licences (SPDX), copyrights, and CVEs in detected packages.
-> - L4: Universal pattern checks run on every file (hardcoded credentials, path traversal, dangerous calls).
-> - L5: Bandit runs on every `.py` file; ShellCheck runs on every `.sh` file.
-
----
-
-### 11.2 Verify binary checksums
-
-For each third-party binary you downloaded manually, compare its SHA-256 hash against the value published on the official release page before first use.
-
-```bash
-#!/usr/bin/env bash
-# check_binaries.sh — verify installed binary hashes
-
-PASS=0; FAIL=0
-
-verify() {
-    local name="$1" path="$2" expected_sha="$3"
-    if [[ ! -f "$path" ]]; then
-        echo "[SKIP]  $name — not installed"
-        return
-    fi
-    actual=$(sha256sum "$path" | awk '{print $1}')
-    if [[ "$actual" == "$expected_sha" ]]; then
-        echo -e "\033[32m[OK]\033[0m    $name — checksum matches"
-        (( PASS++ ))
-    else
-        echo -e "\033[31m[FAIL]\033[0m  $name — CHECKSUM MISMATCH"
-        echo "         Expected : $expected_sha"
-        echo "         Got      : $actual"
-        (( FAIL++ ))
-    fi
-}
-
-# Replace the SHA values below with those published on each tool's GitHub release page
-# for the exact version you installed.
-echo "=== Binary integrity check ==="
-verify "betterleaks" "/usr/local/bin/betterleaks" \
-    "<SHA256_FROM_BETTERLEAKS_RELEASE_PAGE>"
-
-verify "trivy" "/usr/local/bin/trivy" \
-    "<SHA256_FROM_TRIVY_RELEASE_PAGE>"
-
-verify "hadolint" "/usr/local/bin/hadolint" \
-    "<SHA256_FROM_HADOLINT_RELEASE_PAGE>"
-
-echo ""
-echo "Result: OK=$PASS  FAIL=$FAIL"
-[[ $FAIL -eq 0 ]] && echo "All checksums verified." \
-                  || echo "STOP — do not use tampered binaries."
-```
-
-**How to get the expected SHA:**
-- **betterleaks**: `https://github.com/betterleaks/betterleaks/releases` → `checksums.txt` attached to the release.
-- **trivy**: `https://github.com/aquasecurity/trivy/releases` → `trivy_<version>_Linux-64bit.tar.gz.sha256`.
-- **hadolint**: `https://github.com/hadolint/hadolint/releases` → SHA-256 listed next to the binary download link.
-
-```bash
-chmod +x check_binaries.sh && ./check_binaries.sh
-```
-
----
-
-### 11.3 Verify GPG signatures (optional but recommended)
-
-Several tools publish GPG-signed release artifacts. Verifying the signature provides a stronger guarantee than a checksum alone (the checksum file itself could be tampered with).
-
-**Example for betterleaks:**
-
-```bash
-# Import the betterleaks signing key
-curl -sSL https://github.com/betterleaks.gpg | gpg --import
-
-# Download the release binary and its signature
-BETTERLEAKS_VERSION="latest"
-curl -sSL "https://github.com/betterleaks/betterleaks/releases/latest/download/betterleaks_linux_x64.tar.gz.sig" \
-    -o /tmp/betterleaks.sig
-
-curl -sSL "https://github.com/betterleaks/betterleaks/releases/latest/download/betterleaks_linux_x64.tar.gz" \
-    -o /tmp/betterleaks.tar.gz
-
-# Verify
-gpg --verify /tmp/betterleaks.sig /tmp/betterleaks.tar.gz \
-    && echo "Signature OK" \
-    || echo "SIGNATURE INVALID — do not install"
-```
-
-**Example for trivy (cosign — supply chain verification):**
-
-```bash
-# Install cosign
-curl -sSL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \
-    -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
-
-# Verify trivy binary with cosign transparency log
-TRIVY_VERSION=$(trivy --version | head -1 | awk '{print $2}')
-cosign verify-blob \
-    --certificate "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz.pem" \
-    --signature "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz.sig" \
-    --certificate-identity-regexp "https://github.com/aquasecurity/trivy" \
-    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-    /usr/local/bin/trivy \
-    && echo "trivy supply-chain signature OK"
-```
-
----
-
-### 11.4 Audit Python dependencies (PyPI supply-chain check)
-
-The Python packages installed for the pipeline should be scanned for known CVEs and typosquatting risks.
-
-```bash
-# Activate the virtual environment first
+# Step 2: Python venv + packages
+python3 -m venv /opt/ai-transit/venv
 source /opt/ai-transit/venv/bin/activate
+pip install --upgrade pip
+pip install openpyxl reportlab detect-secrets bandit pip-audit safety \
+    semgrep checkov scancode-toolkit
 
-# Generate a requirements file from the installed packages
-pip freeze > /tmp/ai-transit-requirements.txt
+# Step 3: betterleaks
+go install github.com/betterleaks/betterleaks@latest
+sudo cp ~/go/bin/betterleaks /usr/local/bin/betterleaks
 
-# CVE scan with pip-audit
-pip-audit -r /tmp/ai-transit-requirements.txt
+# Step 4: trivy
+curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+    | sudo sh -s -- -b /usr/local/bin
 
-# Advisory scan with safety
-safety check -r /tmp/ai-transit-requirements.txt
+# Step 5: hadolint
+VERSION=$(curl -s https://api.github.com/repos/hadolint/hadolint/releases/latest \
+    | jq -r '.tag_name')
+sudo curl -sSL \
+    "https://github.com/hadolint/hadolint/releases/download/${VERSION}/hadolint-Linux-x86_64" \
+    -o /usr/local/bin/hadolint && sudo chmod +x /usr/local/bin/hadolint
 
-# Optional: use trivy to scan the venv as a filesystem target
-trivy fs /opt/ai-transit/venv \
-    --scanners vuln \
-    --severity HIGH,CRITICAL \
-    --exit-code 1
-```
+# Step 6: ClamAV DB update
+sudo freshclam
 
-A clean environment will return exit code 0 with no findings. Any HIGH or CRITICAL CVE in `openpyxl`, `semgrep`, `bandit`, `detect-secrets`, `pip-audit`, or `safety` itself should be remediated by upgrading the affected package before using the pipeline.
+# Step 7: trivy DB
+trivy image --download-db-only
 
-```bash
-pip install --upgrade openpyxl semgrep bandit detect-secrets pip-audit safety checkov
-```
-
----
-
-### 11.5 Scan installed system packages for CVEs
-
-```bash
-# Use trivy to audit the OS package list
-trivy rootfs / \
-    --scanners vuln \
-    --severity HIGH,CRITICAL \
-    --ignore-unfixed \
-    --output /opt/ai-transit/reports/host_cve_report.json \
-    --format json
-
-# Human-readable summary
-trivy rootfs / \
-    --scanners vuln \
-    --severity HIGH,CRITICAL \
-    --ignore-unfixed
-```
-
-> This does not require root. `trivy` reads `/var/lib/dpkg/status` (Debian/Ubuntu) or `/var/lib/rpm/Packages` (RHEL/CentOS) to enumerate installed packages and cross-references them with the NVD/OSV/GitHub Advisory databases.
-
----
-
-### 11.6 Detect post-install tampering (AIDE / file integrity)
-
-For production environments, configure a file integrity monitor on the pipeline scripts to detect any modification after installation.
-
-```bash
-# Install AIDE (Advanced Intrusion Detection Environment)
-sudo apt-get install -y aide
-
-# Initialize the AIDE database covering only the pipeline directory
-sudo aide --config=/etc/aide/aide.conf --init \
-    --rule "Dir=/path/to/ai-transit-bundle p+i+n+u+g+s+b+md5+sha256"
-
-sudo mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
-
-# Run a check at any time (e.g. from cron or before each pipeline run)
-sudo aide --check
-```
-
-A simpler alternative — store SHA-256 hashes of all bundle files at install time and re-verify before each run:
-
-```bash
-#!/usr/bin/env bash
-# generate_bundle_manifest.sh — run once at install time
-BUNDLE_DIR="$(dirname "$0")"
-sha256sum "${BUNDLE_DIR}"/*.sh "${BUNDLE_DIR}"/*.py > "${BUNDLE_DIR}/.bundle_manifest.sha256"
-echo "Manifest saved to .bundle_manifest.sha256"
-
-# verify_bundle.sh — run before each pipeline execution
-sha256sum --check "${BUNDLE_DIR}/.bundle_manifest.sha256" \
-    && echo "Bundle integrity OK" \
-    || { echo "TAMPERING DETECTED — do not run the pipeline"; exit 1; }
-```
-
-Add the integrity check at the top of `ai_transit.sh` to make it automatic:
-
-```bash
-# Add to ai_transit.sh, before the first phase
-if [[ -f "${SCRIPT_DIR}/.bundle_manifest.sha256" ]]; then
-    sha256sum --check --quiet "${SCRIPT_DIR}/.bundle_manifest.sha256" \
-        || die "Bundle integrity check failed — scripts may have been tampered with."
-fi
+echo "Installation complete — run ./verify_install.sh to confirm"
 ```
 
 ---
 
-### 11.7 Summary — self-scan checklist
-
-| Step | Command / Tool | Expected result |
-|------|---------------|----------------|
-| Meta-scan of bundle | `./ai_transit.sh /path/to/bundle` | PASS |
-| Binary checksums | `./check_binaries.sh` | All OK, no FAIL |
-| GPG / cosign signatures | `gpg --verify` / `cosign verify-blob` | Signature valid |
-| Python CVE scan | `pip-audit` + `safety check` | No HIGH/CRITICAL |
-| Python trivy scan | `trivy fs /opt/ai-transit/venv` | Exit code 0 |
-| Host OS CVE scan | `trivy rootfs /` | No unpatched HIGH/CRITICAL |
-| Bundle integrity | `sha256sum --check .bundle_manifest.sha256` | OK |
-| AIDE check (production) | `sudo aide --check` | No modifications |
-
-> **Recommended practice:** run steps 1, 4, and 7 automatically before each pipeline execution by wrapping them in a pre-flight script called by `ai_transit.sh`.
-
----
-
-*AI Transit Pipeline — Installation Guide v2.0 — 2025*
+*AI Transit Pipeline — Installation Guide v2.1 — 2025*
