@@ -67,6 +67,18 @@ def _data_cell(ws, row: int, col: int, value: str,
         cell.fill = _fill(fill_color)
 
 
+def _rel(path: str, scan_dir: str) -> str:
+    """Display path relative to the scanned directory.
+
+    Report paths are absolute and point inside WORK_DIR/fetch/repo_<ts>/.
+    Showing that to a reader leaks the internal layout and buries the part
+    that matters, so strip the scan-directory prefix for display.
+    """
+    if scan_dir and path.startswith(scan_dir.rstrip("/") + "/"):
+        return path[len(scan_dir.rstrip("/")) + 1:]
+    return path
+
+
 def _verdict_fill(status: str) -> str | None:
     return {
         "PASS": COLOR_PASS,
@@ -138,6 +150,7 @@ def build_sheet_files(wb: Workbook, data: dict) -> None:
     ws.row_dimensions[1].height = 22
 
     file_results: dict = data.get("file_results", {})
+    scan_dir: str = data.get("directory", "")
 
     # Tri : FAIL en premier, puis WARN, puis PASS
     order = {"FAIL": 0, "WARN": 1, "PASS": 2}
@@ -154,7 +167,7 @@ def build_sheet_files(wb: Workbook, data: dict) -> None:
         fill    = _verdict_fill(status)
 
         _data_cell(ws, row, 1, idx)
-        _data_cell(ws, row, 2, filepath, fill)
+        _data_cell(ws, row, 2, _rel(filepath, scan_dir), fill)
         _data_cell(ws, row, 3, suffix, fill)
         _data_cell(ws, row, 4, status, fill)
         _data_cell(ws, row, 5, message, fill)
@@ -181,6 +194,7 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
     ws.row_dimensions[1].height = 22
 
     file_results: dict = data.get("file_results", {})
+    scan_dir: str = data.get("directory", "")
 
     rows = []
     for filepath, info in file_results.items():
@@ -194,11 +208,22 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
         if not findings:
             findings = ["(no details)"]
         for finding in findings:
-            # Infer severity: status drives the base level; then look for
-            # explicit severity markers embedded by record_fail/semgrep.
-            # WARN findings are LOW/MEDIUM by definition (they were downgraded).
+            # Each message carries its own [WARN]/[FAIL] tag from the scanner.
+            # Severity must come from the message itself, never from the file's
+            # overall status — otherwise a missing-tool WARN recorded against a
+            # file that also has a real FAIL would be reported as HIGH.
+            if finding.startswith("[FAIL]"):
+                entry_status = "FAIL"
+                finding = finding[len("[FAIL]"):].strip()
+            elif finding.startswith("[WARN]"):
+                entry_status = "WARN"
+                finding = finding[len("[WARN]"):].strip()
+            else:
+                # Untagged (older report format): fall back to file status.
+                entry_status = status
+
             f_upper = finding.upper()
-            if status == "FAIL":
+            if entry_status == "FAIL":
                 if ":CRITICAL:" in f_upper:
                     sev, sev_order = "CRITICAL", 0
                 else:
@@ -208,7 +233,7 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
                     sev, sev_order = "MEDIUM", 2
                 else:
                     sev, sev_order = "LOW", 3
-            rows.append((sev_order, sev, filepath, finding, status))
+            rows.append((sev_order, sev, filepath, finding, entry_status))
 
     # Sort: CRITICAL first, then HIGH, MEDIUM, LOW
     rows.sort(key=lambda r: r[0])
@@ -227,7 +252,7 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
         cell.fill = _fill(sev_fill.get(sev, "FFFFFF"))
         cell.border = THIN_BORDER
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        _data_cell(ws, row, 3, filepath, fill)
+        _data_cell(ws, row, 3, _rel(filepath, scan_dir), fill)
         _data_cell(ws, row, 4, finding, fill)
         _data_cell(ws, row, 5, status, fill)
         ws.row_dimensions[row].height = 18

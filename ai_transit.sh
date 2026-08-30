@@ -132,7 +132,14 @@ REPORT_HTML="${REPORT_JSON%.json}.html"
 # ── Décision finale ───────────────────────────────────────────────────────────
 if [[ "$VERDICT" == "PASS" ]]; then
     TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
-    REPO_NAME=$(basename "$FETCH_DIR")
+    # Name the archive after the source repository, not the internal fetch
+    # directory (which is already "repo_<timestamp>" and would double up).
+    if [[ "$REPO_INPUT" =~ ^https?:// ]]; then
+        REPO_NAME=$(basename "${REPO_INPUT%.git}")
+    else
+        REPO_NAME=$(basename "$(realpath "$REPO_INPUT")")
+    fi
+    [[ -n "$REPO_NAME" ]] || REPO_NAME="repo"
     ARCHIVE="${OUTPUT_DIR}/${REPO_NAME}_${TIMESTAMP}.zip"
 
     # Génération du rapport Excel (inclus dans le ZIP)
@@ -148,7 +155,12 @@ if [[ "$VERDICT" == "PASS" ]]; then
     fi
 
     info "Creating archive…"
-    if ! zip -r "$ARCHIVE" "$FETCH_DIR" -x "*.manifest_sha256.txt"; then
+    # Archive paths must be repo-relative: zipping "$FETCH_DIR" by absolute path
+    # would store the internal WORK_DIR layout inside the archive and leak
+    # server-side paths to the recipient. Zip from inside the directory instead.
+    ZIP_FLAGS=(-r)
+    [[ "$VERBOSITY" == "quiet" ]] && ZIP_FLAGS+=(-q)
+    if ! ( cd "$FETCH_DIR" && zip "${ZIP_FLAGS[@]}" "$ARCHIVE" . -x ".manifest_sha256.txt" ); then
         die "ZIP archive creation failed (disk full? insufficient permissions?)"
     fi
     [[ -f "$ARCHIVE" ]] || die "Archive not found after zip: $ARCHIVE"
@@ -188,7 +200,11 @@ else
     echo -e "${RED}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
     echo
     error "Repository did not pass the security scan."
-    error "Files quarantined at: $QUARANTINE"
+    if [[ "$REPORT_ONLY" == true ]]; then
+        error "Files left in place at: $FETCH_DIR (--report-only: not quarantined)"
+    else
+        error "Files quarantined at: $QUARANTINE"
+    fi
 
     if [[ -f "$LATEST_REPORT" ]]; then
         error "JSON report : $LATEST_REPORT"

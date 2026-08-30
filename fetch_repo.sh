@@ -78,17 +78,23 @@ if [[ "$IS_REMOTE" == true ]]; then
     CLONE_ARGS=(--depth 1 --no-tags --single-branch)
     [[ -n "$BRANCH" ]] && CLONE_ARGS+=(--branch "$BRANCH")
 
-    # Inject GITHUB_TOKEN for private repos via GIT_ASKPASS (not in the URL,
-    # which would expose the token in ps, git logs, and shell traces).
+    # Authenticate private repos via GIT_ASKPASS. The token is passed to the
+    # helper through the environment (readable only by this user via /proc),
+    # never in the clone URL (git config / reflog) nor in argv (world-readable
+    # through `ps`). The helper script itself contains no secret.
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        info "GITHUB_TOKEN detected — using authenticated clone via credential helper"
-        local _askpass
-        _askpass=$(mktemp)
-        chmod 700 "$_askpass"
-        printf '#!/bin/sh\necho "%s"\n' "$GITHUB_TOKEN" > "$_askpass"
-        GIT_ASKPASS="$_askpass" GIT_USERNAME="x-token" \
+        info "GITHUB_TOKEN detected — using authenticated clone via GIT_ASKPASS"
+        ASKPASS_SCRIPT=$(mktemp)
+        chmod 700 "$ASKPASS_SCRIPT"
+        printf '#!/bin/sh\nprintf %%s "$GIT_TOKEN_VALUE"\n' > "$ASKPASS_SCRIPT"
+        # Guarantee removal even if the clone fails under `set -e`.
+        trap 'rm -f "$ASKPASS_SCRIPT"' EXIT
+        GIT_TOKEN_VALUE="$GITHUB_TOKEN" \
+        GIT_ASKPASS="$ASKPASS_SCRIPT" \
+        GIT_TERMINAL_PROMPT=0 \
             git clone "${CLONE_ARGS[@]}" "$REPO_INPUT" "$DEST"
-        rm -f "$_askpass"
+        rm -f "$ASKPASS_SCRIPT"
+        trap - EXIT
     else
         git clone "${CLONE_ARGS[@]}" "$REPO_INPUT" "$DEST"
     fi
@@ -109,7 +115,9 @@ if [[ -n "${SINCE_COMMIT:-}" ]]; then
     DIFF_FILES_LIST=$(git -C "$DEST" diff --name-only "${SINCE_COMMIT}" HEAD 2>/dev/null \
         | sed "s|^|${DEST}/|" | tr '\n' ':' || true)
     if [[ -n "$DIFF_FILES_LIST" ]]; then
-        info "Diff mode: $(echo "$DIFF_FILES_LIST" | tr ':' '\n' | wc -l) changed file(s)"
+        # Count non-empty entries: the list has a trailing ':' delimiter, so a
+        # plain `tr | wc -l` would report one extra.
+        info "Diff mode: $(echo "$DIFF_FILES_LIST" | tr ':' '\n' | grep -c .) changed file(s)"
         echo "$DIFF_FILES_LIST" > "${WORK_DIR}/.diff_files"
     else
         warn "Diff mode: commit ${SINCE_COMMIT} not reachable or no files changed — falling back to full scan"

@@ -16,12 +16,16 @@ declare -A _SEV_NUM=([low]=1 [medium]=2 [high]=3 [critical]=4)
 SEV_THRESHOLD="${_SEV_NUM[${MIN_SEVERITY,,}]:-3}"
 
 # ── Log functions ────────────────────────────────────────────────────────────
-log()    { [[ "$VERBOSITY" != "quiet" ]] && echo "[$(date '+%H:%M:%S')] $*" || true; }
-info()   { [[ "$VERBOSITY" != "quiet" ]] && echo -e "\033[34m[INFO]\033[0m  $*" || true; }
-warn()   { echo -e "\033[33m[WARN]\033[0m  $*" >&2; }
-ok()     { [[ "$VERBOSITY" != "quiet" ]] && echo -e "\033[32m[OK]\033[0m    $*" || true; }
-fail()   { echo -e "\033[31m[FAIL]\033[0m  $*" >&2; exit 1; }
-fail_f() { echo -e "\033[31m[FAIL]\033[0m  $*" >&2; GLOBAL_VERDICT="FAIL"; }
+# The Layer 5 progress indicator redraws one line on stderr with \r. Every log
+# helper clears that line first (\r + erase-to-end) so messages never get
+# printed on top of a partially-drawn progress line.
+_clr()   { [[ -t 2 ]] && printf "\r\033[K" >&2 || true; }
+log()    { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo "[$(date '+%H:%M:%S')] $*"; } || true; }
+info()   { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo -e "\033[34m[INFO]\033[0m  $*"; } || true; }
+warn()   { _clr; echo -e "\033[33m[WARN]\033[0m  $*" >&2; }
+ok()     { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo -e "\033[32m[OK]\033[0m    $*"; } || true; }
+fail()   { _clr; echo -e "\033[31m[FAIL]\033[0m  $*" >&2; exit 1; }
+fail_f() { _clr; echo -e "\033[31m[FAIL]\033[0m  $*" >&2; GLOBAL_VERDICT="FAIL"; }
 
 has_cmd() { command -v "$1" &>/dev/null; }
 
@@ -124,10 +128,15 @@ record_warn() {
     local file="${1:-__global__}"; shift
     (( WARN_COUNT++ )) || true
     warn "$*"
+    # WARN never downgrades an existing FAIL status.
     if [[ -z "${FILE_STATUS[$file]:-}" ]]; then
         FILE_STATUS["$file"]="WARN"
-        FILE_MSG["$file"]="$*"
     fi
+    # Accumulate with the same " | " delimiter record_fail uses so downstream
+    # report parsers can split findings reliably. Each entry carries its own
+    # [WARN]/[FAIL] tag: a file's overall status must not be attributed to every
+    # individual message (a missing-tool WARN is not a HIGH severity finding).
+    FILE_MSG["$file"]+="[WARN] $* | "
 }
 
 record_fail() {
@@ -167,7 +176,7 @@ record_fail() {
 
     FINDINGS["$file"]+="${msg} | "
     FILE_STATUS["$file"]="FAIL"
-    FILE_MSG["$file"]+="${msg} | "
+    FILE_MSG["$file"]+="[FAIL] ${msg} | "
     (( FAIL_COUNT++ )) || true
     fail_f "[$file] $msg"
 }
@@ -503,9 +512,11 @@ scan_python() {
         failed=true
     fi
 
-    # CWE-89 — SQL injection (string concatenation in queries)
-    if grep_check '(execute|cursor\.execute)\s*\(\s*[f'"'"'"].*(SELECT|INSERT|UPDATE|DELETE|DROP)' "$f"; then
-        record_fail "$f" "CWE-89:SQL_injection_string_concat"
+    # CWE-89 — SQL injection: f-string, concatenation, %-format or .format()
+    # built into the query. A parameterised call — execute("… = ?", (v,)) — is
+    # the correct safe form and must NOT be flagged.
+    if grep_check '(execute|executemany)[[:space:]]*\([[:space:]]*(f["'"'"']|("[^"]*"|'"'"'[^'"'"']*'"'"')[[:space:]]*(\+|%|\.format\())' "$f"; then
+        record_fail "$f" "CWE-89:SQL_injection_query_built_by_string_interpolation"
         failed=true
     fi
 
@@ -1239,12 +1250,11 @@ classify_file() {
 scan_by_type() {
     info "=== Layer 5: Per-type SAST ==="
 
-    # Count total files using -print0 + tr to handle filenames with newlines
-    local total_files
-    total_files=$(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print0 2>/dev/null \
-        | tr -cd '\0' | wc -c)
-    local current=0
-
+    # Collect the files to scan first, applying every skip rule, so the progress
+    # denominator matches what is actually scanned (a separate `find | wc -l`
+    # would count files that the loop then skips).
+    local -a scan_files=()
+    local f
     while IFS= read -r -d '' f; do
         [[ -f "$f" ]] || continue
         [[ "$(basename "$f")" == ".manifest_sha256.txt" ]] && continue
@@ -1252,18 +1262,27 @@ scan_by_type() {
         if [[ "$DIFF_FILES_ONLY" == true && -z "${DIFF_FILES_SET["$f"]:-}" ]]; then
             continue
         fi
+        scan_files+=("$f")
+    done < <(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print0 2>/dev/null)
+
+    local total_files=${#scan_files[@]}
+    local current=0
+    local short_f
+    for f in "${scan_files[@]}"; do
         (( current++ )) || true
-        if [[ "$VERBOSITY" != "quiet" ]]; then
-            # Overwrite the progress line in place using \r; truncate long paths
-            local short_f="${f#"$SCAN_DIR/"}"
-            printf "\r\033[34m[L5]\033[0m  [%${#total_files}d/%d] %s" \
+        # Only draw the live progress line on an interactive terminal; when
+        # stderr is redirected to a file or pipe, \r and colour codes would be
+        # written literally into the log.
+        if [[ "$VERBOSITY" != "quiet" && -t 2 ]]; then
+            short_f="${f#"$SCAN_DIR/"}"
+            printf "\r\033[K\033[34m[L5]\033[0m  [%${#total_files}d/%d] %s" \
                 "$current" "$total_files" "${short_f:0:80}" >&2
         fi
         classify_file "$f"
-    done < <(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print0 2>/dev/null)
+    done
 
-    # Clear the progress line
-    [[ "$VERBOSITY" != "quiet" ]] && printf "\r\033[K" >&2 || true
+    # Clear the progress line (_clr is a no-op when stderr is not a terminal)
+    _clr
     ok "Layer 5: $current files scanned"
 }
 
