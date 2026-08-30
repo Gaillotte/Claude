@@ -133,25 +133,32 @@ record_warn() {
 record_fail() {
     local file="$1"; shift
     local msg="$*"
-
-    # Extract rule token (first colon-delimited segment of msg) for allowlist lookup
-    local rule="${msg%%:*}"
     local rel_path="${file#"$SCAN_DIR/"}"
 
-    # Check allowlist: if matched, downgrade to WARN
-    if [[ -n "${ALLOW_MAP["${rule}::${rel_path}"]:-}" ||
-          -n "${ALLOW_MAP["${rule}::${file}"]:-}" ]]; then
-        local reason="${ALLOW_MAP["${rule}::${rel_path}"]:-${ALLOW_MAP["${rule}::${file}"]:-allowed}}"
-        record_warn "$file" "ALLOWED:${msg} (reason: ${reason})"
+    # Allowlist: try every prefix of the message up to the first three colons as
+    # the rule token, so both "CWE-78" and "semgrep[p/owasp]:CWE-78:…" match an
+    # allowlist entry keyed on "CWE-78::path".
+    local _token _matched_reason=""
+    for _token in "${msg%%:*}" "${msg#*:}"; do
+        _token="${_token%%:*}"
+        local _key="${_token}::${rel_path}"
+        if [[ -n "${ALLOW_MAP["$_key"]:-}" ]]; then
+            _matched_reason="${ALLOW_MAP["$_key"]}"
+            break
+        fi
+    done
+    if [[ -n "$_matched_reason" ]]; then
+        record_warn "$file" "ALLOWED:${msg} (reason: ${_matched_reason})"
         return
     fi
 
-    # MIN_SEVERITY: findings tagged with sev:low or sev:medium are downgraded
-    # Severity is embedded in semgrep findings as :LOW: or :MEDIUM:
-    local sev=3  # default HIGH
-    if echo "$msg" | grep -qiE ':LOW:'; then     sev=1
-    elif echo "$msg" | grep -qiE ':MEDIUM:'; then sev=2
-    elif echo "$msg" | grep -qiE ':CRITICAL:'; then sev=4
+    # MIN_SEVERITY: extract severity from known embedded markers.
+    # Non-semgrep grep findings have no marker → treated as HIGH (sev=3).
+    # Semgrep embeds :INFO:, :LOW:, :MEDIUM:, :HIGH:, :CRITICAL: in the message.
+    local sev=3  # HIGH by default
+    if   echo "$msg" | grep -qiE ':(INFO|LOW):';    then sev=1
+    elif echo "$msg" | grep -qiE ':MEDIUM:';         then sev=2
+    elif echo "$msg" | grep -qiE ':CRITICAL:';       then sev=4
     fi
     if (( sev < SEV_THRESHOLD )); then
         record_warn "$file" "LOW_SEV(below --min-severity ${MIN_SEVERITY}):${msg}"
@@ -190,11 +197,15 @@ scan_global() {
         info "detect-secrets…"
         local dsec_out
         dsec_out=$(detect-secrets scan "$SCAN_DIR" 2>/dev/null || true)
-        if echo "$dsec_out" | grep -q '"type"'; then
-            record_fail "$SCAN_DIR" "detect-secrets:high_entropy_string"
+        local dsec_hits
+        dsec_hits=$(echo "$dsec_out" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(sum(len(v) for v in d.get('results',{}).values()))" \
+            2>/dev/null || echo "0")
+        if (( dsec_hits > 0 )); then
+            record_fail "$SCAN_DIR" "detect-secrets:${dsec_hits}_high_entropy_string(s)"
         else
             record_pass "$SCAN_DIR"
-            ok "detect-secrets: no anomaly"
+            ok "detect-secrets: no secrets detected"
         fi
     else
         record_warn "__global__" "detect-secrets missing"
@@ -1087,6 +1098,25 @@ scan_unknown() {
     record_pass "$f"
 }
 
+# ── PowerShell ───────────────────────────────────────────────────────────────
+scan_powershell() {
+    local f="$1"
+    local failed=false
+    # CWE-78: Invoke-Expression / cmd.exe exec
+    if grep_check '(Invoke-Expression|iex\s*\(|Start-Process|cmd\.exe\s*/c)' "$f"; then
+        record_fail "$f" "CWE-78:PowerShell_command_execution"; failed=true
+    fi
+    # CWE-798: hardcoded credential
+    if grep_check '(\$password|\$secret|\$apikey|\$token)\s*=\s*["'"'"'][^"'"'"'$]{4,}' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
+    fi
+    # Encoded/obfuscated commands (common malware technique)
+    if grep_check '-EncodedCommand\s' "$f"; then
+        record_fail "$f" "CWE-78:PowerShell_EncodedCommand_obfuscation"; failed=true
+    fi
+    $failed || record_pass "$f"
+}
+
 # ── Rust ─────────────────────────────────────────────────────────────────────
 scan_rust() {
     local f="$1"
@@ -1104,16 +1134,9 @@ scan_rust() {
         record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
     fi
     # Semgrep per-file if available
-    if has_cmd semgrep; then
-        local out
-        out=$(semgrep --config p/security-audit --quiet --json --no-autofix "$f" 2>/dev/null || true)
-        local cnt; cnt=$(echo "$out" | python3 -c "
-import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))
-" 2>/dev/null || echo "0")
-        if (( cnt > 0 )); then
-            record_fail "$f" "semgrep:security_audit:${cnt}_finding(s)"; failed=true
-        fi
-    fi
+    # Semgrep coverage for this language is already provided by the L2 full-directory
+    # scan (scan_owasp_cwe). Running it again per-file would duplicate findings and
+    # add seconds of startup overhead per file.
     $failed || record_pass "$f"
 }
 
@@ -1130,16 +1153,9 @@ scan_kotlin() {
     if grep_check 'MessageDigest\.getInstance\("(MD5|SHA-1)"' "$f"; then
         record_fail "$f" "CWE-327:weak_hash_MD5_or_SHA1"; failed=true
     fi
-    if has_cmd semgrep; then
-        local out
-        out=$(semgrep --config p/security-audit --quiet --json --no-autofix "$f" 2>/dev/null || true)
-        local cnt; cnt=$(echo "$out" | python3 -c "
-import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))
-" 2>/dev/null || echo "0")
-        if (( cnt > 0 )); then
-            record_fail "$f" "semgrep:security_audit:${cnt}_finding(s)"; failed=true
-        fi
-    fi
+    # Semgrep coverage for this language is already provided by the L2 full-directory
+    # scan (scan_owasp_cwe). Running it again per-file would duplicate findings and
+    # add seconds of startup overhead per file.
     $failed || record_pass "$f"
 }
 
@@ -1160,16 +1176,9 @@ scan_csharp() {
     if grep_check '"SELECT.*"\s*\+' "$f"; then
         record_fail "$f" "CWE-89:SQL_string_concatenation"; failed=true
     fi
-    if has_cmd semgrep; then
-        local out
-        out=$(semgrep --config p/security-audit --quiet --json --no-autofix "$f" 2>/dev/null || true)
-        local cnt; cnt=$(echo "$out" | python3 -c "
-import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))
-" 2>/dev/null || echo "0")
-        if (( cnt > 0 )); then
-            record_fail "$f" "semgrep:security_audit:${cnt}_finding(s)"; failed=true
-        fi
-    fi
+    # Semgrep coverage for this language is already provided by the L2 full-directory
+    # scan (scan_owasp_cwe). Running it again per-file would duplicate findings and
+    # add seconds of startup overhead per file.
     $failed || record_pass "$f"
 }
 
@@ -1195,7 +1204,8 @@ classify_file() {
         .rb)                              scan_ruby        "$f" ;;
         .go)                              scan_go          "$f" ;;
         .c|.cpp|.h|.hpp|.cc)            scan_c_cpp       "$f" ;;
-        .sh|.bash|.zsh|.ps1|.psm1|.ksh) scan_shell      "$f" ;;
+        .sh|.bash|.zsh|.ksh)            scan_shell       "$f" ;;
+        .ps1|.psm1|.psd1)               scan_powershell  "$f" ;;
         .rs)                              scan_rust        "$f" ;;
         .kt|.kts)                         scan_kotlin      "$f" ;;
         .cs)                              scan_csharp      "$f" ;;
@@ -1229,9 +1239,10 @@ classify_file() {
 scan_by_type() {
     info "=== Layer 5: Per-type SAST ==="
 
-    # Count total files (excluding pruned dirs) for the progress indicator
+    # Count total files using -print0 + tr to handle filenames with newlines
     local total_files
-    total_files=$(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print 2>/dev/null | wc -l)
+    total_files=$(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print0 2>/dev/null \
+        | tr -cd '\0' | wc -c)
     local current=0
 
     while IFS= read -r -d '' f; do
@@ -1298,56 +1309,9 @@ scan_scancode() {
         return
     fi
 
-    python3 - "$sc_report" "$SCAN_DIR" <<'PYEOF'
-import json, sys, os
-
-report_path = sys.argv[1]
-scan_dir    = sys.argv[2]
-
-with open(report_path) as fh:
-    data = json.load(fh)
-
-issues = []
-
-for file in data.get("files", []):
-    path = file.get("path", "")
-    rel  = os.path.relpath(path, scan_dir) if os.path.isabs(path) else path
-
-    # Licence findings
-    for lic in file.get("license_detections", []):
-        for match in lic.get("matches", []):
-            spdx = match.get("spdx_license_expression") or match.get("license_expression", "unknown")
-            score = match.get("score", 0)
-            # Flag licences that may restrict enterprise use
-            risky = any(k in spdx.upper() for k in (
-                "GPL", "AGPL", "LGPL", "SSPL", "BUSL", "EUPL", "CDDL", "CC-BY-SA", "CC-BY-NC"
-            ))
-            if risky and score >= 70:
-                issues.append(f"WARN|{rel}|licence:{spdx} (score:{score:.0f})")
-
-    # Copyright findings — informational only
-    copyrights = file.get("copyrights", [])
-    if copyrights:
-        holders = ", ".join(c.get("copyright", "") for c in copyrights[:3])
-        issues.append(f"INFO|{rel}|copyright:{holders}")
-
-    # Vulnerability findings — FAIL on HIGH/CRITICAL
-    for pkg in file.get("packages", []):
-        for vuln in pkg.get("vulnerabilities", []):
-            vid      = vuln.get("vulnerability_id", "?")
-            severity = vuln.get("max_severity", "").upper()
-            pkg_name = pkg.get("name", "?")
-            pkg_ver  = pkg.get("version", "?")
-            if severity in ("CRITICAL", "HIGH"):
-                issues.append(f"FAIL|{rel}|scancode_vuln:{vid}[{severity}] in {pkg_name}=={pkg_ver}")
-            else:
-                issues.append(f"WARN|{rel}|scancode_vuln:{vid}[{severity}] in {pkg_name}=={pkg_ver}")
-
-for item in issues:
-    print(item)
-PYEOF
-
-    # ── Feed results back into the pipeline ───────────────────────────────────
+    # ── Parse report and feed results into the pipeline ─────────────────────
+    # Output is captured in sc_out to avoid polluting stdout (which ai_transit.sh
+    # uses to extract the verdict and report path).
     local sc_out
     sc_out=$(python3 - "$sc_report" "$SCAN_DIR" <<'PYEOF2'
 import json, sys, os
@@ -1386,11 +1350,12 @@ PYEOF2
     ) 2>/dev/null
 
     local warn_count=0 fail_count=0
-    while IFS='|' read -r level rel_path msg; do
+    while IFS='|' read -r level sc_rel msg; do
         [[ -z "$level" ]] && continue
+        local abs_path="${SCAN_DIR}/${sc_rel}"
         case "$level" in
-            FAIL) record_fail "$rel_path" "$msg"; (( fail_count++ )) || true ;;
-            WARN) record_warn "$rel_path" "$msg"; (( warn_count++ )) || true ;;
+            FAIL) record_fail "$abs_path" "$msg"; (( fail_count++ )) || true ;;
+            WARN) record_warn "$abs_path" "$msg"; (( warn_count++ )) || true ;;
         esac
     done <<< "$sc_out"
 
@@ -1406,56 +1371,76 @@ PYEOF2
 }
 
 generate_report_json() {
-    # Build bash arrays into newline-separated key/value streams, then
-    # delegate all JSON serialisation to Python to handle special characters safely.
-    local findings_keys="" findings_vals=""
-    for path in "${!FINDINGS[@]}"; do
-        findings_keys+="${path}"$'\x01'
-        findings_vals+="${FINDINGS[$path]%' | '}"$'\x01'
-    done
+    # Data is written to temp files so Python reads it safely — no bash variable
+    # expansion inside the Python source avoids code injection via filenames or
+    # finding messages that contain triple-quote sequences.
+    local _tmp
+    _tmp=$(mktemp -d)
+    trap "rm -rf '$_tmp'" RETURN
 
-    local status_keys="" status_statuses="" status_msgs=""
+    # NUL-delimited streams: key\x00value\x00key\x00value…
+    local _findings_k="${_tmp}/fk" _findings_v="${_tmp}/fv"
+    local _status_k="${_tmp}/sk"  _status_s="${_tmp}/ss" _status_m="${_tmp}/sm"
+    for path in "${!FINDINGS[@]}"; do
+        printf '%s\x00' "$path"                        >> "$_findings_k"
+        printf '%s\x00' "${FINDINGS[$path]%' | '}"     >> "$_findings_v"
+    done
     for path in "${!FILE_STATUS[@]}"; do
-        status_keys+="${path}"$'\x01'
-        status_statuses+="${FILE_STATUS[$path]}"$'\x01'
-        status_msgs+="${FILE_MSG[$path]:-}"$'\x01'
+        printf '%s\x00' "$path"                        >> "$_status_k"
+        printf '%s\x00' "${FILE_STATUS[$path]}"        >> "$_status_s"
+        printf '%s\x00' "${FILE_MSG[$path]:-}"         >> "$_status_m"
     done
 
     local repo_hash
     repo_hash=$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')
 
-    python3 - <<PYEOF
+    # All dynamic values are passed as env vars or temp-file paths — never
+    # interpolated into the Python source.
+    REPORT_VERDICT="$GLOBAL_VERDICT" \
+    REPORT_TS="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    REPORT_REPO_INPUT="${REPO_INPUT:-}" \
+    REPORT_SCAN_DIR="$SCAN_DIR" \
+    REPORT_HASH="$repo_hash" \
+    REPORT_PASS="$PASS_COUNT" \
+    REPORT_WARN="$WARN_COUNT" \
+    REPORT_FAIL="$FAIL_COUNT" \
+    REPORT_OUT="$REPORT_JSON" \
+    python3 - "$_findings_k" "$_findings_v" "$_status_k" "$_status_s" "$_status_m" <<'PYEOF'
 import json, os, sys
 
-findings_keys   = [k for k in """${findings_keys}""".split('\x01') if k]
-findings_vals   = [v for v in """${findings_vals}""".split('\x01') if v]
-status_keys     = [k for k in """${status_keys}""".split('\x01') if k]
-status_statuses = [s for s in """${status_statuses}""".split('\x01') if s]
-status_msgs     = [m for m in ("""${status_msgs}""".split('\x01') if """${status_msgs}""" else [])]
-# Pad msgs to match keys length
-while len(status_msgs) < len(status_keys):
-    status_msgs.append("")
+def _read_nul(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, "rb") as fh:
+        return [p.decode("utf-8", errors="replace") for p in fh.read().split(b"\x00") if p]
 
-findings     = dict(zip(findings_keys, findings_vals))
+fk = _read_nul(sys.argv[1]); fv = _read_nul(sys.argv[2])
+sk = _read_nul(sys.argv[3]); ss = _read_nul(sys.argv[4]); sm = _read_nul(sys.argv[5])
+while len(sm) < len(sk):
+    sm.append("")
+
+findings     = dict(zip(fk, fv))
 file_results = {
-    k: {"status": s, "message": m.rstrip(' | ')}
-    for k, s, m in zip(status_keys, status_statuses, status_msgs)
+    k: {"status": s, "message": m.rstrip(" | ")}
+    for k, s, m in zip(sk, ss, sm)
 }
 
 report = {
-    "verdict":    "${GLOBAL_VERDICT}",
-    "timestamp":  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
-    "repo_input": "${REPO_INPUT:-}",
-    "directory":  "${SCAN_DIR}",
-    "repo_hash":  "${repo_hash}",
-    "standards":  ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
-                   "SCA-CVE", "ScanCode-Licence-Copyright"],
-    "summary":    {"pass": ${PASS_COUNT}, "warn": ${WARN_COUNT}, "fail": ${FAIL_COUNT}},
+    "verdict":      os.environ["REPORT_VERDICT"],
+    "timestamp":    os.environ["REPORT_TS"],
+    "repo_input":   os.environ["REPORT_REPO_INPUT"],
+    "directory":    os.environ["REPORT_SCAN_DIR"],
+    "repo_hash":    os.environ["REPORT_HASH"],
+    "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
+                     "SCA-CVE", "ScanCode-Licence-Copyright"],
+    "summary":      {"pass": int(os.environ["REPORT_PASS"]),
+                     "warn": int(os.environ["REPORT_WARN"]),
+                     "fail": int(os.environ["REPORT_FAIL"])},
     "findings":     findings,
     "file_results": file_results,
 }
 
-with open("${REPORT_JSON}", "w", encoding="utf-8") as fh:
+with open(os.environ["REPORT_OUT"], "w", encoding="utf-8") as fh:
     json.dump(report, fh, ensure_ascii=False, indent=2)
 PYEOF
 }
@@ -1518,5 +1503,8 @@ generate_report_html
 
 info "JSON report : $REPORT_JSON"
 info "HTML report : $REPORT_HTML"
-echo "$REPORT_JSON"
+# Write verdict and report path to sidecar files so ai_transit.sh can read them
+# reliably without grepping stdout (which may contain lines from scanned tools).
+echo "$GLOBAL_VERDICT" > "${WORK_DIR}/.scan_verdict"
+echo "$REPORT_JSON"    > "${WORK_DIR}/.scan_report_json"
 echo "$GLOBAL_VERDICT"

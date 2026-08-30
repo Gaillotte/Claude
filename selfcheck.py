@@ -63,12 +63,14 @@ class CheckResult:
 
 
 # ── Runner helpers ────────────────────────────────────────────────────────────
-def _run(cmd: list[str], timeout: int = 120, env: dict | None = None) -> tuple[int, str, str]:
+def _run(cmd: list[str], timeout: int = 120, env: dict | None = None,
+         cwd: Path | None = None) -> tuple[int, str, str]:
     """Run a command, return (returncode, stdout, stderr)."""
     try:
         r = subprocess.run(
             cmd, capture_output=True, text=True,
-            timeout=timeout, env={**os.environ, **(env or {})}
+            timeout=timeout, env={**os.environ, **(env or {})},
+            cwd=str(cwd) if cwd else None,
         )
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except FileNotFoundError:
@@ -409,8 +411,11 @@ def check_bundle_integrity(bundle_dir: Path) -> CheckResult:
                             f"Covers {len(lines)} file(s)"],
                            "sha256sum --check .bundle_manifest.sha256")
 
+    # cwd= changes the actual working directory of the subprocess so relative
+    # paths inside the manifest resolve correctly (env["PWD"] alone does not).
     rc, out, err = _run(["sha256sum", "--check", "--quiet", str(manifest)],
-                        env={"PWD": str(bundle_dir)})
+                        env={"PWD": str(bundle_dir)},
+                        cwd=bundle_dir)
     if rc == 0:
         n = len(manifest.read_text().strip().splitlines())
         return CheckResult("11.6", "Bundle file integrity (SHA-256 manifest)",
@@ -643,9 +648,16 @@ def build_pdf(results: list[CheckResult], output_path: Path, bundle_dir: Path) -
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-def _build_json_report(results: list[CheckResult], bundle_dir: Path) -> dict:
+def _build_json_report(results: list[CheckResult], bundle_dir: Path,
+                       verdict: str = "") -> dict:
     """Serialize check results to a JSON-serialisable dict."""
+    counts = {s: sum(1 for r in results if r.status == s)
+              for s in ("PASS", "FAIL", "WARN", "SKIP")}
+    if not verdict:
+        verdict = ("FAIL" if counts["FAIL"] > 0
+                   else ("WARN" if counts["WARN"] > 0 else "PASS"))
     return {
+        "verdict": verdict,
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "bundle_dir": str(bundle_dir),
         "checks": [
@@ -660,8 +672,7 @@ def _build_json_report(results: list[CheckResult], bundle_dir: Path) -> dict:
             }
             for r in results
         ],
-        "summary": {s: sum(1 for r in results if r.status == s)
-                    for s in ("PASS", "FAIL", "WARN", "SKIP")},
+        "summary": counts,
     }
 
 
@@ -735,14 +746,22 @@ def main() -> None:
     ]
 
     results: list[CheckResult] = []
+    matched_ids: set[str] = set()
     for check_id, label, fn in all_checks:
         if only_ids and check_id not in only_ids:
             continue
+        matched_ids.add(check_id)
         print(f"  Running {label} … ", end="", flush=True)
         result = fn()
         results.append(result)
         icon = {"PASS": "✔", "FAIL": "✘", "WARN": "⚠", "SKIP": "—"}[result.status]
         print(f"{icon} {result.status}  — {result.summary}")
+
+    if only_ids and not matched_ids:
+        print(f"[ERROR] --only filter '{args.only}' matched no checks. "
+              f"Valid IDs: {', '.join(cid for cid, _, __ in all_checks)}",
+              file=sys.stderr)
+        sys.exit(2)
 
     print()
     counts = {s: sum(1 for r in results if r.status == s)
@@ -764,7 +783,7 @@ def main() -> None:
         print(f"  PDF saved to: {pdf_path}")
 
     if args.fmt in ("json", "both"):
-        report_data = _build_json_report(results, bundle_dir)
+        report_data = _build_json_report(results, bundle_dir, verdict=global_verdict)
         json_path.write_text(json.dumps(report_data, indent=2, ensure_ascii=False))
         print(f"  JSON saved to: {json_path}")
 

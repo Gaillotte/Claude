@@ -78,13 +78,20 @@ if [[ "$IS_REMOTE" == true ]]; then
     CLONE_ARGS=(--depth 1 --no-tags --single-branch)
     [[ -n "$BRANCH" ]] && CLONE_ARGS+=(--branch "$BRANCH")
 
-    # Inject GITHUB_TOKEN for private repos (token embedded in URL)
-    CLONE_URL="$REPO_INPUT"
+    # Inject GITHUB_TOKEN for private repos via GIT_ASKPASS (not in the URL,
+    # which would expose the token in ps, git logs, and shell traces).
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        CLONE_URL=$(echo "$REPO_INPUT" | sed "s|https://github.com/|https://${GITHUB_TOKEN}@github.com/|")
-        info "GITHUB_TOKEN detected — using authenticated clone"
+        info "GITHUB_TOKEN detected — using authenticated clone via credential helper"
+        local _askpass
+        _askpass=$(mktemp)
+        chmod 700 "$_askpass"
+        printf '#!/bin/sh\necho "%s"\n' "$GITHUB_TOKEN" > "$_askpass"
+        GIT_ASKPASS="$_askpass" GIT_USERNAME="x-token" \
+            git clone "${CLONE_ARGS[@]}" "$REPO_INPUT" "$DEST"
+        rm -f "$_askpass"
+    else
+        git clone "${CLONE_ARGS[@]}" "$REPO_INPUT" "$DEST"
     fi
-    git clone "${CLONE_ARGS[@]}" "$CLONE_URL" "$DEST"
 else
     info "Copying local path: $REPO_INPUT → $DEST"
     cp -r "$REPO_INPUT" "$DEST"
@@ -105,7 +112,7 @@ if [[ -n "${SINCE_COMMIT:-}" ]]; then
         info "Diff mode: $(echo "$DIFF_FILES_LIST" | tr ':' '\n' | wc -l) changed file(s)"
         echo "$DIFF_FILES_LIST" > "${WORK_DIR}/.diff_files"
     else
-        warn "Diff mode: no changed files found since ${SINCE_COMMIT} — scanning all files"
+        warn "Diff mode: commit ${SINCE_COMMIT} not reachable or no files changed — falling back to full scan"
     fi
 fi
 
@@ -123,8 +130,10 @@ ok "Manifest written: $MANIFEST"
 
 # ── Quick pattern triage ──────────────────────────────────────────────────────
 TRIAGE_HITS=0
+# Patterns use ERE. Pipe character must be escaped as \| is ERE alternation,
+# so we match a literal pipe with [|].
 TRIAGE_PATTERNS=('eval\s*\(' 'exec\s*\(' 'base64_decode' 'system\s*\(' \
-                 'curl\s*\|' 'wget\s*\|' 'chmod\s*\+x' 'rm\s*-rf\s*/')
+                 'curl\s+[^;]*[|]' 'wget\s+[^;]*[|]' 'chmod\s*\+x' 'rm\s+-rf\s*/')
 
 for pattern in "${TRIAGE_PATTERNS[@]}"; do
     if grep -rqE "$pattern" "$DEST" 2>/dev/null; then

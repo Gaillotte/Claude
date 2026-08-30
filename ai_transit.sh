@@ -27,8 +27,13 @@ while [[ $# -gt 0 && "$1" == --* ]]; do
         --quiet)        VERBOSITY="quiet";              shift ;;
         --verbose)      VERBOSITY="verbose";            shift ;;
         --report-only)  REPORT_ONLY=true;               shift ;;
-        --min-severity) MIN_SEVERITY="${2:-high}";      shift 2 ;;
-        --since)        SINCE_COMMIT="${2:-}";          shift 2 ;;
+        --help)         ;; # handled by usage block below
+        --min-severity)
+            [[ $# -ge 2 ]] || die "--min-severity requires an argument (low|medium|high|critical)"
+            MIN_SEVERITY="$2"; shift 2 ;;
+        --since)
+            [[ $# -ge 2 ]] || die "--since requires a commit SHA argument"
+            SINCE_COMMIT="$2"; shift 2 ;;
         *) break ;;
     esac
 done
@@ -86,7 +91,8 @@ echo -e "${BOLD}── Phase 1 : Récupération ──────────�
 FETCH_ARGS=("$REPO_INPUT")
 [[ -n "$BRANCH" ]] && FETCH_ARGS+=("$BRANCH")
 
-rm -f "${WORK_DIR}/.fetch_result" "${WORK_DIR}/.diff_files"
+rm -f "${WORK_DIR}/.fetch_result" "${WORK_DIR}/.diff_files" \
+      "${WORK_DIR}/.scan_verdict" "${WORK_DIR}/.scan_report_json"
 FETCH_OUTPUT=$(WORK_DIR="$WORK_DIR" GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
     SINCE_COMMIT="$SINCE_COMMIT" \
     bash "${SCRIPT_DIR}/fetch_repo.sh" "${FETCH_ARGS[@]}" 2>&1) || {
@@ -110,12 +116,15 @@ SCAN_OUTPUT=$(REPO_INPUT="$REPO_INPUT" WORK_DIR="$WORK_DIR" VERBOSITY="$VERBOSIT
     MIN_SEVERITY="$MIN_SEVERITY" \
     bash "${SCRIPT_DIR}/scan_pipeline.sh" "$FETCH_DIR" 2>&1) || true
 
-VERDICT=$(echo "$SCAN_OUTPUT" | grep -E '^(PASS|FAIL)$' | tail -1 || echo "FAIL")
-REPORT_JSON=$(echo "$SCAN_OUTPUT" | grep -E '^/.+\.json$' | tail -1 || true)
+# Read verdict and report path from sidecar files written by scan_pipeline.sh.
+# This avoids grepping stdout, which is fragile (tools can print PASS/FAIL or
+# absolute JSON paths to their own stdout).
+VERDICT=$(cat "${WORK_DIR}/.scan_verdict"     2>/dev/null || echo "FAIL")
+REPORT_JSON=$(cat "${WORK_DIR}/.scan_report_json" 2>/dev/null || true)
 REPORT_HTML="${REPORT_JSON%.json}.html"
-# Display logs (strip metadata lines)
+# Display scan logs (strip the sidecar-echoed verdict line)
 [[ "$VERBOSITY" != "quiet" ]] && \
-    echo "$SCAN_OUTPUT" | grep -vE '^(PASS|FAIL|/.+\.(json|html))$' || true
+    echo "$SCAN_OUTPUT" | grep -vE '^(PASS|FAIL)$' || true
 
 [[ "$VERBOSITY" != "quiet" ]] && echo || true
 [[ "$VERBOSITY" != "quiet" ]] && echo -e "${BOLD}── Verdict ─────────────────────────────────────${RESET}" || true
@@ -154,15 +163,19 @@ if [[ "$VERDICT" == "PASS" ]]; then
     [[ -f "$REPORT_HTML" ]]  && ok "HTML report     : file://${REPORT_HTML}"
     echo
 else
-    # Move to quarantine (cp -a + rm as cross-filesystem fallback)
+    # Move to quarantine unless --report-only (observe-without-side-effects mode)
     QUARANTINE="${WORK_DIR}/quarantine"
-    mkdir -p "$QUARANTINE"
-    chmod 700 "$QUARANTINE"
-    if ! mv "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null; then
-        if cp -a "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null; then
-            rm -rf "$FETCH_DIR"
-        else
-            warn "Quarantine: could not move $FETCH_DIR to $QUARANTINE — check permissions and disk space"
+    if [[ "$REPORT_ONLY" == true ]]; then
+        warn "--report-only: quarantine skipped — fetched repo remains at $FETCH_DIR"
+    else
+        mkdir -p "$QUARANTINE"
+        chmod 700 "$QUARANTINE"
+        if ! mv "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null; then
+            if cp -a "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null; then
+                rm -rf "$FETCH_DIR"
+            else
+                warn "Quarantine: could not move $FETCH_DIR to $QUARANTINE — check permissions and disk space"
+            fi
         fi
     fi
 

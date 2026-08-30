@@ -116,7 +116,9 @@ def build_sheet_summary(wb: Workbook, data: dict) -> None:
 
         if label == "Verdict":
             value_cell.fill = _fill(
-                COLOR_PASS if value == "PASS" else COLOR_FAIL
+                COLOR_PASS if value == "PASS"
+                else COLOR_WARN if value == "WARN"
+                else COLOR_FAIL
             )
             value_cell.font = Font(bold=True, name="Calibri")
 
@@ -186,21 +188,26 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
         if status not in ("FAIL", "WARN"):
             continue
         message = info.get("message", "").rstrip(" | ")
-        # Split pipe-separated findings into individual rows
-        findings = [m.strip() for m in message.split("|") if m.strip()]
+        # Split on " | " (the delimiter used by record_fail accumulation).
+        # A bare "|" split would incorrectly break on pipe chars in finding text.
+        findings = [m.strip() for m in message.split(" | ") if m.strip()]
         if not findings:
             findings = ["(no details)"]
         for finding in findings:
-            # Infer severity from keywords in the finding string
+            # Infer severity: status drives the base level; then look for
+            # explicit severity markers embedded by record_fail/semgrep.
+            # WARN findings are LOW/MEDIUM by definition (they were downgraded).
             f_upper = finding.upper()
-            if "CRITICAL" in f_upper:
-                sev, sev_order = "CRITICAL", 0
-            elif status == "FAIL":
-                sev, sev_order = "HIGH", 1
-            elif "MEDIUM" in f_upper:
-                sev, sev_order = "MEDIUM", 2
-            else:
-                sev, sev_order = "LOW", 3
+            if status == "FAIL":
+                if ":CRITICAL:" in f_upper:
+                    sev, sev_order = "CRITICAL", 0
+                else:
+                    sev, sev_order = "HIGH", 1
+            else:  # WARN
+                if ":MEDIUM:" in f_upper:
+                    sev, sev_order = "MEDIUM", 2
+                else:
+                    sev, sev_order = "LOW", 3
             rows.append((sev_order, sev, filepath, finding, status))
 
     # Sort: CRITICAL first, then HIGH, MEDIUM, LOW

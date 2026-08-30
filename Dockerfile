@@ -96,7 +96,17 @@ RUN mkdir -p /opt/ai-transit/{fetch,quarantine,approved,reports,logs,yara-rules}
     && chmod 700 /opt/ai-transit/quarantine \
     && mkdir -p /output
 
+# ── Non-root runtime user ─────────────────────────────────────────────────────
+# Running as root would trigger CWE-250 in the pipeline's own scanner.
+# The transit user owns /app and /opt/ai-transit; /output is world-writable.
+RUN groupadd -r transit && useradd -r -g transit -s /usr/sbin/nologin transit \
+    && chown -R transit:transit /app /opt/ai-transit \
+    && chmod 777 /output
+
+USER transit
+
 VOLUME ["/output"]
 
 ENTRYPOINT ["bash", "/app/ai_transit.sh"]
-CMD ["--help"]
+# No default CMD — running the container without arguments prints usage (exit 1)
+# because $# -lt 1 triggers the usage block in ai_transit.sh.
