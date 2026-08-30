@@ -1,6 +1,6 @@
 # AI Transit Pipeline — Complete Installation Guide
 
-**Version 2.1 | Scripts: fetch_repo.sh · scan_pipeline.sh · ai_transit.sh · generate_excel_report.py · selfcheck.py**
+**Version 3.0 | Scripts: fetch_repo.sh · scan_pipeline.sh · ai_transit.sh · generate_excel_report.py · selfcheck.py**
 
 ---
 
@@ -48,7 +48,7 @@ The AI Transit Pipeline is a 6-layer security gateway that scans AI-generated co
 | L2 — OWASP/CWE | Semgrep | ERROR/WARNING severity finding |
 | L3 — SCA/CVE | trivy, pip-audit, safety, npm audit | HIGH/CRITICAL CVE in dependency |
 | L4 — Patterns | grep (built-in) | CWE-798/22/918/327/338 match |
-| L5 — Per-type SAST | Bandit, ShellCheck, cppcheck, hadolint, checkov | Tool-specific finding |
+| L5 — Per-type SAST | Bandit, ShellCheck, cppcheck, hadolint, checkov, Semgrep per-lang | Tool-specific finding (also covers Rust, Kotlin, C#) |
 | L6 — Licence | ScanCode Toolkit | CRITICAL/HIGH CVE in detected package |
 
 **Verdict:** any FAIL in any layer → package quarantined. WARNs are logged but do not block.
@@ -1050,14 +1050,34 @@ Copy your YARA rules to `/opt/ai-transit/yara-rules/` (see §5.4 for a minimal t
 
 ---
 
-## 8. Environment Variables {#env-vars}
+## 8. Environment Variables & Flags {#env-vars}
+
+### 8.1 Command-line flags
+
+```
+./ai_transit.sh [FLAGS] <repo_url_or_path> [branch]
+
+  --quiet               Suppress all output except the final PASS/FAIL verdict (CI mode)
+  --verbose             Full debug output including per-file scan details
+  --min-severity LEVEL  Severity threshold: low | medium | high (default) | critical
+                        Findings below the threshold are logged as WARN, not FAIL
+  --since COMMIT        Diff mode: only scan files changed since this commit SHA
+  --report-only         Always exit 0 even on FAIL (observation / audit mode)
+```
+
+### 8.2 Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WORK_DIR` | `/opt/ai-transit` | Root working directory |
 | `OUTPUT_DIR` | `<script_dir>/Good` | Output directory for approved ZIPs |
+| `GITHUB_TOKEN` | _(unset)_ | Personal access token for private GitHub repos |
+| `MAX_SIZE_MB` | `500` | Repository size limit in MB |
+| `MIN_SEVERITY` | `high` | Minimum severity to block (`low\|medium\|high\|critical`) |
+| `VERBOSITY` | `normal` | Log verbosity passed to scanner (`quiet\|normal\|verbose`) |
+| `SINCE_COMMIT` | _(unset)_ | Diff mode commit SHA (same as `--since`) |
 
-Add to `~/.bashrc`:
+Add persistent values to `~/.bashrc`:
 ```bash
 export WORK_DIR="/opt/ai-transit"
 export OUTPUT_DIR="/opt/ai-transit/approved"
@@ -1066,6 +1086,31 @@ export OUTPUT_DIR="/opt/ai-transit/approved"
 Or pass inline:
 ```bash
 WORK_DIR=/data/ai-transit ./ai_transit.sh https://github.com/org/repo
+```
+
+### 8.3 Per-repo exclusions
+
+Place either of these files in the **root of the scanned repository** (not the pipeline directory):
+
+| File | Format | Effect |
+|------|--------|--------|
+| `.transitignore` | gitignore-style patterns | Files matching patterns are excluded from all scan layers |
+| `.transit-allow.json` | JSON array of `{rule, path, reason}` | Matching FAIL findings are downgraded to WARN |
+
+**`.transit-allow.json` example:**
+```json
+[
+  {
+    "rule": "CWE-798",
+    "path": "tests/fixtures/dummy_key.py",
+    "reason": "Test fixture — not a real credential"
+  },
+  {
+    "rule": "binary",
+    "path": "assets/logo.png",
+    "reason": "Approved binary asset"
+  }
+]
 ```
 
 ---
@@ -1393,18 +1438,66 @@ rm -rf /tmp/fail-docker
 ### 11.8 Run the self-check to verify the pipeline itself
 
 ```bash
-python3 selfcheck.py \
-    --bundle-dir . \
-    --output selfcheck_report.pdf
+# PDF report (default)
+python3 selfcheck.py --bundle-dir . --output selfcheck_report.pdf
+
+# JSON report (machine-readable, CI-friendly)
+python3 selfcheck.py --bundle-dir . --format json --output selfcheck_report
+
+# Both formats at once
+python3 selfcheck.py --bundle-dir . --format both --output selfcheck_report
+
+# Run only specific checks (faster)
+python3 selfcheck.py --bundle-dir . --only 11.1,11.4,11.6
 
 # Expected output:
-#   §11.1 Meta-scan      → PASS or WARN
-#   §11.2 Binary checks  → SKIP (unless --checksums provided)
-#   §11.3 GPG/cosign     → PASS or WARN
-#   §11.4 Python CVE     → PASS
-#   §11.5 Host OS CVE    → PASS or WARN
+#   §11.1 Meta-scan        → PASS or WARN
+#   §11.2 Binary checks    → SKIP (unless --checksums provided)
+#   §11.3 GPG/cosign       → PASS or WARN
+#   §11.4 Python CVE       → PASS
+#   §11.5 Host OS CVE      → PASS or WARN
 #   §11.6 Bundle integrity → PASS
-#   §11.7 AIDE           → SKIP (unless AIDE installed)
+#   §11.7 AIDE             → SKIP (unless AIDE installed)
+```
+
+---
+
+### 11.9 CI mode — quiet verdict with severity filter
+
+```bash
+# Only block on CRITICAL CVEs/findings; warnings and lower are ignored
+./ai_transit.sh --quiet --min-severity critical https://github.com/org/repo
+echo "Exit code: $?"   # 0 = PASS, 1 = FAIL
+```
+
+---
+
+### 11.10 Diff mode — scan only changed files (PR workflow)
+
+```bash
+# Scan only files changed since the merge base commit
+SINCE=$(git merge-base HEAD origin/main)
+./ai_transit.sh --since "$SINCE" /path/to/local/repo
+```
+
+---
+
+### 11.11 Private repository scan
+
+```bash
+# Generate a fine-grained PAT with "Contents: read" on github.com
+export GITHUB_TOKEN="ghp_your_token_here"
+./ai_transit.sh https://github.com/myorg/private-repo main
+```
+
+---
+
+### 11.12 Report-only mode (audit without blocking)
+
+```bash
+# Scan and generate reports but always exit 0 — useful for first-pass auditing
+./ai_transit.sh --report-only https://github.com/org/repo
+# Reports are written to $WORK_DIR/reports/ regardless of findings
 ```
 
 ---
