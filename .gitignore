@@ -4,3 +4,5 @@ build_kpi/
 build_kpi_app/
 **/__pycache__/
 **/*.pyc
+Good/
+.bundle_manifest.sha256

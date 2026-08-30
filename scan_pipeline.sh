@@ -44,13 +44,25 @@ declare -A ALLOW_MAP    # "rule::relpath" → reason
 ALLOWLIST_FILE="${SCAN_DIR}/.transit-allow.json"
 if [[ -f "$ALLOWLIST_FILE" ]]; then
     info "Allowlist found: $ALLOWLIST_FILE"
-    while IFS=':::' read -r rule path reason; do
+    # IFS is a set of characters, not a delimiter string: IFS=':::' would be
+    # identical to IFS=':' and split on every colon, leaving `path` empty.
+    # Use a single control character that cannot occur in a path or reason.
+    while IFS=$'\x01' read -r rule path reason; do
         [[ -z "$rule" ]] && continue
         ALLOW_MAP["${rule}::${path}"]="$reason"
-    done < <(python3 -c "
-import json, sys
-for entry in json.load(open('${ALLOWLIST_FILE}')):
-    print(entry.get('rule','') + ':::' + entry.get('path','') + ':::' + entry.get('reason',''))
+    done < <(ALLOWLIST_PATH="$ALLOWLIST_FILE" python3 -c "
+import json, os, sys
+try:
+    entries = json.load(open(os.environ['ALLOWLIST_PATH']))
+except Exception as exc:
+    print('PARSE_ERROR' + chr(1) + str(exc) + chr(1) + '', file=sys.stderr)
+    raise SystemExit(0)
+if not isinstance(entries, list):
+    raise SystemExit(0)
+for entry in entries:
+    if not isinstance(entry, dict):
+        continue
+    print(entry.get('rule','') + chr(1) + entry.get('path','') + chr(1) + entry.get('reason',''))
 " 2>/dev/null || true)
     info "Allowlist: ${#ALLOW_MAP[@]} exception(s) loaded"
 fi
@@ -164,10 +176,13 @@ record_fail() {
     # MIN_SEVERITY: extract severity from known embedded markers.
     # Non-semgrep grep findings have no marker → treated as HIGH (sev=3).
     # Semgrep embeds :INFO:, :LOW:, :MEDIUM:, :HIGH:, :CRITICAL: in the message.
-    local sev=3  # HIGH by default
-    if   echo "$msg" | grep -qiE ':(INFO|LOW):';    then sev=1
-    elif echo "$msg" | grep -qiE ':MEDIUM:';         then sev=2
-    elif echo "$msg" | grep -qiE ':CRITICAL:';       then sev=4
+    # Semgrep reports ERROR/WARNING/INFO; other layers use LOW/MEDIUM/
+    # HIGH/CRITICAL. Map both vocabularies onto the same 1-4 scale.
+    local sev=3  # HIGH by default (grep rules carry no explicit severity)
+    if   echo "$msg" | grep -qiE ':(INFO|LOW):';        then sev=1
+    elif echo "$msg" | grep -qiE ':(WARNING|MEDIUM):';  then sev=2
+    elif echo "$msg" | grep -qiE ':(ERROR|HIGH):';      then sev=3
+    elif echo "$msg" | grep -qiE ':CRITICAL:';          then sev=4
     fi
     if (( sev < SEV_THRESHOLD )); then
         record_warn "$file" "LOW_SEV(below --min-severity ${MIN_SEVERITY}):${msg}"
@@ -286,14 +301,17 @@ for r in data.get('results', []):
     msg  = r.get('extra',{}).get('message','')[:120]
     line = str(r.get('start',{}).get('line',''))
     sev  = r.get('extra',{}).get('severity','INFO')
-    rows.append(f'{path}|||{rule}|||{msg}|||{line}|||{sev}')
+    rows.append(chr(1).join((path, rule, msg, line, sev)))
 print('\n'.join(rows))
 " 2>/dev/null || true)
 
         if [[ -z "$ruleset_findings" ]]; then
             ok "  ${ruleset}: no findings"
         else
-            while IFS='|||' read -r path rule msg line sev; do
+            # Single-character delimiter: IFS is a character SET, so a
+            # multi-character value like '|||' would split on every '|' and
+            # scatter the fields.
+            while IFS=$'\x01' read -r path rule msg line sev; do
                 [[ -z "$path" ]] && continue
                 record_fail "$path" "semgrep[${ruleset}]:${rule}:line${line}:${sev}:${msg}"
             done < <(echo "$ruleset_findings")
@@ -1428,10 +1446,24 @@ generate_report_json() {
 import json, os, sys
 
 def _read_nul(path):
+    """Read a stream of NUL-terminated records, preserving empty ones.
+
+    Every record is written with a trailing NUL, so splitting yields one
+    trailing empty element that must be dropped -- but ONLY that one.
+    Filtering all empties (`if p`) would silently drop files whose message is
+    empty and shift every later element, attributing findings to the wrong
+    file in the report.
+    """
     if not os.path.exists(path):
         return []
     with open(path, "rb") as fh:
-        return [p.decode("utf-8", errors="replace") for p in fh.read().split(b"\x00") if p]
+        raw = fh.read()
+    if not raw:
+        return []
+    parts = raw.split(b"\x00")
+    if parts and parts[-1] == b"":
+        parts.pop()
+    return [p.decode("utf-8", errors="replace") for p in parts]
 
 fk = _read_nul(sys.argv[1]); fv = _read_nul(sys.argv[2])
 sk = _read_nul(sys.argv[3]); ss = _read_nul(sys.argv[4]); sm = _read_nul(sys.argv[5])

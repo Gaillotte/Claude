@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Static analysis ────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: ShellCheck (errors are fatal)
+        run: |
+          shellcheck --severity=error \
+            ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh \
+            tests/run_tests.sh
+
+      - name: ShellCheck (warnings are advisory)
+        continue-on-error: true
+        run: |
+          shellcheck --severity=warning \
+            ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh
+
+      - name: Python syntax
+        run: |
+          python3 -m compileall -q selfcheck.py generate_excel_report.py
+
+  # ── Test suite ─────────────────────────────────────────────────────────────
+  # Runs with no scanning tools installed: the pipeline degrades to its
+  # grep-based rules and every assertion still holds. This is the fast signal.
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install report dependencies
+        run: pip install --quiet openpyxl
+
+      - name: Run test suite
+        run: ./tests/run_tests.sh
+
+  # ── Test suite with the real scanners present ──────────────────────────────
+  # Catches breakage in tool-dependent paths (Layer 2 semgrep parsing, Bandit,
+  # ScanCode) that the degraded-mode run cannot reach. Allowed to fail so a
+  # flaky upstream tool never blocks the branch, but the log is there to read.
+  test-with-tools:
+    name: Test suite (scanners installed)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install scanners
+        run: |
+          pip install --quiet openpyxl semgrep bandit detect-secrets
+          sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run test suite
+        run: ./tests/run_tests.sh -v
+
+  # ── Supply chain: do the pinned versions actually resolve? ──────────────────
+  # These pins could not be verified from the development sandbox (its proxy
+  # blocks github.com), so CI is the first place they are genuinely checked.
+  pins:
+    name: Verify pinned tool versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve pinned versions from the Dockerfile
+        id: pins
+        run: |
+          set -euo pipefail
+          trivy=$(grep -oP 'ARG TRIVY_VERSION=\K[0-9.]+'   Dockerfile)
+          hado=$(grep -oP 'ARG HADOLINT_VERSION=\K[0-9.]+' Dockerfile)
+          bl=$(grep -oP 'ARG BETTERLEAKS_VERSION=\K[0-9.]+' Dockerfile || echo "")
+          echo "trivy=$trivy"     >> "$GITHUB_OUTPUT"
+          echo "hadolint=$hado"   >> "$GITHUB_OUTPUT"
+          echo "betterleaks=$bl"  >> "$GITHUB_OUTPUT"
+          echo "Pinned: trivy=$trivy hadolint=$hado betterleaks=${bl:-unset}"
+
+      - name: trivy release artifact exists
+        run: |
+          v='${{ steps.pins.outputs.trivy }}'
+          url="https://github.com/aquasecurity/trivy/releases/download/v${v}/trivy_${v}_Linux-64bit.tar.gz"
+          echo "HEAD $url"
+          code=$(curl -sSL -o /dev/null -w '%{http_code}' -r 0-0 "$url")
+          echo "HTTP $code"
+          if [ "$code" != "200" ] && [ "$code" != "206" ]; then
+            echo "::error::Pinned trivy version ${v} has no downloadable artifact (HTTP ${code})."
+            echo "::error::Update ARG TRIVY_VERSION in the Dockerfile."
+            exit 1
+          fi
+
+      - name: hadolint release artifact exists
+        run: |
+          v='${{ steps.pins.outputs.hadolint }}'
+          url="https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-Linux-x86_64"
+          code=$(curl -sSL -o /dev/null -w '%{http_code}' -r 0-0 "$url")
+          echo "HTTP $code"
+          if [ "$code" != "200" ] && [ "$code" != "206" ]; then
+            echo "::error::Pinned hadolint version ${v} has no downloadable artifact (HTTP ${code})."
+            exit 1
+          fi
+
+      - name: betterleaks module resolves
+        continue-on-error: true
+        run: |
+          v='${{ steps.pins.outputs.betterleaks }}'
+          if [ -z "$v" ]; then echo "No betterleaks pin found — skipping."; exit 0; fi
+          echo "Querying the Go module proxy for betterleaks v${v} …"
+          code=$(curl -sSL -o /tmp/bl.info -w '%{http_code}' \
+            "https://proxy.golang.org/github.com/betterleaks/betterleaks/@v/v${v}.info" || true)
+          echo "HTTP $code"; cat /tmp/bl.info 2>/dev/null || true
+          if [ "$code" != "200" ]; then
+            echo "::warning::betterleaks v${v} did not resolve on the Go module proxy."
+            echo "::warning::If this module is private or renamed, the Docker build will fail."
+          fi
+
+  # ── Docker image ───────────────────────────────────────────────────────────
+  # The only place the multi-stage build, the pinned versions and the non-root
+  # USER are actually exercised.
+  docker:
+    name: Docker build and smoke test
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ai-transit:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image runs as a non-root user
+        run: |
+          uid=$(docker run --rm --entrypoint id ai-transit:ci -u)
+          echo "container uid: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "::error::Container runs as root; the pipeline's own CWE-250 check would flag this."
+            exit 1
+          fi
+
+      - name: No-argument invocation prints usage
+        run: |
+          out=$(docker run --rm ai-transit:ci 2>&1 || true)
+          echo "$out" | head -20
+          echo "$out" | grep -q "Usage:" \
+            || { echo "::error::Expected usage text with no arguments."; exit 1; }
+
+      - name: Smoke test — clean fixture scans to PASS
+        run: |
+          mkdir -p out
+          docker run --rm \
+            -v "$PWD/tests/fixtures/clean:/mnt/localrepo:ro" \
+            -v "$PWD/out:/output" \
+            ai-transit:ci --quiet /mnt/localrepo
+          ls -la out/
+          ls out/*.zip >/dev/null 2>&1 \
+            || { echo "::error::No approved archive produced for the clean fixture."; exit 1; }
+
+      - name: Smoke test — vulnerable fixture is blocked
+        run: |
+          set +e
+          docker run --rm \
+            -v "$PWD/tests/fixtures/vulnerable:/mnt/localrepo:ro" \
+            ai-transit:ci --quiet /mnt/localrepo
+          code=$?
+          set -e
+          echo "exit code: $code"
+          [ "$code" -eq 1 ] \
+            || { echo "::error::Vulnerable fixture should exit 1, got ${code}."; exit 1; }
