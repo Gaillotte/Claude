@@ -77,10 +77,36 @@ if [[ "$IS_REMOTE" == true ]]; then
     info "Cloning: $REPO_INPUT → $DEST"
     CLONE_ARGS=(--depth 1 --no-tags --single-branch)
     [[ -n "$BRANCH" ]] && CLONE_ARGS+=(--branch "$BRANCH")
-    git clone "${CLONE_ARGS[@]}" "$REPO_INPUT" "$DEST"
+
+    # Inject GITHUB_TOKEN for private repos (token embedded in URL)
+    CLONE_URL="$REPO_INPUT"
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        CLONE_URL=$(echo "$REPO_INPUT" | sed "s|https://github.com/|https://${GITHUB_TOKEN}@github.com/|")
+        info "GITHUB_TOKEN detected — using authenticated clone"
+    fi
+    git clone "${CLONE_ARGS[@]}" "$CLONE_URL" "$DEST"
 else
     info "Copying local path: $REPO_INPUT → $DEST"
     cp -r "$REPO_INPUT" "$DEST"
+fi
+
+# ── Diff mode: list files changed since SINCE_COMMIT ─────────────────────────
+DIFF_FILES_LIST=""
+if [[ -n "${SINCE_COMMIT:-}" ]]; then
+    info "Diff mode: computing changed files since ${SINCE_COMMIT}"
+    # Temporarily keep .git for the diff, then remove it
+    if [[ "$IS_REMOTE" == true ]]; then
+        # For remote clone we used --depth 1; need to fetch the reference commit too
+        git -C "$DEST" fetch --depth=2 origin "${SINCE_COMMIT}" 2>/dev/null || true
+    fi
+    DIFF_FILES_LIST=$(git -C "$DEST" diff --name-only "${SINCE_COMMIT}" HEAD 2>/dev/null \
+        | sed "s|^|${DEST}/|" | tr '\n' ':' || true)
+    if [[ -n "$DIFF_FILES_LIST" ]]; then
+        info "Diff mode: $(echo "$DIFF_FILES_LIST" | tr ':' '\n' | wc -l) changed file(s)"
+        echo "$DIFF_FILES_LIST" > "${WORK_DIR}/.diff_files"
+    else
+        warn "Diff mode: no changed files found since ${SINCE_COMMIT} — scanning all files"
+    fi
 fi
 
 # ── Remove git metadata ───────────────────────────────────────────────────────

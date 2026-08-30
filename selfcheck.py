@@ -645,9 +645,31 @@ def build_pdf(results: list[CheckResult], output_path: Path, bundle_dir: Path) -
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+def _build_json_report(results: "list[CheckResult]", bundle_dir: Path) -> dict:
+    """Serialize check results to a JSON-serialisable dict."""
+    return {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "bundle_dir": str(bundle_dir),
+        "checks": [
+            {
+                "id": r.id,
+                "title": r.title,
+                "status": r.status,
+                "summary": r.summary,
+                "details": r.details,
+                "command": r.command,
+                "elapsed_s": round(r.elapsed, 3),
+            }
+            for r in results
+        ],
+        "summary": {s: sum(1 for r in results if r.status == s)
+                    for s in ("PASS", "FAIL", "WARN", "SKIP")},
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="AI Transit Pipeline self-check — runs §11 checks and produces a PDF report"
+        description="AI Transit Pipeline self-check — runs §11 checks and produces a report"
     )
     parser.add_argument(
         "--bundle-dir", default=str(Path(__file__).parent),
@@ -655,12 +677,24 @@ def main() -> None:
     )
     parser.add_argument(
         "--output", default="selfcheck_report.pdf",
-        help="Output PDF path (default: selfcheck_report.pdf)"
+        help="Output path base (default: selfcheck_report.pdf). "
+             "For --format json the extension is replaced with .json; "
+             "for --format both, both files are written."
     )
     parser.add_argument(
         "--checksums",
         help="Path to a JSON file mapping binary paths to their expected SHA-256 hashes. "
              "Example: {\"/usr/local/bin/betterleaks\": \"abc123...\"}",
+        default=None
+    )
+    parser.add_argument(
+        "--format", dest="fmt", choices=["pdf", "json", "both"], default="pdf",
+        help="Output format: pdf (default), json, or both"
+    )
+    parser.add_argument(
+        "--only",
+        help="Comma-separated list of check numbers to run, e.g. 11.1,11.3,11.5. "
+             "Other checks are skipped.",
         default=None
     )
     args = parser.parse_args()
@@ -672,8 +706,13 @@ def main() -> None:
         print(f"[ERROR] Bundle directory not found: {bundle_dir}", file=sys.stderr)
         sys.exit(1)
 
+    # Parse --only filter
+    only_ids: "set[str] | None" = None
+    if args.only:
+        only_ids = {s.strip() for s in args.only.split(",") if s.strip()}
+
     # Load optional binary checksums
-    checksums: dict[str, str] = {}
+    checksums: "dict[str, str]" = {}
     if args.checksums:
         try:
             checksums = json.loads(Path(args.checksums).read_text())
@@ -682,21 +721,25 @@ def main() -> None:
 
     print("AI Transit Pipeline — Self-Check")
     print(f"Bundle : {bundle_dir}")
-    print(f"Output : {output_path}")
+    print(f"Output : {output_path}  (format: {args.fmt})")
+    if only_ids:
+        print(f"Only   : {', '.join(sorted(only_ids))}")
     print()
 
-    checks = [
-        ("§11.1  Meta-scan",              lambda: check_meta_scan(bundle_dir)),
-        ("§11.2  Binary checksums",        lambda: check_binary_checksums(checksums)),
-        ("§11.3  GPG / cosign tools",      check_signatures),
-        ("§11.4  Python CVE scan",         lambda: check_python_cve(bundle_dir)),
-        ("§11.5  Host OS CVE scan",        check_host_cve),
-        ("§11.6  Bundle file integrity",   lambda: check_bundle_integrity(bundle_dir)),
-        ("§11.7  AIDE integrity monitor",  check_aide),
+    all_checks = [
+        ("11.1", "§11.1  Meta-scan",              lambda: check_meta_scan(bundle_dir)),
+        ("11.2", "§11.2  Binary checksums",        lambda: check_binary_checksums(checksums)),
+        ("11.3", "§11.3  GPG / cosign tools",      check_signatures),
+        ("11.4", "§11.4  Python CVE scan",         lambda: check_python_cve(bundle_dir)),
+        ("11.5", "§11.5  Host OS CVE scan",        check_host_cve),
+        ("11.6", "§11.6  Bundle file integrity",   lambda: check_bundle_integrity(bundle_dir)),
+        ("11.7", "§11.7  AIDE integrity monitor",  check_aide),
     ]
 
-    results: list[CheckResult] = []
-    for label, fn in checks:
+    results: "list[CheckResult]" = []
+    for check_id, label, fn in all_checks:
+        if only_ids and check_id not in only_ids:
+            continue
         print(f"  Running {label} … ", end="", flush=True)
         result = fn()
         results.append(result)
@@ -712,10 +755,20 @@ def main() -> None:
     print(f"  Global verdict: {global_verdict}")
     print()
 
-    print("  Generating PDF report … ", end="", flush=True)
-    build_pdf(results, output_path, bundle_dir)
-    print(f"done")
-    print(f"  Report saved to: {output_path}")
+    # ── Output generation ─────────────────────────────────────────────────────
+    pdf_path = output_path.with_suffix(".pdf")
+    json_path = output_path.with_suffix(".json")
+
+    if args.fmt in ("pdf", "both"):
+        print("  Generating PDF report … ", end="", flush=True)
+        build_pdf(results, pdf_path, bundle_dir)
+        print("done")
+        print(f"  PDF saved to: {pdf_path}")
+
+    if args.fmt in ("json", "both"):
+        report_data = _build_json_report(results, bundle_dir)
+        json_path.write_text(json.dumps(report_data, indent=2, ensure_ascii=False))
+        print(f"  JSON saved to: {json_path}")
 
     sys.exit(1 if global_verdict == "FAIL" else 0)
 

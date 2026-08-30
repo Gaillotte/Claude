@@ -8,7 +8,12 @@ set -euo pipefail
 
 WORK_DIR="${WORK_DIR:-/opt/ai-transit}"
 TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
-VERBOSITY="${VERBOSITY:-normal}"   # quiet | normal | verbose
+VERBOSITY="${VERBOSITY:-normal}"    # quiet | normal | verbose
+MIN_SEVERITY="${MIN_SEVERITY:-high}" # low | medium | high | critical
+
+# Numeric severity threshold for record_fail — findings below this are WARNs
+declare -A _SEV_NUM=([low]=1 [medium]=2 [high]=3 [critical]=4)
+SEV_THRESHOLD="${_SEV_NUM[${MIN_SEVERITY,,}]:-3}"
 
 # ── Log functions ────────────────────────────────────────────────────────────
 log()    { [[ "$VERBOSITY" != "quiet" ]] && echo "[$(date '+%H:%M:%S')] $*" || true; }
@@ -27,6 +32,37 @@ fi
 
 SCAN_DIR="$1"
 [[ -d "$SCAN_DIR" ]] || fail "Directory not found: $SCAN_DIR"
+
+# ── .transit-allow.json — exception allowlist ────────────────────────────────
+# Structure: [{"rule": "CWE-78", "path": "scripts/legacy.sh", "reason": "..."}]
+# Matched findings are downgraded from FAIL to WARN.
+declare -A ALLOW_MAP    # "rule::relpath" → reason
+ALLOWLIST_FILE="${SCAN_DIR}/.transit-allow.json"
+if [[ -f "$ALLOWLIST_FILE" ]]; then
+    info "Allowlist found: $ALLOWLIST_FILE"
+    while IFS=':::' read -r rule path reason; do
+        [[ -z "$rule" ]] && continue
+        ALLOW_MAP["${rule}::${path}"]="$reason"
+    done < <(python3 -c "
+import json, sys
+for entry in json.load(open('${ALLOWLIST_FILE}')):
+    print(entry.get('rule','') + ':::' + entry.get('path','') + ':::' + entry.get('reason',''))
+" 2>/dev/null || true)
+    info "Allowlist: ${#ALLOW_MAP[@]} exception(s) loaded"
+fi
+
+# ── Diff mode: restrict scan to changed files only ────────────────────────────
+# When SINCE_COMMIT was set, fetch_repo.sh writes a colon-separated file list.
+DIFF_FILES_ONLY=false
+declare -A DIFF_FILES_SET
+DIFF_FILES_PATH="${WORK_DIR}/.diff_files"
+if [[ -f "$DIFF_FILES_PATH" ]]; then
+    DIFF_FILES_ONLY=true
+    while IFS= read -r -d ':' f; do
+        [[ -f "$f" ]] && DIFF_FILES_SET["$f"]=1
+    done < "$DIFF_FILES_PATH"
+    info "Diff mode: ${#DIFF_FILES_SET[@]} file(s) will be scanned"
+fi
 
 # ── Default excluded directories (always pruned from find) ───────────────────
 DEFAULT_EXCLUDE_DIRS=(
@@ -97,6 +133,31 @@ record_warn() {
 record_fail() {
     local file="$1"; shift
     local msg="$*"
+
+    # Extract rule token (first colon-delimited segment of msg) for allowlist lookup
+    local rule="${msg%%:*}"
+    local rel_path="${file#"$SCAN_DIR/"}"
+
+    # Check allowlist: if matched, downgrade to WARN
+    if [[ -n "${ALLOW_MAP["${rule}::${rel_path}"]:-}" ||
+          -n "${ALLOW_MAP["${rule}::${file}"]:-}" ]]; then
+        local reason="${ALLOW_MAP["${rule}::${rel_path}"]:-${ALLOW_MAP["${rule}::${file}"]:-allowed}}"
+        record_warn "$file" "ALLOWED:${msg} (reason: ${reason})"
+        return
+    fi
+
+    # MIN_SEVERITY: findings tagged with sev:low or sev:medium are downgraded
+    # Severity is embedded in semgrep findings as :LOW: or :MEDIUM:
+    local sev=3  # default HIGH
+    if echo "$msg" | grep -qiE ':LOW:'; then     sev=1
+    elif echo "$msg" | grep -qiE ':MEDIUM:'; then sev=2
+    elif echo "$msg" | grep -qiE ':CRITICAL:'; then sev=4
+    fi
+    if (( sev < SEV_THRESHOLD )); then
+        record_warn "$file" "LOW_SEV(below --min-severity ${MIN_SEVERITY}):${msg}"
+        return
+    fi
+
     FINDINGS["$file"]+="${msg} | "
     FILE_STATUS["$file"]="FAIL"
     FILE_MSG["$file"]+="${msg} | "
@@ -1026,6 +1087,92 @@ scan_unknown() {
     record_pass "$f"
 }
 
+# ── Rust ─────────────────────────────────────────────────────────────────────
+scan_rust() {
+    local f="$1"
+    local failed=false
+    # unsafe block — mandatory manual review
+    if grep_check '\bunsafe\s*\{' "$f"; then
+        record_fail "$f" "CWE-119:unsafe_block_requires_review"; failed=true
+    fi
+    # Command execution via std::process::Command
+    if grep_check 'std::process::Command' "$f"; then
+        record_fail "$f" "CWE-78:process_Command_exec"; failed=true
+    fi
+    # Hardcoded credentials
+    if grep_check '(password|secret|api_key|token)\s*=\s*"[^"]{4,}"' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
+    fi
+    # Semgrep per-file if available
+    if has_cmd semgrep; then
+        local out
+        out=$(semgrep --config p/security-audit --quiet --json --no-autofix "$f" 2>/dev/null || true)
+        local cnt; cnt=$(echo "$out" | python3 -c "
+import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))
+" 2>/dev/null || echo "0")
+        if (( cnt > 0 )); then
+            record_fail "$f" "semgrep:security_audit:${cnt}_finding(s)"; failed=true
+        fi
+    fi
+    $failed || record_pass "$f"
+}
+
+# ── Kotlin ────────────────────────────────────────────────────────────────────
+scan_kotlin() {
+    local f="$1"
+    local failed=false
+    if grep_check 'Runtime\.getRuntime\(\)\.exec\(' "$f"; then
+        record_fail "$f" "CWE-78:Runtime_exec_command_injection"; failed=true
+    fi
+    if grep_check '(password|secret|apiKey|api_key|token)\s*=\s*"[^"]{4,}"' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
+    fi
+    if grep_check 'MessageDigest\.getInstance\("(MD5|SHA-1)"' "$f"; then
+        record_fail "$f" "CWE-327:weak_hash_MD5_or_SHA1"; failed=true
+    fi
+    if has_cmd semgrep; then
+        local out
+        out=$(semgrep --config p/security-audit --quiet --json --no-autofix "$f" 2>/dev/null || true)
+        local cnt; cnt=$(echo "$out" | python3 -c "
+import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))
+" 2>/dev/null || echo "0")
+        if (( cnt > 0 )); then
+            record_fail "$f" "semgrep:security_audit:${cnt}_finding(s)"; failed=true
+        fi
+    fi
+    $failed || record_pass "$f"
+}
+
+# ── C# ────────────────────────────────────────────────────────────────────────
+scan_csharp() {
+    local f="$1"
+    local failed=false
+    if grep_check 'Process\.Start\s*\(' "$f"; then
+        record_fail "$f" "CWE-78:Process_Start_command_injection"; failed=true
+    fi
+    if grep_check '(password|secret|apiKey|api_key|token)\s*=\s*"[^"]{4,}"' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
+    fi
+    if grep_check 'new\s+MD5CryptoServiceProvider\s*\(\)' "$f"; then
+        record_fail "$f" "CWE-327:MD5_weak_hash_algorithm"; failed=true
+    fi
+    # SQL string concatenation
+    if grep_check '"SELECT.*"\s*\+' "$f"; then
+        record_fail "$f" "CWE-89:SQL_string_concatenation"; failed=true
+    fi
+    if has_cmd semgrep; then
+        local out
+        out=$(semgrep --config p/security-audit --quiet --json --no-autofix "$f" 2>/dev/null || true)
+        local cnt; cnt=$(echo "$out" | python3 -c "
+import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))
+" 2>/dev/null || echo "0")
+        if (( cnt > 0 )); then
+            record_fail "$f" "semgrep:security_audit:${cnt}_finding(s)"; failed=true
+        fi
+    fi
+    $failed || record_pass "$f"
+}
+
 # ── Classification ───────────────────────────────────────────────────────────
 classify_file() {
     local f="$1"
@@ -1049,6 +1196,9 @@ classify_file() {
         .go)                              scan_go          "$f" ;;
         .c|.cpp|.h|.hpp|.cc)            scan_c_cpp       "$f" ;;
         .sh|.bash|.zsh|.ps1|.psm1|.ksh) scan_shell      "$f" ;;
+        .rs)                              scan_rust        "$f" ;;
+        .kt|.kts)                         scan_kotlin      "$f" ;;
+        .cs)                              scan_csharp      "$f" ;;
         .xml)                             scan_xml         "$f" ;;
         .yml|.yaml)                       scan_yaml        "$f" ;;
         .tf|.tfvars|.hcl)               scan_terraform   "$f" ;;
@@ -1087,6 +1237,10 @@ scan_by_type() {
     while IFS= read -r -d '' f; do
         [[ -f "$f" ]] || continue
         [[ "$(basename "$f")" == ".manifest_sha256.txt" ]] && continue
+        # Diff mode: skip files not in the changed-file set
+        if [[ "$DIFF_FILES_ONLY" == true && -z "${DIFF_FILES_SET["$f"]:-}" ]]; then
+            continue
+        fi
         (( current++ )) || true
         if [[ "$VERBOSITY" != "quiet" ]]; then
             # Overwrite the progress line in place using \r; truncate long paths

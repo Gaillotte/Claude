@@ -56,7 +56,7 @@ def _header_cell(ws, row: int, col: int, value: str) -> None:
 
 
 def _data_cell(ws, row: int, col: int, value: str,
-               fill_color: str | None = None) -> None:
+               fill_color: "str | None" = None) -> None:
     cell = ws.cell(row=row, column=col, value=value)
     cell.font = FONT_NORMAL
     cell.alignment = Alignment(vertical="center", wrap_text=True)
@@ -65,7 +65,7 @@ def _data_cell(ws, row: int, col: int, value: str,
         cell.fill = _fill(fill_color)
 
 
-def _verdict_fill(status: str) -> str | None:
+def _verdict_fill(status: str) -> "str | None":
     return {
         "PASS": COLOR_PASS,
         "FAIL": COLOR_FAIL,
@@ -167,6 +167,73 @@ def build_sheet_files(wb: Workbook, data: dict) -> None:
     ws.auto_filter.ref = f"A1:E{len(file_results) + 1}"
 
 
+# ── Onglet 2 : Findings (FAIL + WARN only) ───────────────────────────────────
+def build_sheet_findings(wb: "Workbook", data: dict) -> None:
+    ws = wb.create_sheet(title="Findings")
+
+    headers = ["#", "Severity", "File", "Finding / Rule", "Status"]
+    for col, h in enumerate(headers, start=1):
+        _header_cell(ws, 1, col, h)
+    ws.row_dimensions[1].height = 22
+
+    file_results: dict = data.get("file_results", {})
+
+    rows = []
+    for filepath, info in file_results.items():
+        status = info.get("status", "PASS").upper()
+        if status not in ("FAIL", "WARN"):
+            continue
+        message = info.get("message", "").rstrip(" | ")
+        # Split pipe-separated findings into individual rows
+        findings = [m.strip() for m in message.split("|") if m.strip()]
+        if not findings:
+            findings = ["(no details)"]
+        for finding in findings:
+            # Infer severity from keywords in the finding string
+            f_upper = finding.upper()
+            if "CRITICAL" in f_upper:
+                sev, sev_order = "CRITICAL", 0
+            elif status == "FAIL":
+                sev, sev_order = "HIGH", 1
+            elif "MEDIUM" in f_upper:
+                sev, sev_order = "MEDIUM", 2
+            else:
+                sev, sev_order = "LOW", 3
+            rows.append((sev_order, sev, filepath, finding, status))
+
+    # Sort: CRITICAL first, then HIGH, MEDIUM, LOW
+    rows.sort(key=lambda r: r[0])
+
+    status_fill = {"FAIL": COLOR_FAIL, "WARN": COLOR_WARN}
+    sev_fill = {"CRITICAL": "FF0000", "HIGH": COLOR_FAIL,
+                "MEDIUM": COLOR_WARN, "LOW": "D9D9D9"}
+
+    for idx, (_, sev, filepath, finding, status) in enumerate(rows, start=1):
+        row = idx + 1
+        fill = status_fill.get(status, None)
+        _data_cell(ws, row, 1, idx)
+        cell = ws.cell(row=row, column=2, value=sev)
+        cell.font = Font(bold=True, name="Calibri",
+                         color="FFFFFF" if sev in ("CRITICAL", "HIGH") else "000000")
+        cell.fill = _fill(sev_fill.get(sev, "FFFFFF"))
+        cell.border = THIN_BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        _data_cell(ws, row, 3, filepath, fill)
+        _data_cell(ws, row, 4, finding, fill)
+        _data_cell(ws, row, 5, status, fill)
+        ws.row_dimensions[row].height = 18
+
+    _set_col_width(ws, "A", 6)
+    _set_col_width(ws, "B", 12)
+    _set_col_width(ws, "C", 60)
+    _set_col_width(ws, "D", 80)
+    _set_col_width(ws, "E", 10)
+
+    ws.freeze_panes = "A2"
+    if rows:
+        ws.auto_filter.ref = f"A1:E{len(rows) + 1}"
+
+
 # ── Point d'entrée ────────────────────────────────────────────────────────────
 def main() -> None:
     if len(sys.argv) < 3:
@@ -186,6 +253,7 @@ def main() -> None:
     wb = Workbook()
     build_sheet_summary(wb, data)
     build_sheet_files(wb, data)
+    build_sheet_findings(wb, data)
 
     wb.save(xlsx_path)
     print(f"[OK] Rapport Excel généré : {xlsx_path}")

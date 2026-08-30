@@ -56,6 +56,13 @@ REPO_INPUT="$1"
 BRANCH="${2:-}"
 mkdir -p "$OUTPUT_DIR"
 
+# ── Forward environment variables to the container ───────────────────────────
+# Variables from the host shell are automatically propagated when set.
+DOCKER_ENV_ARGS=(-e OUTPUT_DIR=/output)
+for _var in WORK_DIR MAX_SIZE_MB MIN_SEVERITY VERBOSITY GITHUB_TOKEN SINCE_COMMIT; do
+    [[ -n "${!_var:-}" ]] && DOCKER_ENV_ARGS+=(-e "${_var}=${!_var}")
+done
+
 # ── Decide: remote URL or local path ─────────────────────────────────────────
 DOCKER_ARGS=()
 EXIT_CODE=0   # initialise before the if/else so set -e cannot swallow it
@@ -68,7 +75,7 @@ if [[ "$REPO_INPUT" =~ ^https?:// ]]; then
     info "Scanning remote repo : $REPO_INPUT"
     docker run --rm \
         -v "${OUTPUT_DIR}:/output" \
-        -e OUTPUT_DIR=/output \
+        "${DOCKER_ENV_ARGS[@]}" \
         "$IMAGE" "${DOCKER_ARGS[@]}" || EXIT_CODE=$?
 else
     # Local path — mount it into the container as read-only
@@ -82,7 +89,7 @@ else
     docker run --rm \
         -v "${OUTPUT_DIR}:/output" \
         -v "${LOCAL_PATH}:${CONTAINER_PATH}:ro" \
-        -e OUTPUT_DIR=/output \
+        "${DOCKER_ENV_ARGS[@]}" \
         "$IMAGE" "${DOCKER_ARGS[@]}" || EXIT_CODE=$?
 fi
 
