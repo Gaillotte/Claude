@@ -217,11 +217,19 @@ toc_items = [
     ("8.", "Success Criteria per Tool"),
     ("9.", "Results — Archives and Reports"),
     ("    9.1", "Approved ZIP Archive (Good/ directory)"),
-    ("    9.2", "Excel Scan Report"),
+    ("    9.2", "Excel Scan Report (Summary / Files / Findings)"),
     ("    9.3", "JSON Report"),
     ("    9.4", "HTML Report"),
     ("10.", "Absolute Security Rules"),
     ("11.", "Prerequisites and Installation"),
+    ("12.", "Operating the Pipeline"),
+    ("    12.1", "Command-Line Flags"),
+    ("    12.2", "Per-Repository Controls"),
+    ("    12.3", "Private Repositories"),
+    ("13.", "Quality Assurance"),
+    ("    13.1", "Test Suite"),
+    ("    13.2", "Continuous Integration"),
+    ("    13.3", "Bundle Integrity"),
 ]
 for num, title in toc_items:
     p = doc.add_paragraph()
@@ -1664,7 +1672,7 @@ add_table_header(t, ["Column", "Content"])
 set_col_widths(t, [6, 11.5])
 sheet1_rows = [
     ("#",                  "Line number (priority order: FAIL → WARN → PASS)"),
-    ("File",               "Full absolute path of the scanned file"),
+    ("File",               "Path relative to the repository root"),
     ("Type",               "File extension (.py, .sh, .yml, etc.)"),
     ("Status",             "PASS (green) / WARN (yellow) / FAIL (red)"),
     ("Message / Finding",  "Description of the detected issue(s) with CWE/OWASP reference (empty if PASS)"),
@@ -1677,6 +1685,34 @@ para(doc, (
     "The Tab 1 table is sorted by descending criticality (FAIL first) "
     "and has an auto-filter on all columns. The first row is frozen "
     "to facilitate navigation in large reports."
+))
+
+heading(doc, "Tab 2 - Findings", level=3)
+para(doc, (
+    "Tab 1 lists every file scanned, one row per file. Tab 2 lists only what "
+    "needs attention: FAIL and WARN entries, one row per individual finding, "
+    "sorted by severity."
+))
+t = doc.add_table(rows=1, cols=2)
+t.style = "Table Grid"
+add_table_header(t, ["Column", "Content"])
+set_col_widths(t, [6, 11.5])
+sheet2_rows = [
+    ("#",               "Line number (sorted CRITICAL, HIGH, MEDIUM, LOW)"),
+    ("Severity",        "CRITICAL / HIGH / MEDIUM / LOW, colour-coded"),
+    ("File",            "Path relative to the repository root"),
+    ("Finding / Rule",  "The individual finding, e.g. CWE-89:SQL_injection_..."),
+    ("Status",          "FAIL or WARN, taken from the finding itself"),
+]
+for row in sheet2_rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+
+para(doc, (
+    "Severity is read from each finding's own tag, not from the file's overall "
+    "status. This distinction matters: a file that genuinely fails may also carry "
+    "a low-severity warning such as a missing optional tool, and reporting that "
+    "warning as HIGH would misrepresent the risk."
 ))
 
 heading(doc, "9.3 JSON Report", level=2)
@@ -1806,11 +1842,176 @@ set_col_widths(t, [4, 5, 8.5])
 env_rows = [
     ("WORK_DIR",      "/opt/ai-transit", "Pipeline root directory"),
     ("OUTPUT_DIR",    "./Good",          "Output directory for approved archives"),
-    ("GPG_RECIPIENT", "(empty)",         "GPG email for optional archive encryption"),
+    ("GITHUB_TOKEN",  "(empty)",         "Token for cloning private GitHub repositories"),
+    ("MAX_SIZE_MB",   "500",             "Repository size limit, in megabytes"),
+    ("MIN_SEVERITY",  "high",            "Minimum severity that blocks: low|medium|high|critical"),
+    ("VERBOSITY",     "normal",          "Log verbosity: quiet|normal|verbose"),
+    ("SINCE_COMMIT",  "(empty)",         "Diff mode: scan only files changed since this commit"),
     ("REPO_INPUT",    "(auto)",          "Automatically passed to scan for traceability"),
 ]
 for row in env_rows:
     add_row(t, row, bold_first=True)
+
+ALLOWLIST_EXAMPLE = (
+    "[\n"
+    "  {\n"
+    "    \"rule\": \"CWE-798\",\n"
+    "    \"path\": \"tests/fixtures/dummy_key.py\",\n"
+    "    \"reason\": \"Test fixture, not a real credential\"\n"
+    "  }\n"
+    "]"
+)
+TESTS_USAGE = (
+    "./tests/run_tests.sh          # everything\n"
+    "./tests/run_tests.sh -v       # detail for failures\n"
+    "./tests/run_tests.sh rules    # only matching groups"
+)
+MANIFEST_USAGE = (
+    "python3 selfcheck.py --write-manifest   # after install, and after any intentional change\n"
+    "python3 selfcheck.py --only 11.6        # verify"
+)
+
+doc.add_paragraph()
+
+page_break(doc)
+
+# ── 12. Operating the pipeline ────────────────────────────────────────────────
+heading(doc, "12. Operating the Pipeline", level=1)
+
+heading(doc, "12.1 Command-Line Flags", level=2)
+para(doc, (
+    "The pipeline runs the same six layers in every mode. The flags below change "
+    "what it does with the result, not how it scans."
+))
+t = doc.add_table(rows=1, cols=3)
+t.style = "Table Grid"
+add_table_header(t, ["Flag", "Effect", "Typical use"])
+set_col_widths(t, [4.5, 7, 6])
+flag_rows = [
+    ("--quiet",              "Verdict only on stdout", "CI gate"),
+    ("--verbose",            "Full per-file detail", "Investigating a finding"),
+    ("--min-severity LEVEL", "low | medium | high | critical; findings below the "
+                             "threshold become WARN instead of FAIL", "Tuning the blocking bar"),
+    ("--since COMMIT",       "Scan only files changed since COMMIT", "Pull-request checks"),
+    ("--report-only",        "Always exit 0, and leave the fetched repository in "
+                             "place rather than quarantining it", "First-pass audit"),
+    ("--no-zip",             "Skip creation of the approved archive", "CI"),
+    ("--no-excel",           "Skip generation of the Excel report", "CI"),
+]
+for row in flag_rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+
+heading(doc, "12.2 Per-Repository Controls", level=2)
+para(doc, (
+    "Two optional files may be placed at the root of the repository being scanned. "
+    "They belong to the scanned repository, not to the pipeline installation."
+))
+t = doc.add_table(rows=1, cols=2)
+t.style = "Table Grid"
+add_table_header(t, ["File", "Effect"])
+set_col_widths(t, [5, 12.5])
+add_row(t, (".transitignore",
+            "gitignore-style patterns. Matched files are excluded from every layer."),
+        bold_first=True)
+add_row(t, (".transit-allow.json",
+            "JSON array of {rule, path, reason} entries. A matching FAIL is "
+            "downgraded to WARN and the reason is recorded in the report."),
+        bold_first=True)
+doc.add_paragraph()
+code_block(doc, ALLOWLIST_EXAMPLE)
+para(doc, (
+    "Every allowlist entry carries a reason. An exception recorded without one is "
+    "indistinguishable from an oversight six months later."
+), italic=True)
+
+heading(doc, "12.3 Private Repositories", level=2)
+para(doc, (
+    "Set GITHUB_TOKEN to clone a private repository. The token is supplied to git "
+    "through GIT_ASKPASS and never appears in the clone URL, so it is not written "
+    "to .git/config, the reflog, or the process command line where any user on the "
+    "host could read it with ps."
+))
+code_block(doc, "GITHUB_TOKEN=ghp_... ./ai_transit.sh https://github.com/org/private-repo")
+para(doc, (
+    "Note that a token passed into a container is visible through docker inspect to "
+    "anyone who can reach the Docker daemon. On a shared host, prefer running the "
+    "pipeline natively for private repositories."
+), italic=True)
+
+page_break(doc)
+
+# ── 13. Quality assurance ─────────────────────────────────────────────────────
+heading(doc, "13. Quality Assurance", level=1)
+
+heading(doc, "13.1 Test Suite", level=2)
+para(doc, (
+    "The pipeline ships with a test suite that verifies its own behaviour: that "
+    "rules fire on unsafe code, that they do not fire on safe code, that the flags "
+    "behave as documented, and that the reports and archive are well-formed."
+))
+code_block(doc, TESTS_USAGE)
+para(doc, (
+    "The suite requires no scanning tools. With none installed the pipeline degrades "
+    "to its built-in pattern rules and every assertion still holds, which is exactly "
+    "how continuous integration runs it."
+))
+t = doc.add_table(rows=1, cols=2)
+t.style = "Table Grid"
+add_table_header(t, ["Layer", "Covers"])
+set_col_widths(t, [4, 13.5])
+qa_rows = [
+    ("A - rule corpus", "Detection correctness: each finding must be attributed to the "
+                        "correct file, plus false-positive guards for safe code"),
+    ("B - end to end",  "Clean repository passes; vulnerable repository is blocked"),
+    ("C - flags",       "--report-only, --min-severity, argument guards, allowlist, "
+                        ".transitignore, --no-zip and --no-excel"),
+    ("D - artifacts",   "JSON validity and verdict field, HTML report, archive paths, "
+                        "Excel Findings tab, clean output when redirected"),
+    ("E - diff mode",   "--since scans exactly the changed files"),
+    ("F - static",      "Parse checks, shellcheck, and lint rules for two defect classes "
+                        "that have previously shipped"),
+]
+for row in qa_rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+
+para(doc, (
+    "Each assertion is validated by mutation: the defect it guards against is "
+    "deliberately reintroduced and the test confirmed to fail. This is not a "
+    "formality. During development two tests passed against code that was known to "
+    "be broken, because the tests themselves were wrong. A suite that has never been "
+    "observed failing provides no evidence."
+))
+
+heading(doc, "13.2 Continuous Integration", level=2)
+t = doc.add_table(rows=1, cols=3)
+t.style = "Table Grid"
+add_table_header(t, ["Job", "Purpose", "Blocking"])
+set_col_widths(t, [4, 10.5, 3])
+ci_rows = [
+    ("lint",            "shellcheck (errors fatal) and Python syntax", "Yes"),
+    ("test",            "Test suite with no scanning tools", "Yes"),
+    ("test-with-tools", "Suite again with the scanners installed", "No"),
+    ("pins",            "Pinned tool versions resolve, and match their SHA-256 digest", "Yes"),
+    ("docker",          "Image builds, runs as non-root, passes smoke tests", "Yes"),
+]
+for row in ci_rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+para(doc, (
+    "The docker job is the only place where the multi-stage build, the pinned tool "
+    "versions and the non-root runtime user are actually exercised."
+))
+
+heading(doc, "13.3 Bundle Integrity", level=2)
+para(doc, (
+    "Check 11.6 compares every bundle file against .bundle_manifest.sha256. That "
+    "manifest is generated at installation time and is deliberately not tracked in "
+    "version control: were it committed, it would report tampering after every "
+    "ordinary edit, and a check that cries wolf is a check people learn to ignore."
+))
+code_block(doc, MANIFEST_USAGE)
 
 doc.add_paragraph()
 

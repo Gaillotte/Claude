@@ -1662,6 +1662,99 @@ cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE — OPERATIONAL FLAGS
+# ═══════════════════════════════════════════════════════════════════════════════
+bg(cv)
+header_bar(cv, HDR_NAVY, "Operating the Pipeline")
+text(cv, "The same scan, tuned to the situation it runs in",
+     35, H - 110, size=14, color=GRAY)
+
+flag_rows = [
+    ("--quiet", "Verdict only — nothing else on stdout", "CI gate"),
+    ("--verbose", "Full per-file detail", "Debugging a finding"),
+    ("--min-severity LEVEL", "low | medium | high | critical", "Tune the blocking bar"),
+    ("--since COMMIT", "Scan only files changed since COMMIT", "Pull-request checks"),
+    ("--report-only", "Always exit 0; nothing quarantined", "First-pass audit"),
+    ("--no-zip / --no-excel", "Reports only, no archive", "CI, where the ZIP is discarded"),
+]
+
+ry = H - 155
+card(cv, 30, ry - 42 * len(flag_rows) - 14, W - 60, 42 * len(flag_rows) + 46)
+text(cv, "FLAG", 50, ry, size=10, color=GRAY, bold=True)
+text(cv, "EFFECT", 265, ry, size=10, color=GRAY, bold=True)
+text(cv, "TYPICAL USE", 640, ry, size=10, color=GRAY, bold=True)
+line(cv, 45, ry - 10, W - 45, ry - 10, HexColor("#D0DAE8"), 1)
+
+for i, (flag, effect, use) in enumerate(flag_rows):
+    yy = ry - 34 - i * 42
+    cv.setFont("Courier-Bold", 11); cv.setFillColor(ACCENT)
+    cv.drawString(50, yy, flag)
+    text(cv, effect, 265, yy, size=12, color=DARK, max_w=360)
+    text(cv, use, 640, yy, size=11, color=GRAY, max_w=230)
+
+ty = ry - 42 * len(flag_rows) - 60
+text(cv, "Per-repository controls", 35, ty, size=15, color=DARK, bold=True)
+text_block(cv, [
+    ".transitignore        gitignore-style patterns — matched files are not scanned at all",
+    ".transit-allow.json   {rule, path, reason} entries — downgrade a known FAIL to WARN",
+], 35, ty - 26, size=12, color=GRAY, line_h=22)
+text(cv, "An allowlist entry records why a finding is accepted. Silence without a reason is how exceptions become permanent.",
+     35, ty - 78, size=11, color=HexColor("#557799"), max_w=W - 70)
+cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE — QUALITY ASSURANCE
+# ═══════════════════════════════════════════════════════════════════════════════
+bg(cv)
+header_bar(cv, HexColor("#2E7D32"), "How the Pipeline Verifies Itself")
+text(cv, "A scanner nobody tests is a scanner nobody should trust",
+     35, H - 110, size=14, color=GRAY)
+
+qa_cards = [
+    ("Test suite", "51 assertions", [
+        "Runs with zero scanning tools installed",
+        "Rule corpus: every finding must land on the right file",
+        "False-positive guards for correct, safe code",
+        "Flags, reports, archive structure, diff mode",
+    ], HexColor("#2E7D32")),
+    ("Continuous integration", "5 jobs", [
+        "lint — shellcheck, errors fatal",
+        "test — suite, no tools (fast signal)",
+        "test-with-tools — scanners installed",
+        "pins — pinned versions resolve + digest match",
+        "docker — build, non-root, smoke tests",
+    ], HexColor("#0070A8")),
+]
+
+cx = 35
+for title, subtitle, bullets, col in qa_cards:
+    cw = (W - 100) / 2
+    card(cv, cx, H - 470, cw, 320)
+    rect(cv, cx, H - 200, cw, 50, col, radius=10)
+    text(cv, title, cx + 18, H - 172, size=17, color=WHITE, bold=True)
+    text(cv, subtitle, cx + cw - 18, H - 172, size=13, color=WHITE, align="right")
+    for bi, b in enumerate(bullets):
+        text(cv, "•", cx + 20, H - 232 - bi * 30, size=13, color=col, bold=True)
+        text(cv, b, cx + 36, H - 232 - bi * 30, size=11.5, color=DARK, max_w=cw - 55)
+    cx += cw + 30
+
+text(cv, "Every assertion is validated by mutation", 35, H - 510, size=15, color=DARK, bold=True)
+text_block(cv, [
+    "The bug each test guards against is deliberately reintroduced, and the test is confirmed to fail.",
+    "Two tests were themselves broken when first written — they passed against known-broken code.",
+    "A suite that has never been seen red proves nothing.",
+], 35, H - 538, size=12, color=GRAY, line_h=22)
+
+text(cv, "Lint rules enforce two bug classes that already shipped:", 35, H - 620, size=12.5, color=DARK, bold=True)
+text_block(cv, [
+    "multi-character IFS — IFS=':::' is a character set, silently identical to IFS=':'",
+    "top-level 'local'  — valid syntax, but aborts at runtime under set -e",
+], 55, H - 646, size=11.5, color=GRAY, line_h=21)
+cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SLIDE — CONCLUSION (updated)
 # ═══════════════════════════════════════════════════════════════════════════════
 bg(cv)
@@ -1698,6 +1791,7 @@ text(cv, "6-layer pipeline · OWASP · CWE · CERT · SCA · Licence (ScanCode) 
 text(cv, "github.com/Gaillotte/Claude  —  branch claude/vigilant-carson-f8twy0",
      W/2, H - 710, size=11, color=HexColor("#557799"), align="center")
 cv.showPage()
+
 
 
 cv.save()

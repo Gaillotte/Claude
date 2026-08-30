@@ -235,17 +235,19 @@ items = [
     ("06", "Outils utilisés",                   C_GREEN),
     ("07", "Résultats & livrables",             C_ACCENT),
     ("08", "Règles de sécurité absolues",       C_RED),
+    ("09", "Exploitation & assurance qualité",   C_ACCENT2),
 ]
 
 cols = [(Inches(0.5), Inches(6.7))]
 for i, (num, title, color) in enumerate(items):
-    col_x = Inches(0.5) if i < 4 else Inches(6.7)
-    row   = i % 4
-    y = Inches(1.4 + row * 1.4)
+    # 9 items: 5 in the left column, 4 in the right, rows tightened to fit.
+    col_x = Inches(0.5) if i < 5 else Inches(6.7)
+    row   = i if i < 5 else i - 5
+    y = Inches(1.35 + row * 1.12)
 
-    rounded_box(sl, col_x, y, Inches(5.9), Inches(1.1), C_BG_CARD)
+    rounded_box(sl, col_x, y, Inches(5.9), Inches(0.95), C_BG_CARD)
     # Numéro
-    s = sl.shapes.add_shape(5, col_x + Inches(0.12), y + Inches(0.2),
+    s = sl.shapes.add_shape(5, col_x + Inches(0.12), y + Inches(0.15),
                             Inches(0.65), Inches(0.65))
     s.fill.solid(); s.fill.fore_color.rgb = color
     s.line.fill.background(); s.adjustments[0] = 0.5
@@ -254,8 +256,8 @@ for i, (num, title, color) in enumerate(items):
     r.font.size = Pt(14); r.font.bold = True
     r.font.color.rgb = C_WHITE; r.font.name = "Calibri"
     # Titre
-    txt(sl, title, col_x + Inches(0.9), y + Inches(0.27),
-        Inches(4.8), Inches(0.6), size=17, bold=True, color=C_WHITE)
+    txt(sl, title, col_x + Inches(0.9), y + Inches(0.2),
+        Inches(4.8), Inches(0.6), size=16, bold=True, color=C_WHITE)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -902,6 +904,65 @@ for i, (title, desc) in enumerate(rules):
         Inches(6.1), Inches(0.42), size=14, bold=True, color=C_RED)
     txt(sl, desc, x + Inches(0.15), y + Inches(0.62),
         Inches(6.0), Inches(0.85), size=13, color=C_LIGHT)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE — EXPLOITATION & ASSURANCE QUALITE
+# ═══════════════════════════════════════════════════════════════════════════════
+sl = add_slide()
+fill_bg(sl, C_BG_DARK)
+box(sl, 0, 0, W, Inches(1.0), RGBColor(0x00, 0x70, 0xA8))
+txt(sl, "09  Exploitation & assurance qualité", Inches(0.5), Inches(0.12), W, Inches(0.8),
+    size=30, bold=True, color=C_WHITE)
+divider(sl, Inches(1.05))
+
+# ── Colonne gauche : options d'exécution ──
+txt(sl, "Options d'exécution", Inches(0.5), Inches(1.2), Inches(6), Inches(0.5),
+    size=19, bold=True, color=C_ACCENT)
+rounded_box(sl, Inches(0.5), Inches(1.75), Inches(5.9), Inches(3.1), C_BG_CARD)
+opts = [
+    ("--quiet / --verbose",   "Verbosité des journaux"),
+    ("--min-severity",        "Seuil de blocage : low → critical"),
+    ("--since COMMIT",        "Uniquement les fichiers modifiés"),
+    ("--report-only",         "Ne bloque jamais, ne met rien en quarantaine"),
+    ("--no-zip / --no-excel", "Rapports seuls, sans archive"),
+]
+for i, (flag, desc) in enumerate(opts):
+    y = Inches(1.95 + i * 0.58)
+    txt(sl, flag, Inches(0.72), y, Inches(2.6), Inches(0.3),
+        size=12, bold=True, color=C_ACCENT2)
+    txt(sl, desc, Inches(0.72), y + Inches(0.25), Inches(5.4), Inches(0.3),
+        size=11, color=C_GRAY)
+
+# ── Colonne droite : le pipeline se vérifie lui-même ──
+txt(sl, "Le pipeline se vérifie lui-même", Inches(6.9), Inches(1.2), Inches(6), Inches(0.5),
+    size=19, bold=True, color=C_GREEN)
+rounded_box(sl, Inches(6.9), Inches(1.75), Inches(5.9), Inches(3.1), C_BG_CARD)
+qa = [
+    ("Suite de tests",         "51 assertions, aucun outil requis"),
+    ("Corpus de règles",       "chaque finding doit viser le bon fichier"),
+    ("Garde-fous",             "le code sûr ne doit jamais être signalé"),
+    ("Intégration continue",   "lint · test · pins · docker"),
+    ("Validation par mutation", "le défaut est réintroduit, le test doit échouer"),
+]
+for i, (title, desc) in enumerate(qa):
+    y = Inches(1.95 + i * 0.58)
+    txt(sl, title, Inches(7.12), y, Inches(3.0), Inches(0.3),
+        size=12, bold=True, color=C_WHITE)
+    txt(sl, desc, Inches(7.12), y + Inches(0.25), Inches(5.4), Inches(0.3),
+        size=11, color=C_GRAY)
+
+# ── Bas : contrôles par dépôt ──
+txt(sl, "Contrôles par dépôt", Inches(0.5), Inches(5.0), Inches(6), Inches(0.4),
+    size=17, bold=True, color=C_ACCENT)
+txt_lines(sl, [
+    ".transitignore  —  motifs gitignore, fichiers exclus de toutes les couches",
+    ".transit-allow.json  —  rétrograde un FAIL connu en WARN, avec justification",
+], Inches(0.5), Inches(5.45), Inches(12.3), Inches(0.9), size=12, color=C_GRAY)
+
+txt(sl, "Une suite qu'on n'a jamais vue échouer n'apporte aucune preuve.",
+    Inches(0.5), Inches(6.5), Inches(12.3), Inches(0.5),
+    size=15, bold=True, italic=True, color=C_ACCENT2, align=PP_ALIGN.CENTER)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

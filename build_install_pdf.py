@@ -98,17 +98,38 @@ def inline(text: str) -> str:
     """Convert inline Markdown (bold, inline code, escapes) to ReportLab XML."""
     # Escape XML special chars first (except ones we'll add)
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Pull `inline code` out before any emphasis runs. Underscores are
+    # extremely common inside code spans (GITHUB_TOKEN, GIT_ASKPASS,
+    # MAX_SIZE_MB); leaving them in scope lets the italic rule pair an
+    # underscore in one span with one in another and emit overlapping tags
+    # like GITHUB<i>TOKEN … GIT</i>ASKPASS, which ReportLab rejects outright.
+    code_spans: list[str] = []
+
+    def _stash(m: "re.Match") -> str:
+        code_spans.append(m.group(1))
+        return f"\x00CODE{len(code_spans) - 1}\x00"
+
+    text = re.sub(r'`([^`]+?)`', _stash, text)
+
     # **bold** or __bold__
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'__(.+?)__',     r'<b>\1</b>', text)
-    # *italic* or _italic_
+    # *italic*
     text = re.sub(r'\*([^*]+?)\*',  r'<i>\1</i>', text)
-    text = re.sub(r'_([^_]+?)_',    r'<i>\1</i>', text)
-    # `inline code`
-    text = re.sub(r'`([^`]+?)`',
-                  r'<font face="Courier" size="8">\1</font>', text)
+    # _italic_ — only at word boundaries, so snake_case identifiers outside
+    # code spans are still left alone.
+    text = re.sub(r'(?<![\w\\])_([^_]+?)_(?!\w)', r'<i>\1</i>', text)
+
     # [text](url) — strip links, keep text
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+
+    # Restore code spans as monospace runs.
+    def _restore(m: "re.Match") -> str:
+        return (f'<font face="Courier" size="8">'
+                f'{code_spans[int(m.group(1))]}</font>')
+
+    text = re.sub(r'\x00CODE(\d+)\x00', _restore, text)
     return text
 
 

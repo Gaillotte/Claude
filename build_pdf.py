@@ -692,6 +692,53 @@ cv.showPage()
 # ═══════════════════════════════════════════════════════════════════════════════
 # SLIDE — CONCLUSION
 # ═══════════════════════════════════════════════════════════════════════════════
+# ── SLIDE — Exploitation & assurance qualité ─────────────────────────────────
+bg(cv)
+header_bar(cv, HDR_BLU, "Exploitation et assurance qualité")
+
+text(cv, "Options d'exécution", 40, H - 125, size=18, color=ACCENT, bold=True)
+opt_rows = [
+    ("--quiet / --verbose", "Verbosité des journaux"),
+    ("--min-severity", "Seuil de blocage : low | medium | high | critical"),
+    ("--since COMMIT", "Mode différentiel : uniquement les fichiers modifiés"),
+    ("--report-only", "Ne bloque jamais, ne met rien en quarantaine"),
+    ("--no-zip / --no-excel", "Rapports seuls, sans archive"),
+]
+card(cv, 30, H - 375, W / 2 - 50, 230)
+for i, (flag, desc) in enumerate(opt_rows):
+    yy = H - 175 - i * 38
+    cv.setFont("Courier-Bold", 11); cv.setFillColor(ACCENT2)
+    cv.drawString(50, yy, flag)
+    text(cv, desc, 50, yy - 16, size=10.5, color=GRAY, max_w=W / 2 - 90)
+
+text(cv, "Contrôles par dépôt", 40, H - 415, size=18, color=ACCENT, bold=True)
+text_block(cv, [
+    ".transitignore  —  motifs gitignore, fichiers exclus de toutes les couches",
+    ".transit-allow.json  —  rétrograde un FAIL connu en WARN, avec justification",
+], 40, H - 448, size=12, color=GRAY, line_h=26)
+
+text(cv, "Le pipeline se vérifie lui-même", W / 2 + 20, H - 125, size=18, color=ACCENT2, bold=True)
+card(cv, W / 2 + 10, H - 375, W / 2 - 50, 230)
+qa_lines = [
+    ("Suite de tests", "51 assertions, sans aucun outil de scan requis"),
+    ("Corpus de règles", "chaque finding doit viser le bon fichier"),
+    ("Garde-fous", "le code sûr ne doit jamais être signalé"),
+    ("Intégration continue", "lint · test · pins · docker"),
+    ("Validation par mutation", "le défaut est réintroduit, le test doit échouer"),
+]
+for i, (title, desc) in enumerate(qa_lines):
+    yy = H - 175 - i * 38
+    text(cv, title, W / 2 + 30, yy, size=12, color=WHITE, bold=True)
+    text(cv, desc, W / 2 + 30, yy - 16, size=10.5, color=GRAY, max_w=W / 2 - 90)
+
+line(cv, 40, H - 520, W - 40, H - 520, HexColor("#22374D"), 1)
+text(cv, "Une suite qu'on n'a jamais vue échouer n'apporte aucune preuve.",
+     W / 2, H - 560, size=15, color=ACCENT2, align="center", bold=True)
+text(cv, "Deux tests de cette suite passaient sur du code notoirement défectueux : les tests eux-mêmes étaient faux.",
+     W / 2, H - 590, size=12, color=GRAY, align="center")
+cv.showPage()
+
+
 bg(cv)
 rect(cv, 0, H - 80, W, 80, ACCENT2)
 text(cv, "En résumé", 35, H - 52, size=36, color=BG, bold=True)

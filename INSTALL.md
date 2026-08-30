@@ -1,6 +1,6 @@
 # AI Transit Pipeline — Complete Installation Guide
 
-**Version 3.0 | Scripts: fetch_repo.sh · scan_pipeline.sh · ai_transit.sh · generate_excel_report.py · selfcheck.py**
+**Version 3.1 | Scripts: fetch_repo.sh · scan_pipeline.sh · ai_transit.sh · generate_excel_report.py · selfcheck.py**
 
 ---
 
@@ -28,13 +28,16 @@
    - 5.15 [ScanCode Toolkit — licence & copyright (L6)](#scancode)
 6. [Pipeline Scripts Installation](#scripts)
 7. [Directory Structure Setup](#directories)
-8. [Environment Variables](#env-vars)
+8. [Environment Variables & Flags](#env-vars)
 9. [Full Installation Verification](#verification)
 10. [Offline Operation](#offline)
 11. [Sample Scans — Testing the Pipeline](#samples)
 12. [Self-Scan: Verifying the Installation is Safe](#self-scan)
 13. [Security Hardening Recommendations](#hardening)
 14. [Troubleshooting](#troubleshooting)
+15. [Running the Test Suite](#tests)
+16. [Continuous Integration](#ci)
+17. [Docker Image — Build Arguments & Integrity](#docker-build)
 
 ---
 
@@ -1035,6 +1038,25 @@ python3 -c "import ast; ast.parse(open('selfcheck.py').read())" \
     && echo "selfcheck.py: syntax OK"
 ```
 
+### 6.5 Run the test suite
+
+This is the fastest way to confirm the installation is sound. It needs no
+scanning tools — see §15.
+
+```bash
+./tests/run_tests.sh
+# Expected: ✔ 51/51 passed
+```
+
+### 6.6 Generate the integrity manifest
+
+```bash
+python3 selfcheck.py --write-manifest
+```
+
+Do this once the bundle is in its final location. See §12.2 for why the manifest
+is generated at install time rather than shipped in version control.
+
 ---
 
 ## 7. Directory Structure Setup {#directories}
@@ -1062,8 +1084,15 @@ Copy your YARA rules to `/opt/ai-transit/yara-rules/` (see §5.4 for a minimal t
   --min-severity LEVEL  Severity threshold: low | medium | high (default) | critical
                         Findings below the threshold are logged as WARN, not FAIL
   --since COMMIT        Diff mode: only scan files changed since this commit SHA
-  --report-only         Always exit 0 even on FAIL (observation / audit mode)
+  --report-only         Always exit 0 even on FAIL (observation / audit mode).
+                        Also leaves the fetched repo in place instead of
+                        quarantining it, so nothing is moved or deleted.
+  --no-zip              Skip creation of the approved ZIP archive
+  --no-excel            Skip generation of the Excel report
 ```
+
+`--no-zip --no-excel` is the usual combination for CI, where the JSON and HTML
+reports are consumed by another job and the archive would only be discarded.
 
 ### 8.2 Environment variables
 
@@ -1512,6 +1541,44 @@ python3 selfcheck.py --bundle-dir . --output selfcheck_report.pdf
 
 This executes all §11 checks (meta-scan, binary checksums, GPG/cosign, Python CVE scan, host OS CVE, bundle integrity, AIDE) and produces a colour-coded PDF report. See `selfcheck.py --help` for all options.
 
+### 12.1 Output formats and selective checks
+
+```bash
+python3 selfcheck.py --format json --output selfcheck_report   # machine-readable
+python3 selfcheck.py --format both --output selfcheck_report   # PDF + JSON
+python3 selfcheck.py --only 11.1,11.4,11.6                     # subset, faster
+```
+
+The JSON report carries a top-level `verdict` field (`PASS` / `WARN` / `FAIL`),
+which is what a CI job should key on.
+
+### 12.2 The bundle manifest — generate it at install time
+
+Check §11.6 (bundle file integrity) compares every bundle file against
+`.bundle_manifest.sha256`. That manifest is **deliberately not tracked in version
+control**: if it were, it would report "File tampering detected" after every
+ordinary edit, and a check that cries wolf is a check people learn to ignore.
+Git already guarantees the integrity of the repository; the manifest's job is to
+detect tampering with an **installed** bundle.
+
+Generate it once, immediately after installing and verifying the bundle:
+
+```bash
+python3 selfcheck.py --write-manifest
+```
+
+Regenerate it after any *intentional* change to the bundle. From then on, any
+§11.6 failure means a file changed without your knowledge.
+
+```bash
+# Verify (should PASS on an untouched installation)
+python3 selfcheck.py --only 11.6
+```
+
+The manifest stores **relative** paths, so it stays valid if the bundle is moved
+or installed to a different prefix. Verification must therefore be run from the
+bundle directory (selfcheck.py does this automatically).
+
 ---
 
 ## 13. Security Hardening Recommendations {#hardening}
@@ -1577,7 +1644,157 @@ pip install --upgrade betterleaks detect-secrets semgrep bandit \
 | `declare -A: invalid option` | Bash < 4.0 | Install bash 5: `brew install bash` / use WSL2 |
 | `zip: command not found` | zip not installed | `sudo apt-get install zip` |
 | WARN on all files | Missing optional tools | Install missing tools; WARNs do not block |
-| Git clone fails | Private repo | Only public GitHub repos are supported |
+| Git clone fails on a private repo | No credentials | Set `GITHUB_TOKEN` (see §8.2); the token is passed via `GIT_ASKPASS`, never in the clone URL |
+| `Repository not found or private (HTTP 404)` | Private repo without a token, or a typo | Set `GITHUB_TOKEN`, or check the URL |
+| §11.6 reports "File tampering detected" after your own edits | Manifest is stale | Regenerate it: `python3 selfcheck.py --write-manifest` (see §12.2) |
+| `--only` reports 0 checks and exits 2 | Check IDs mistyped (`1.1` instead of `11.1`) | Use the full IDs: `11.1` … `11.7` |
+| Findings appear against the wrong file | Report written by a pre-P8 version | Upgrade; the JSON writer dropped empty records and shifted rows |
+| Allowlist entries have no effect | `.transit-allow.json` not at the repository root, or `rule`/`path` do not match | `path` is relative to the repo root; `rule` matches the finding's leading token, e.g. `CWE-89` |
+| Diff mode scans everything | `--since` commit unreachable in a shallow clone | The pipeline warns and falls back to a full scan; fetch more history or use a local path |
+| Docker build fails downloading trivy | Pinned version no longer published | Update `ARG TRIVY_VERSION` / `TRIVY_SHA256` (see §17.1); the `pins` CI job prints the correct digest |
+| ZIP contains `tmp/…/fetch/repo_…` paths | Archive built by a pre-P8 version | Upgrade; archives are now rooted at the repository |
+
+---
+
+## 15. Running the Test Suite {#tests}
+
+The suite verifies the pipeline itself: that rules fire on unsafe code, that they
+**do not** fire on safe code, that flags behave, and that the reports and archive
+are well-formed.
+
+```bash
+./tests/run_tests.sh          # everything
+./tests/run_tests.sh -v       # show detail for failures
+./tests/run_tests.sh rules    # only groups whose name matches "rules"
+```
+
+It requires **no scanning tools at all**. With none installed the pipeline
+degrades to its built-in grep rules and every assertion still holds — that is
+exactly how CI runs it. Tools that happen to be present are used, but no
+assertion depends on them.
+
+Expected output on a healthy installation:
+
+```
+── Layer A — rule corpus (detection correctness)
+  ✔ sql_injection.py is flagged for SQL injection
+  ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
+  …
+────────────────────────────────────────
+  ✔  51/51 passed
+```
+
+### 15.1 What each layer covers
+
+| Layer | Covers |
+|-------|--------|
+| A — rule corpus | Detection correctness: each finding must land on the correct file, plus false-positive guards for safe code |
+| B — end-to-end | Clean repo → PASS/exit 0; vulnerable repo → FAIL/exit 1 |
+| C — flags | `--report-only`, `--min-severity`, argument guards, `.transit-allow.json`, `.transitignore`, `--no-zip`/`--no-excel` |
+| D — artifacts | JSON valid and carries a verdict, HTML written, ZIP entries repo-relative, Excel Findings tab, no escape codes when redirected |
+| E — diff mode | `--since` scans exactly the changed files; `.git` excluded from local copies |
+| F — static | Parse checks, shellcheck, and lint rules for two bug classes that have already shipped |
+
+### 15.2 Fixtures
+
+`tests/fixtures/` holds small repositories, each with one job:
+
+| Fixture | Expected |
+|---------|----------|
+| `clean/` | PASS |
+| `vulnerable/` | FAIL |
+| `allowlisted/` | PASS — the finding is downgraded by `.transit-allow.json` |
+| `ignored/` | PASS — the offending file is excluded by `.transitignore` |
+| `rules/` | A corpus where each file triggers, or deliberately does not trigger, one rule |
+
+`rules/safe_sql.py` is a regression guard: it contains correct parameterised
+queries that a previous version of the SQL rule wrongly flagged as injection.
+
+### 15.3 Adding a rule
+
+Add **both** a file that must trigger the rule and a similar-but-safe file that
+must not, then confirm the new assertion **fails before the rule exists**. A test
+that has never been observed failing proves nothing — during development of this
+suite, two tests passed against known-broken code because the tests themselves
+were wrong.
+
+---
+
+## 16. Continuous Integration {#ci}
+
+`.github/workflows/ci.yml` runs on every push and pull request.
+
+| Job | Purpose | Blocking |
+|-----|---------|----------|
+| `lint` | shellcheck (errors fatal, warnings advisory) + Python syntax | Yes |
+| `test` | Test suite with no scanning tools — the fast signal | Yes |
+| `test-with-tools` | Suite again with semgrep/bandit/detect-secrets installed; exercises tool-dependent paths the degraded run cannot reach | No |
+| `pins` | Downloads each pinned tool artifact, fails if the version does not exist, and compares against the pinned SHA-256 | Yes |
+| `docker` | Builds the image, asserts it runs as non-root, smoke-tests both fixtures | Yes |
+
+The `docker` job is the only place the multi-stage build, the pinned tool
+versions and the non-root user are actually exercised — none of that can be
+verified by the test suite alone.
+
+**If `pins` fails**, the pinned version in the `Dockerfile` no longer resolves to
+a downloadable artifact. The job log prints the correct SHA-256 for the current
+pin; update `ARG TRIVY_VERSION` / `ARG TRIVY_SHA256` accordingly.
+
+---
+
+## 17. Docker Image — Build Arguments & Integrity {#docker-build}
+
+The image is a two-stage build: a `builder` stage compiles betterleaks with Go,
+and the runtime stage copies only the resulting binary, so the Go toolchain never
+reaches the final image. It runs as the non-root user `transit`.
+
+### 17.1 Build arguments
+
+| Argument | Default | Purpose |
+|----------|---------|---------|
+| `TRIVY_VERSION` | `0.58.2` | trivy release to install |
+| `TRIVY_SHA256` | _(empty)_ | SHA-256 of the trivy tarball; empty disables verification |
+| `HADOLINT_VERSION` | `2.12.0` | hadolint release to install |
+| `HADOLINT_SHA256` | `56de6d5e…` | SHA-256 of the hadolint binary (verified) |
+| `BETTERLEAKS_VERSION` | `0.1.0` | betterleaks module version |
+
+```bash
+docker build -t ai-transit:latest \
+  --build-arg TRIVY_VERSION=0.58.2 \
+  --build-arg TRIVY_SHA256=<digest> .
+```
+
+### 17.2 Why the digests matter
+
+Pinning a version defends against getting a *different release*. It does not
+defend against getting a *different binary* for that release — a compromised or
+replaced artifact keeps the same version string. The digest closes that gap.
+
+When a digest argument is empty the build still succeeds, but prints a warning
+**and the artifact's actual digest**, so the correct value can be pasted in
+without a separate download. The `pins` CI job prints the same value.
+
+> `TRIVY_SHA256` ships empty because the pinned trivy version could not be
+> resolved from the development environment. Fill it in from the first `pins` CI
+> run before treating the image as production-ready.
+
+### 17.3 Running through the wrapper
+
+`docker-run.sh` forwards pipeline flags into the container, so the Docker and
+native interfaces behave identically:
+
+```bash
+./docker-run.sh --build                                          # build once
+./docker-run.sh --quiet --min-severity critical https://github.com/org/repo
+./docker-run.sh --report-only /path/to/local/repo
+```
+
+Environment variables (`WORK_DIR`, `MAX_SIZE_MB`, `MIN_SEVERITY`, `VERBOSITY`,
+`GITHUB_TOKEN`, `SINCE_COMMIT`) are forwarded automatically when set.
+
+> A `GITHUB_TOKEN` passed to a container is visible via `docker inspect` to
+> anyone who can reach the Docker daemon. On a shared host, prefer running the
+> pipeline natively for private repositories.
 
 ---
 

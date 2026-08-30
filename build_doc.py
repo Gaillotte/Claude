@@ -212,6 +212,14 @@ toc_items = [
     ("    7.4", "Rapport HTML"),
     ("8.", "Règles de sécurité absolues"),
     ("9.", "Prérequis et installation"),
+    ("10.", "Exploitation du pipeline"),
+    ("    10.1", "Options en ligne de commande"),
+    ("    10.2", "Contrôles par dépôt"),
+    ("    10.3", "Dépôts privés"),
+    ("11.", "Assurance qualité"),
+    ("    11.1", "Suite de tests"),
+    ("    11.2", "Intégration continue"),
+    ("    11.3", "Intégrité du bundle"),
 ]
 for num, title in toc_items:
     p = doc.add_paragraph()
@@ -932,7 +940,6 @@ bullets_archive = [
     "Le fichier .manifest_sha256.txt est exclu de l'archive (usage interne uniquement).",
     "Le rapport Excel de scan est inclus directement dans l'archive, adjacent au code.",
     "L'archive est prête au transfert vers le réseau d'entreprise via le répertoire approved/.",
-    "Optionnel : chiffrement GPG de l'archive si GPG_RECIPIENT est défini.",
 ]
 for b in bullets_archive:
     bullet(doc, b)
@@ -1108,11 +1115,178 @@ set_col_widths(t, [4, 5, 8.5])
 env_rows = [
     ("WORK_DIR",      "/opt/ai-transit", "Répertoire racine du pipeline"),
     ("OUTPUT_DIR",    "./Good",          "Répertoire de sortie des archives approuvées"),
-    ("GPG_RECIPIENT", "(vide)",          "Email GPG pour chiffrement optionnel de l'archive"),
+    ("GITHUB_TOKEN",  "(vide)",          "Jeton pour cloner les dépôts GitHub privés"),
+    ("MAX_SIZE_MB",   "500",             "Taille maximale du dépôt, en mégaoctets"),
+    ("MIN_SEVERITY",  "high",            "Sévérité minimale bloquante : low|medium|high|critical"),
+    ("VERBOSITY",     "normal",          "Verbosité des journaux : quiet|normal|verbose"),
+    ("SINCE_COMMIT",  "(vide)",          "Mode différentiel : ne scanner que les fichiers modifiés"),
     ("REPO_INPUT",    "(auto)",          "Transmis automatiquement au scan pour traçabilité"),
 ]
 for row in env_rows:
     add_row(t, row, bold_first=True)
+
+ALLOWLIST_EXAMPLE_FR = (
+    "[\n"
+    "  {\n"
+    "    \"rule\": \"CWE-798\",\n"
+    "    \"path\": \"tests/fixtures/dummy_key.py\",\n"
+    "    \"reason\": \"Fixture de test, pas un vrai identifiant\"\n"
+    "  }\n"
+    "]"
+)
+TESTS_USAGE_FR = (
+    "./tests/run_tests.sh          # tout\n"
+    "./tests/run_tests.sh -v       # détail des échecs\n"
+    "./tests/run_tests.sh rules    # uniquement les groupes correspondants"
+)
+MANIFEST_USAGE_FR = (
+    "python3 selfcheck.py --write-manifest   # après installation et après toute modification volontaire\n"
+    "python3 selfcheck.py --only 11.6        # vérifier"
+)
+
+doc.add_paragraph()
+
+page_break(doc)
+
+# ── 10. Exploitation du pipeline ──────────────────────────────────────────────
+heading(doc, "10. Exploitation du pipeline", level=1)
+
+heading(doc, "10.1 Options en ligne de commande", level=2)
+para(doc, (
+    "Le pipeline exécute les mêmes six couches dans tous les modes. Les options "
+    "ci-dessous modifient le traitement du résultat, pas la façon dont le scan est mené."
+))
+t = doc.add_table(rows=1, cols=3)
+t.style = "Table Grid"
+add_table_header(t, ["Option", "Effet", "Usage typique"])
+set_col_widths(t, [4.5, 7, 6])
+flag_rows = [
+    ("--quiet",              "Verdict uniquement sur la sortie standard", "Barrière CI"),
+    ("--verbose",            "Détail complet fichier par fichier", "Analyse d'un finding"),
+    ("--min-severity NIVEAU", "low | medium | high | critical ; les findings sous le "
+                              "seuil deviennent WARN au lieu de FAIL", "Ajuster le seuil de blocage"),
+    ("--since COMMIT",       "Ne scanner que les fichiers modifiés depuis COMMIT", "Contrôle de pull request"),
+    ("--report-only",        "Toujours sortir en code 0, et laisser le dépôt récupéré "
+                             "en place au lieu de le mettre en quarantaine", "Audit de première passe"),
+    ("--no-zip",             "Ne pas créer l'archive approuvée", "CI"),
+    ("--no-excel",           "Ne pas générer le rapport Excel", "CI"),
+]
+for row in flag_rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+
+heading(doc, "10.2 Contrôles par dépôt", level=2)
+para(doc, (
+    "Deux fichiers optionnels peuvent être placés à la racine du dépôt analysé. "
+    "Ils appartiennent au dépôt scanné, et non à l'installation du pipeline."
+))
+t = doc.add_table(rows=1, cols=2)
+t.style = "Table Grid"
+add_table_header(t, ["Fichier", "Effet"])
+set_col_widths(t, [5, 12.5])
+add_row(t, (".transitignore",
+            "Motifs de type gitignore. Les fichiers correspondants sont exclus de "
+            "toutes les couches."),
+        bold_first=True)
+add_row(t, (".transit-allow.json",
+            "Tableau JSON d'entrées {rule, path, reason}. Un FAIL correspondant est "
+            "rétrogradé en WARN et la raison est consignée dans le rapport."),
+        bold_first=True)
+doc.add_paragraph()
+code_block(doc, ALLOWLIST_EXAMPLE_FR)
+para(doc, (
+    "Chaque entrée de la liste d'exceptions porte une raison. Une exception "
+    "enregistrée sans justification est indiscernable d'un oubli six mois plus tard."
+), italic=True)
+
+heading(doc, "10.3 Dépôts privés", level=2)
+para(doc, (
+    "Définir GITHUB_TOKEN pour cloner un dépôt privé. Le jeton est transmis à git "
+    "via GIT_ASKPASS et n'apparaît jamais dans l'URL de clonage : il n'est donc écrit "
+    "ni dans .git/config, ni dans le reflog, ni dans la ligne de commande du processus "
+    "où n'importe quel utilisateur de la machine pourrait le lire avec ps."
+))
+code_block(doc, "GITHUB_TOKEN=ghp_... ./ai_transit.sh https://github.com/org/depot-prive")
+para(doc, (
+    "À noter : un jeton transmis à un conteneur reste visible via docker inspect pour "
+    "quiconque a accès au démon Docker. Sur une machine partagée, préférer l'exécution "
+    "native du pipeline pour les dépôts privés."
+), italic=True)
+
+page_break(doc)
+
+# ── 11. Assurance qualité ─────────────────────────────────────────────────────
+heading(doc, "11. Assurance qualité", level=1)
+
+heading(doc, "11.1 Suite de tests", level=2)
+para(doc, (
+    "Le pipeline est livré avec une suite de tests qui vérifie son propre comportement : "
+    "que les règles se déclenchent sur du code dangereux, qu'elles ne se déclenchent pas "
+    "sur du code sûr, que les options se comportent comme documenté, et que les rapports "
+    "et l'archive sont bien formés."
+))
+code_block(doc, TESTS_USAGE_FR)
+para(doc, (
+    "La suite ne nécessite aucun outil de scan. Sans aucun outil installé, le pipeline "
+    "bascule sur ses règles de motifs intégrées et toutes les assertions restent valides, "
+    "ce qui correspond exactement à la façon dont l'intégration continue l'exécute."
+))
+t = doc.add_table(rows=1, cols=2)
+t.style = "Table Grid"
+add_table_header(t, ["Couche", "Couverture"])
+set_col_widths(t, [4, 13.5])
+qa_rows = [
+    ("A - corpus de règles", "Exactitude de détection : chaque finding doit être attribué "
+                             "au bon fichier, plus des garde-fous contre les faux positifs"),
+    ("B - bout en bout",     "Un dépôt sain passe ; un dépôt vulnérable est bloqué"),
+    ("C - options",          "--report-only, --min-severity, contrôle des arguments, liste "
+                             "d'exceptions, .transitignore, --no-zip et --no-excel"),
+    ("D - artefacts",        "Validité du JSON et champ verdict, rapport HTML, chemins de "
+                             "l'archive, onglet Findings, sortie propre en redirection"),
+    ("E - mode différentiel", "--since ne scanne que les fichiers modifiés"),
+    ("F - statique",         "Contrôles syntaxiques, shellcheck, et règles de lint pour deux "
+                             "classes de défauts déjà survenues"),
+]
+for row in qa_rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+
+para(doc, (
+    "Chaque assertion est validée par mutation : le défaut contre lequel elle protège est "
+    "délibérément réintroduit et l'on vérifie que le test échoue. Ce n'est pas une "
+    "formalité. Pendant le développement, deux tests passaient alors que le code était "
+    "notoirement défectueux, parce que les tests eux-mêmes étaient faux. Une suite qu'on "
+    "n'a jamais vue échouer n'apporte aucune preuve."
+))
+
+heading(doc, "11.2 Intégration continue", level=2)
+t = doc.add_table(rows=1, cols=3)
+t.style = "Table Grid"
+add_table_header(t, ["Job", "Objet", "Bloquant"])
+set_col_widths(t, [4, 10.5, 3])
+ci_rows = [
+    ("lint",            "shellcheck (erreurs fatales) et syntaxe Python", "Oui"),
+    ("test",            "Suite de tests sans aucun outil de scan", "Oui"),
+    ("test-with-tools", "Suite rejouée avec les scanners installés", "Non"),
+    ("pins",            "Les versions épinglées existent et correspondent à leur empreinte SHA-256", "Oui"),
+    ("docker",          "L'image se construit, tourne en non-root, passe les tests de fumée", "Oui"),
+]
+for row in ci_rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+para(doc, (
+    "Le job docker est le seul endroit où la construction multi-étapes, les versions "
+    "épinglées des outils et l'utilisateur non-root sont réellement éprouvés."
+))
+
+heading(doc, "11.3 Intégrité du bundle", level=2)
+para(doc, (
+    "Le contrôle 11.6 compare chaque fichier du bundle à .bundle_manifest.sha256. Ce "
+    "manifeste est généré au moment de l'installation et n'est délibérément pas versionné : "
+    "s'il l'était, il signalerait une altération après chaque modification ordinaire, et un "
+    "contrôle qui crie au loup est un contrôle que l'on apprend à ignorer."
+))
+code_block(doc, MANIFEST_USAGE_FR)
 
 doc.add_paragraph()
 
