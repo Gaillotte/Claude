@@ -6,10 +6,12 @@ Executes all §11 installation integrity checks and produces a PDF report.
 Usage:
     python3 selfcheck.py [--bundle-dir DIR] [--output report.pdf] [--checksums checksums.json]
 """
+from __future__ import annotations
 
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -78,11 +80,7 @@ def _run(cmd: list[str], timeout: int = 120, env: dict | None = None) -> tuple[i
 
 
 def _has(cmd: str) -> bool:
-    rc, _, _ = _run(["command", "-v", cmd], timeout=5)
-    # 'command -v' needs a shell; use 'which' as fallback
-    if rc != 0:
-        rc, _, _ = _run(["which", cmd], timeout=5)
-    return rc == 0
+    return shutil.which(cmd) is not None
 
 
 # ── §11.1  Meta-scan ─────────────────────────────────────────────────────────
@@ -645,7 +643,7 @@ def build_pdf(results: list[CheckResult], output_path: Path, bundle_dir: Path) -
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-def _build_json_report(results: "list[CheckResult]", bundle_dir: Path) -> dict:
+def _build_json_report(results: list[CheckResult], bundle_dir: Path) -> dict:
     """Serialize check results to a JSON-serialisable dict."""
     return {
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -707,12 +705,12 @@ def main() -> None:
         sys.exit(1)
 
     # Parse --only filter
-    only_ids: "set[str] | None" = None
+    only_ids: set[str] | None = None
     if args.only:
         only_ids = {s.strip() for s in args.only.split(",") if s.strip()}
 
     # Load optional binary checksums
-    checksums: "dict[str, str]" = {}
+    checksums: dict[str, str] = {}
     if args.checksums:
         try:
             checksums = json.loads(Path(args.checksums).read_text())
@@ -736,7 +734,7 @@ def main() -> None:
         ("11.7", "§11.7  AIDE integrity monitor",  check_aide),
     ]
 
-    results: "list[CheckResult]" = []
+    results: list[CheckResult] = []
     for check_id, label, fn in all_checks:
         if only_ids and check_id not in only_ids:
             continue

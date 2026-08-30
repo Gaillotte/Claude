@@ -1,7 +1,31 @@
 ## AI Transit Pipeline — Standalone Docker Image
 ## Usage: docker build -t ai-transit . && docker run --rm -v $(pwd)/Good:/output ai-transit <repo_url>
+##
+## Build args (override to pin different versions):
+##   --build-arg TRIVY_VERSION=0.58.2
+##   --build-arg BETTERLEAKS_VERSION=0.1.0
+##   --build-arg HADOLINT_VERSION=2.12.0
 
+# ── Stage 1: builder — compile betterleaks (Go binary) ────────────────────────
+FROM ubuntu:22.04 AS builder
+
+ARG BETTERLEAKS_VERSION=0.1.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    golang-go \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN go install github.com/betterleaks/betterleaks@v${BETTERLEAKS_VERSION} \
+    && cp /root/go/bin/betterleaks /usr/local/bin/betterleaks
+
+# ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM ubuntu:22.04
+
+ARG TRIVY_VERSION=0.58.2
+ARG HADOLINT_VERSION=2.12.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     WORK_DIR=/opt/ai-transit \
@@ -30,19 +54,18 @@ RUN pip3 install --no-cache-dir \
     checkov \
     scancode-toolkit
 
-# ── betterleaks ───────────────────────────────────────────────────────────────
-RUN apt-get install -y --no-install-recommends golang-go \
-    && go install github.com/betterleaks/betterleaks@latest \
-    && cp /root/go/bin/betterleaks /usr/local/bin/betterleaks \
-    && apt-get remove -y golang-go && apt-get autoremove -y \
-    && rm -rf /root/go/pkg /root/go/src /var/lib/apt/lists/*
+# ── betterleaks (pre-built binary from builder stage) ─────────────────────────
+COPY --from=builder /usr/local/bin/betterleaks /usr/local/bin/betterleaks
 
-# ── trivy ─────────────────────────────────────────────────────────────────────
-RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-    | sh -s -- -b /usr/local/bin
+# ── trivy (pinned version) ────────────────────────────────────────────────────
+RUN curl -sfL \
+    "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+    -o /tmp/trivy.tar.gz \
+    && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+    && rm /tmp/trivy.tar.gz \
+    && trivy --version
 
-# ── hadolint ──────────────────────────────────────────────────────────────────
-ARG HADOLINT_VERSION=2.12.0
+# ── hadolint (pinned version) ─────────────────────────────────────────────────
 RUN curl -sSL \
     "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
     -o /usr/local/bin/hadolint \
@@ -53,7 +76,7 @@ RUN curl -sSL \
 # abort the build — the DB files can be copied in later via a volume mount.
 RUN freshclam --quiet 2>&1 || { \
       echo ""; \
-      echo "⚠  WARNING: freshclam failed — ClamAV signature database is EMPTY."; \
+      echo "WARNING: freshclam failed — ClamAV signature database is EMPTY."; \
       echo "   The container will start but ClamAV scans will produce no detections."; \
       echo "   To fix: mount a pre-downloaded DB at /var/lib/clamav/ or run"; \
       echo "   'docker exec <container> freshclam' after the container starts."; \

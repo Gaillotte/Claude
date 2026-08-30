@@ -4,7 +4,9 @@ Génère un rapport Excel (.xlsx) à partir du rapport JSON du pipeline AI Trans
 
 Onglet 0 — Résumé  : lien du repo, date du scan, hash global du repo
 Onglet 1 — Fichiers : une ligne par fichier scanné avec statut et message
+Onglet 2 — Findings : FAIL + WARN uniquement, triés par sévérité
 """
+from __future__ import annotations
 
 import json
 import sys
@@ -56,7 +58,7 @@ def _header_cell(ws, row: int, col: int, value: str) -> None:
 
 
 def _data_cell(ws, row: int, col: int, value: str,
-               fill_color: "str | None" = None) -> None:
+               fill_color: str | None = None) -> None:
     cell = ws.cell(row=row, column=col, value=value)
     cell.font = FONT_NORMAL
     cell.alignment = Alignment(vertical="center", wrap_text=True)
@@ -65,7 +67,7 @@ def _data_cell(ws, row: int, col: int, value: str,
         cell.fill = _fill(fill_color)
 
 
-def _verdict_fill(status: str) -> "str | None":
+def _verdict_fill(status: str) -> str | None:
     return {
         "PASS": COLOR_PASS,
         "FAIL": COLOR_FAIL,
