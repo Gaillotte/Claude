@@ -1,57 +1,75 @@
 #!/usr/bin/env bash
-# Point d'entrée principal du pipeline AI Transit
-# Usage : ./ai_transit.sh <chemin_ou_url_git> [branche]
+# AI Transit Pipeline — main entry point
+# Usage: ./ai_transit.sh [--quiet|--verbose] <git_url_or_local_path> [branch]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${WORK_DIR:-/opt/ai-transit}"
 OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/Good}"
+VERBOSITY="normal"   # quiet | normal | verbose
 
-# ── Couleurs ─────────────────────────────────────────────────────────────────
+# ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'
 BLUE='\033[34m'; BOLD='\033[1m'; RESET='\033[0m'
 
-info()  { echo -e "${BLUE}[INFO]${RESET}  $*"; }
-ok()    { echo -e "${GREEN}[OK]${RESET}    $*"; }
+info()  { [[ "$VERBOSITY" != "quiet" ]] && echo -e "${BLUE}[INFO]${RESET}  $*" || true; }
+ok()    { [[ "$VERBOSITY" != "quiet" ]] && echo -e "${GREEN}[OK]${RESET}    $*" || true; }
 warn()  { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
-error() { echo -e "${RED}${BOLD}[ERREUR]${RESET} $*" >&2; }
+error() { echo -e "${RED}${BOLD}[ERROR]${RESET} $*" >&2; }
 die()   { error "$*"; exit 1; }
+
+# ── Flag parsing ──────────────────────────────────────────────────────────────
+while [[ $# -gt 0 && "$1" == --* ]]; do
+    case "$1" in
+        --quiet)   VERBOSITY="quiet";   shift ;;
+        --verbose) VERBOSITY="verbose"; shift ;;
+        *) break ;;
+    esac
+done
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
-    echo -e "${BOLD}Usage :${RESET} $0 <chemin_ou_url_git> [branche]"
+    echo -e "${BOLD}Usage:${RESET} $0 [--quiet|--verbose] <git_url_or_local_path> [branch]"
     echo
-    echo "  Exemples :"
+    echo "  Examples:"
     echo "    $0 https://github.com/org/repo"
     echo "    $0 https://github.com/org/repo main"
-    echo "    $0 /chemin/local/vers/repo"
+    echo "    $0 /local/path/to/repo"
+    echo "    $0 --quiet https://github.com/org/repo   # verdict only (CI mode)"
     echo
-    echo "  Résultat :"
-    echo "    PASS → archive ZIP dans ./Good/"
-    echo "    FAIL → message d'erreur + rapport dans \${WORK_DIR}/reports/"
+    echo "  Environment variables:"
+    echo "    WORK_DIR    (default: /opt/ai-transit)   working directory"
+    echo "    OUTPUT_DIR  (default: <script_dir>/Good) approved ZIP destination"
+    echo "    GITHUB_TOKEN                             for private GitHub repos"
+    echo
+    echo "  Result:"
+    echo "    PASS → ZIP archive in ./Good/"
+    echo "    FAIL → quarantine + JSON/HTML reports in \${WORK_DIR}/reports/"
     exit 1
 fi
 
 REPO_INPUT="$1"
 BRANCH="${2:-}"
 
-# ── Vérification des scripts dépendants ──────────────────────────────────────
-[[ -f "${SCRIPT_DIR}/fetch_repo.sh" ]]   || die "fetch_repo.sh introuvable dans $SCRIPT_DIR"
-[[ -f "${SCRIPT_DIR}/scan_pipeline.sh" ]] || die "scan_pipeline.sh introuvable dans $SCRIPT_DIR"
+# ── Dependency check ──────────────────────────────────────────────────────────
+[[ -f "${SCRIPT_DIR}/fetch_repo.sh" ]]    || die "fetch_repo.sh not found in $SCRIPT_DIR"
+[[ -f "${SCRIPT_DIR}/scan_pipeline.sh" ]] || die "scan_pipeline.sh not found in $SCRIPT_DIR"
 
-# ── Création du répertoire de sortie ─────────────────────────────────────────
+# ── Output directory ──────────────────────────────────────────────────────────
 mkdir -p "$OUTPUT_DIR"
 
-echo
-echo -e "${BOLD}══════════════════════════════════════════════${RESET}"
-echo -e "${BOLD}       AI Transit Pipeline — Démarrage        ${RESET}"
-echo -e "${BOLD}══════════════════════════════════════════════${RESET}"
-echo
-info "Source   : $REPO_INPUT"
-[[ -n "$BRANCH" ]] && info "Branche  : $BRANCH"
-info "Work dir : $WORK_DIR"
-info "Sortie   : $OUTPUT_DIR"
-echo
+if [[ "$VERBOSITY" != "quiet" ]]; then
+    echo
+    echo -e "${BOLD}══════════════════════════════════════════════${RESET}"
+    echo -e "${BOLD}        AI Transit Pipeline — Starting        ${RESET}"
+    echo -e "${BOLD}══════════════════════════════════════════════${RESET}"
+    echo
+    info "Source   : $REPO_INPUT"
+    [[ -n "$BRANCH" ]] && info "Branch   : $BRANCH"
+    info "Work dir : $WORK_DIR"
+    info "Output   : $OUTPUT_DIR"
+    echo
+fi
 
 # ── Phase 1 : Fetch ───────────────────────────────────────────────────────────
 echo -e "${BOLD}── Phase 1 : Récupération ─────────────────────${RESET}"
@@ -60,32 +78,34 @@ FETCH_ARGS=("$REPO_INPUT")
 
 rm -f "${WORK_DIR}/.fetch_result"
 FETCH_OUTPUT=$(WORK_DIR="$WORK_DIR" bash "${SCRIPT_DIR}/fetch_repo.sh" "${FETCH_ARGS[@]}" 2>&1) || {
-    error "Échec de la récupération du dépôt."
+    error "Repository fetch failed."
     echo "$FETCH_OUTPUT" >&2
-    die "Pipeline interrompu à la phase 1."
+    die "Pipeline aborted at phase 1."
 }
 
 # Read the repo path from the dedicated result file written by fetch_repo.sh.
 # This avoids grepping stdout, which is fragile when log lines contain absolute paths.
 FETCH_DIR=$(cat "${WORK_DIR}/.fetch_result" 2>/dev/null || true)
-echo "$FETCH_OUTPUT" | grep -v '^/'   # affiche les logs (sans la ligne de chemin)
+[[ "$VERBOSITY" != "quiet" ]] && echo "$FETCH_OUTPUT" | grep -v '^/' || true
 
-[[ -d "$FETCH_DIR" ]] || die "Répertoire fetchté introuvable : $FETCH_DIR"
-ok "Dépôt disponible : $FETCH_DIR"
-echo
+[[ -d "$FETCH_DIR" ]] || die "Fetched directory not found: $FETCH_DIR"
+ok "Repository available: $FETCH_DIR"
+[[ "$VERBOSITY" != "quiet" ]] && echo || true
 
-# ── Phase 2 : Scan ───────────────────────────────────────────────────────────
-echo -e "${BOLD}── Phase 2 : Scan de sécurité ─────────────────${RESET}"
-SCAN_OUTPUT=$(REPO_INPUT="$REPO_INPUT" WORK_DIR="$WORK_DIR" \
+# ── Phase 2: Security scan ────────────────────────────────────────────────────
+[[ "$VERBOSITY" != "quiet" ]] && echo -e "${BOLD}── Phase 2: Security scan ──────────────────────${RESET}" || true
+SCAN_OUTPUT=$(REPO_INPUT="$REPO_INPUT" WORK_DIR="$WORK_DIR" VERBOSITY="$VERBOSITY" \
     bash "${SCRIPT_DIR}/scan_pipeline.sh" "$FETCH_DIR" 2>&1) || true
 
 VERDICT=$(echo "$SCAN_OUTPUT" | grep -E '^(PASS|FAIL)$' | tail -1 || echo "FAIL")
 REPORT_JSON=$(echo "$SCAN_OUTPUT" | grep -E '^/.+\.json$' | tail -1 || true)
-# affiche les logs (sans les lignes de métadonnées)
-echo "$SCAN_OUTPUT" | grep -vE '^(PASS|FAIL|/.+\.json)$'
+REPORT_HTML="${REPORT_JSON%.json}.html"
+# Display logs (strip metadata lines)
+[[ "$VERBOSITY" != "quiet" ]] && \
+    echo "$SCAN_OUTPUT" | grep -vE '^(PASS|FAIL|/.+\.(json|html))$' || true
 
-echo
-echo -e "${BOLD}── Verdict ────────────────────────────────────${RESET}"
+[[ "$VERBOSITY" != "quiet" ]] && echo || true
+[[ "$VERBOSITY" != "quiet" ]] && echo -e "${BOLD}── Verdict ─────────────────────────────────────${RESET}" || true
 
 # ── Décision finale ───────────────────────────────────────────────────────────
 if [[ "$VERDICT" == "PASS" ]]; then
@@ -96,66 +116,67 @@ if [[ "$VERDICT" == "PASS" ]]; then
     # Génération du rapport Excel (inclus dans le ZIP)
     EXCEL_PATH="${FETCH_DIR}/scan_report_${TIMESTAMP}.xlsx"
     if [[ -n "$REPORT_JSON" && -f "$REPORT_JSON" ]]; then
-        info "Génération du rapport Excel…"
+        info "Generating Excel report…"
         if python3 "${SCRIPT_DIR}/generate_excel_report.py" \
                 "$REPORT_JSON" "$EXCEL_PATH" 2>/dev/null; then
-            ok "Rapport Excel : $EXCEL_PATH"
+            ok "Excel report  : $EXCEL_PATH"
         else
-            warn "Rapport Excel non généré (openpyxl manquant ?)"
+            warn "Excel report not generated (is openpyxl installed? pip install openpyxl)"
         fi
     fi
 
-    info "Archivage en cours…"
+    info "Creating archive…"
     if ! zip -r "$ARCHIVE" "$FETCH_DIR" -x "*.manifest_sha256.txt"; then
-        die "Échec de la création de l'archive ZIP (disque plein ? droits insuffisants ?)"
+        die "ZIP archive creation failed (disk full? insufficient permissions?)"
     fi
-    [[ -f "$ARCHIVE" ]] || die "Archive introuvable après zip : $ARCHIVE"
+    [[ -f "$ARCHIVE" ]] || die "Archive not found after zip: $ARCHIVE"
 
     echo
     echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
-    echo -e "${GREEN}${BOLD}║              ✔  SCAN RÉUSSI (PASS)          ║${RESET}"
+    echo -e "${GREEN}${BOLD}║              ✔  SCAN PASSED (PASS)          ║${RESET}"
     echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
-    ok "Archive créée    : $ARCHIVE"
-    [[ -f "$EXCEL_PATH" ]] && ok "Rapport Excel inclus : scan_report_${TIMESTAMP}.xlsx"
+    ok "Archive         : $ARCHIVE"
+    [[ -f "$EXCEL_PATH" ]] && ok "Excel report    : scan_report_${TIMESTAMP}.xlsx (included in ZIP)"
+    [[ -f "$REPORT_JSON" ]]  && ok "JSON report     : $REPORT_JSON"
+    [[ -f "$REPORT_HTML" ]]  && ok "HTML report     : file://${REPORT_HTML}"
     echo
 else
-    # Déplacement en quarantaine (cp -a + rm comme fallback cross-filesystem)
+    # Move to quarantine (cp -a + rm as cross-filesystem fallback)
     QUARANTINE="${WORK_DIR}/quarantine"
     mkdir -p "$QUARANTINE"
     chmod 700 "$QUARANTINE"
     if ! mv "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null; then
-        # mv can fail across different filesystems — fall back to copy + delete
         if cp -a "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null; then
             rm -rf "$FETCH_DIR"
         else
-            warn "Quarantaine : impossible de déplacer $FETCH_DIR vers $QUARANTINE — vérifiez les droits et l'espace disque"
+            warn "Quarantine: could not move $FETCH_DIR to $QUARANTINE — check permissions and disk space"
         fi
     fi
 
-    # Recherche du rapport le plus récent
     LATEST_REPORT=$(ls -t "${WORK_DIR}/reports/report_"*.json 2>/dev/null | head -1 || true)
+    LATEST_HTML="${LATEST_REPORT%.json}.html"
 
     echo
     echo -e "${RED}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
-    echo -e "${RED}${BOLD}║           ✘  SCAN ÉCHOUÉ (FAIL)             ║${RESET}"
+    echo -e "${RED}${BOLD}║           ✘  SCAN FAILED (FAIL)             ║${RESET}"
     echo -e "${RED}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
     echo
-    error "Le dépôt n'a pas passé le scan de sécurité."
-    error "Les fichiers ont été déplacés en quarantaine : $QUARANTINE"
+    error "Repository did not pass the security scan."
+    error "Files quarantined at: $QUARANTINE"
 
     if [[ -f "$LATEST_REPORT" ]]; then
-        error "Rapport détaillé : $LATEST_REPORT"
+        error "JSON report : $LATEST_REPORT"
+        [[ -f "$LATEST_HTML" ]] && error "HTML report : file://${LATEST_HTML}"
         echo
-        warn "Résumé des findings :"
-        # Affiche les findings si jq disponible
+        warn "Findings summary:"
         if command -v jq &>/dev/null; then
             jq -r '
-              "  Verdict   : " + .verdict,
-              "  Pass      : " + (.summary.pass | tostring),
-              "  Warn      : " + (.summary.warn | tostring),
-              "  Fail      : " + (.summary.fail | tostring),
+              "  Verdict : " + .verdict,
+              "  Pass    : " + (.summary.pass | tostring),
+              "  Warn    : " + (.summary.warn | tostring),
+              "  Fail    : " + (.summary.fail | tostring),
               "",
-              "  Findings :",
+              "  Findings:",
               (.findings | to_entries[] | "    - " + .key + " → " + .value)
             ' "$LATEST_REPORT" >&2
         else

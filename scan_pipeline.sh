@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# Scan de sécurité multicouche — OWASP Top 10 · CWE Top 25 · CERT · SCA
+# AI Transit Pipeline — multi-layer security scanner
+# Covers: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding · SCA/CVE · Licence
 set -euo pipefail
+
+# Require bash 4+ for associative arrays
+[[ ${BASH_VERSINFO[0]} -ge 4 ]] || { echo "[ERROR] bash 4+ required (on macOS: brew install bash)" >&2; exit 1; }
 
 WORK_DIR="${WORK_DIR:-/opt/ai-transit}"
 TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+VERBOSITY="${VERBOSITY:-normal}"   # quiet | normal | verbose
 
-# ── Fonctions de log ────────────────────────────────────────────────────────
-log()    { echo "[$(date '+%H:%M:%S')] $*"; }
-info()   { echo -e "\033[34m[INFO]\033[0m  $*"; }
+# ── Log functions ────────────────────────────────────────────────────────────
+log()    { [[ "$VERBOSITY" != "quiet" ]] && echo "[$(date '+%H:%M:%S')] $*" || true; }
+info()   { [[ "$VERBOSITY" != "quiet" ]] && echo -e "\033[34m[INFO]\033[0m  $*" || true; }
 warn()   { echo -e "\033[33m[WARN]\033[0m  $*" >&2; }
-ok()     { echo -e "\033[32m[OK]\033[0m    $*"; }
+ok()     { [[ "$VERBOSITY" != "quiet" ]] && echo -e "\033[32m[OK]\033[0m    $*" || true; }
 fail()   { echo -e "\033[31m[FAIL]\033[0m  $*" >&2; exit 1; }
 fail_f() { echo -e "\033[31m[FAIL]\033[0m  $*" >&2; GLOBAL_VERDICT="FAIL"; }
 
@@ -17,11 +22,43 @@ has_cmd() { command -v "$1" &>/dev/null; }
 
 # ── Argument ─────────────────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
-    fail "Usage : $0 <directory_to_scan>"
+    fail "Usage: $0 <directory_to_scan>  [VERBOSITY=quiet|normal|verbose]"
 fi
 
 SCAN_DIR="$1"
 [[ -d "$SCAN_DIR" ]] || fail "Directory not found: $SCAN_DIR"
+
+# ── Default excluded directories (always pruned from find) ───────────────────
+DEFAULT_EXCLUDE_DIRS=(
+    node_modules .git vendor .tox __pycache__ .venv venv
+    dist build .next .nuxt .cache target coverage
+)
+
+# ── .transitignore support ────────────────────────────────────────────────────
+# Read repo-level exclusion file (gitignore syntax: one path/pattern per line)
+TRANSITIGNORE="${SCAN_DIR}/.transitignore"
+EXTRA_EXCLUDE_DIRS=()
+if [[ -f "$TRANSITIGNORE" ]]; then
+    info ".transitignore found — loading exclusions"
+    while IFS= read -r pattern; do
+        [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+        EXTRA_EXCLUDE_DIRS+=("$pattern")
+    done < "$TRANSITIGNORE"
+fi
+
+# ── Build find prune arguments ────────────────────────────────────────────────
+FIND_PRUNE_ARGS=()
+for d in "${DEFAULT_EXCLUDE_DIRS[@]}" "${EXTRA_EXCLUDE_DIRS[@]}"; do
+    FIND_PRUNE_ARGS+=(-path "*/${d}" -prune -o -path "*/${d}/*" -prune -o)
+done
+
+# ── Semgrep / clamscan exclude flags from combined list ───────────────────────
+SEMGREP_EXCLUDES=()
+CLAMSCAN_EXCLUDES=()
+for d in "${DEFAULT_EXCLUDE_DIRS[@]}" "${EXTRA_EXCLUDE_DIRS[@]}"; do
+    SEMGREP_EXCLUDES+=(--exclude-dir "$d")
+    CLAMSCAN_EXCLUDES+=(--exclude-dir="$d")
+done
 
 GLOBAL_VERDICT="PASS"
 declare -A FINDINGS      # path → concatenated FAIL messages
@@ -104,7 +141,7 @@ scan_global() {
 
     if has_cmd clamscan; then
         info "clamscan…"
-        if ! clamscan -r --quiet "$SCAN_DIR" 2>/dev/null; then
+        if ! clamscan -r --quiet "${CLAMSCAN_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null; then
             record_fail "$SCAN_DIR" "clamav:malware_detected"
         else
             record_pass "$SCAN_DIR"
@@ -152,44 +189,33 @@ scan_owasp_cwe() {
     local found_any=false
     for ruleset in "${rulesets[@]}"; do
         info "  semgrep ${ruleset}…"
+        # Single run — parse JSON output once to avoid double execution (10-20 min saved)
         local out
-        out=$(semgrep --config="${ruleset}" --quiet --json \
-              --no-autofix "$SCAN_DIR" 2>/dev/null || true)
+        out=$(semgrep --config="${ruleset}" --quiet --json --no-autofix \
+              "${SEMGREP_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null || true)
 
-        if echo "$out" | python3 -c "
+        local ruleset_findings
+        ruleset_findings=$(echo "$out" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-results = data.get('results', [])
-if results:
-    for r in results:
-        path   = r.get('path', '')
-        rule   = r.get('check_id', '')
-        msg    = r.get('extra', {}).get('message', '')
-        line   = r.get('start', {}).get('line', '')
-        sev    = r.get('extra', {}).get('severity', 'INFO')
-        print(f'{path}|||{rule}|||{msg[:120]}|||{line}|||{sev}')
-    sys.exit(1)
-sys.exit(0)
-" 2>/dev/null; then
-            ok "  ${ruleset}: no findings"
-        else
-            local semgrep_out
-            semgrep_out=$(semgrep --config="${ruleset}" --quiet --json \
-                          --no-autofix "$SCAN_DIR" 2>/dev/null || true)
-            while IFS='|||' read -r path rule msg line sev; do
-                [[ -z "$path" ]] && continue
-                record_fail "$path" "semgrep[${ruleset}]:${rule}:line${line}:${sev}:${msg}"
-            done < <(echo "$semgrep_out" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
+rows = []
 for r in data.get('results', []):
     path = r.get('path','')
     rule = r.get('check_id','')
     msg  = r.get('extra',{}).get('message','')[:120]
     line = str(r.get('start',{}).get('line',''))
     sev  = r.get('extra',{}).get('severity','INFO')
-    print(f'{path}|||{rule}|||{msg}|||{line}|||{sev}')
+    rows.append(f'{path}|||{rule}|||{msg}|||{line}|||{sev}')
+print('\n'.join(rows))
 " 2>/dev/null || true)
+
+        if [[ -z "$ruleset_findings" ]]; then
+            ok "  ${ruleset}: no findings"
+        else
+            while IFS='|||' read -r path rule msg line sev; do
+                [[ -z "$path" ]] && continue
+                record_fail "$path" "semgrep[${ruleset}]:${rule}:line${line}:${sev}:${msg}"
+            done < <(echo "$ruleset_findings")
             found_any=true
         fi
     done
@@ -1052,11 +1078,28 @@ classify_file() {
 # ── LAYER 5: Per-type scan ────────────────────────────────────────────────────
 scan_by_type() {
     info "=== Layer 5: Per-type SAST ==="
+
+    # Count total files (excluding pruned dirs) for the progress indicator
+    local total_files
+    total_files=$(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print 2>/dev/null | wc -l)
+    local current=0
+
     while IFS= read -r -d '' f; do
         [[ -f "$f" ]] || continue
         [[ "$(basename "$f")" == ".manifest_sha256.txt" ]] && continue
+        (( current++ )) || true
+        if [[ "$VERBOSITY" != "quiet" ]]; then
+            # Overwrite the progress line in place using \r; truncate long paths
+            local short_f="${f#"$SCAN_DIR/"}"
+            printf "\r\033[34m[L5]\033[0m  [%${#total_files}d/%d] %s" \
+                "$current" "$total_files" "${short_f:0:80}" >&2
+        fi
         classify_file "$f"
-    done < <(find "$SCAN_DIR" -type f -print0)
+    done < <(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print0 2>/dev/null)
+
+    # Clear the progress line
+    [[ "$VERBOSITY" != "quiet" ]] && printf "\r\033[K" >&2 || true
+    ok "Layer 5: $current files scanned"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

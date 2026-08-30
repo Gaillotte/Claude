@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Récupération sécurisée d'un dépôt Git public (GitHub uniquement)
+# AI Transit Pipeline — secure repository fetch (GitHub only)
 set -euo pipefail
 
 WORK_DIR="${WORK_DIR:-/opt/ai-transit}"
-MAX_SIZE_MB=500
+MAX_SIZE_MB="${MAX_SIZE_MB:-500}"
 
-# ── Fonctions de log ────────────────────────────────────────────────────────
+# ── Log functions ─────────────────────────────────────────────────────────────
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
 info() { echo -e "\033[34m[INFO]\033[0m  $*"; }
 warn() { echo -e "\033[33m[WARN]\033[0m  $*"; }
@@ -14,30 +14,30 @@ fail() { echo -e "\033[31m[FAIL]\033[0m  $*" >&2; exit 1; }
 
 has_cmd() { command -v "$1" &>/dev/null; }
 
-# ── Vérification des arguments ───────────────────────────────────────────────
+# ── Arguments ─────────────────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
-    fail "Usage : $0 <url_ou_chemin_git> [branche]"
+    fail "Usage: $0 <git_url_or_local_path> [branch]"
 fi
 
 REPO_INPUT="$1"
 BRANCH="${2:-}"
 
-# ── Whitelist hôte : GitHub uniquement ──────────────────────────────────────
+# ── Host whitelist: github.com only ──────────────────────────────────────────
 if [[ "$REPO_INPUT" =~ ^https?:// ]]; then
     HOST=$(echo "$REPO_INPUT" | awk -F/ '{print $3}')
     if [[ "$HOST" != "github.com" ]]; then
-        fail "Hôte refusé : '$HOST'. Seul github.com est autorisé."
+        fail "Host rejected: '$HOST'. Only github.com is allowed."
     fi
     IS_REMOTE=true
 else
-    # Chemin local
+    # Local path
     if [[ ! -d "$REPO_INPUT" ]]; then
-        fail "Chemin local introuvable : $REPO_INPUT"
+        fail "Local path not found: $REPO_INPUT"
     fi
     IS_REMOTE=false
 fi
 
-# ── Vérification taille (API GitHub) ────────────────────────────────────────
+# ── Size check via GitHub API ─────────────────────────────────────────────────
 if [[ "$IS_REMOTE" == true ]] && has_cmd jq && has_cmd curl; then
     REPO_PATH=$(echo "$REPO_INPUT" | sed 's|https://github.com/||;s|\.git$||')
     # Capture body and HTTP status code on separate lines
@@ -50,20 +50,20 @@ if [[ "$IS_REMOTE" == true ]] && has_cmd jq && has_cmd curl; then
     API_BODY=$(echo "$API_RESPONSE" | head -n -1)
 
     if [[ "$HTTP_CODE" == "404" ]]; then
-        fail "Repo introuvable ou privé : ${REPO_INPUT} (HTTP 404). Pour un repo privé, définissez GITHUB_TOKEN."
+        fail "Repository not found or private: ${REPO_INPUT} (HTTP 404). For private repos, set GITHUB_TOKEN."
     elif [[ "$HTTP_CODE" != "200" ]]; then
-        warn "API GitHub non disponible (HTTP ${HTTP_CODE:-timeout}) — vérification de taille ignorée"
+        warn "GitHub API unavailable (HTTP ${HTTP_CODE:-timeout}) — size check skipped"
     else
         SIZE_KB=$(echo "$API_BODY" | jq -r '.size // 0' 2>/dev/null || echo "0")
         SIZE_MB=$(( SIZE_KB / 1024 ))
         if (( SIZE_MB > MAX_SIZE_MB )); then
-            fail "Repo trop volumineux : ${SIZE_MB} MB > limite ${MAX_SIZE_MB} MB"
+            fail "Repository too large: ${SIZE_MB} MB exceeds limit of ${MAX_SIZE_MB} MB"
         fi
-        info "Taille repo : ${SIZE_MB} MB (limite ${MAX_SIZE_MB} MB)"
+        info "Repository size: ${SIZE_MB} MB (limit: ${MAX_SIZE_MB} MB)"
     fi
 fi
 
-# ── Préparation répertoires ──────────────────────────────────────────────────
+# ── Directory setup ───────────────────────────────────────────────────────────
 mkdir -p "${WORK_DIR}/fetch" "${WORK_DIR}/quarantine" \
          "${WORK_DIR}/approved" "${WORK_DIR}/reports" \
          "${WORK_DIR}/logs" "${WORK_DIR}/yara-rules"
@@ -72,48 +72,48 @@ chmod 700 "${WORK_DIR}/quarantine"
 TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 DEST="${WORK_DIR}/fetch/repo_${TIMESTAMP}"
 
-# ── Clone / copie ────────────────────────────────────────────────────────────
+# ── Clone / copy ──────────────────────────────────────────────────────────────
 if [[ "$IS_REMOTE" == true ]]; then
-    info "Clonage : $REPO_INPUT → $DEST"
+    info "Cloning: $REPO_INPUT → $DEST"
     CLONE_ARGS=(--depth 1 --no-tags --single-branch)
     [[ -n "$BRANCH" ]] && CLONE_ARGS+=(--branch "$BRANCH")
     git clone "${CLONE_ARGS[@]}" "$REPO_INPUT" "$DEST"
 else
-    info "Copie locale : $REPO_INPUT → $DEST"
+    info "Copying local path: $REPO_INPUT → $DEST"
     cp -r "$REPO_INPUT" "$DEST"
 fi
 
-# ── Suppression métadonnées git ──────────────────────────────────────────────
+# ── Remove git metadata ───────────────────────────────────────────────────────
 rm -rf "${DEST}/.git"
-ok "Métadonnées .git supprimées"
+ok ".git metadata removed"
 
-# ── Manifest SHA-256 ────────────────────────────────────────────────────────
+# ── SHA-256 manifest ──────────────────────────────────────────────────────────
 MANIFEST="${DEST}/.manifest_sha256.txt"
-info "Calcul du manifest SHA-256…"
+info "Computing SHA-256 manifest…"
 find "$DEST" -type f | sort | while read -r f; do
     sha256sum "$f"
 done > "$MANIFEST"
-ok "Manifest écrit : $MANIFEST"
+ok "Manifest written: $MANIFEST"
 
-# ── Triage rapide patterns bruts ────────────────────────────────────────────
+# ── Quick pattern triage ──────────────────────────────────────────────────────
 TRIAGE_HITS=0
 TRIAGE_PATTERNS=('eval\s*\(' 'exec\s*\(' 'base64_decode' 'system\s*\(' \
                  'curl\s*\|' 'wget\s*\|' 'chmod\s*\+x' 'rm\s*-rf\s*/')
 
 for pattern in "${TRIAGE_PATTERNS[@]}"; do
     if grep -rqE "$pattern" "$DEST" 2>/dev/null; then
-        warn "Pattern suspect détecté : $pattern"
+        warn "Suspicious pattern found: $pattern"
         (( TRIAGE_HITS++ )) || true
     fi
 done
 
 if (( TRIAGE_HITS > 0 )); then
-    warn "Triage rapide : ${TRIAGE_HITS} pattern(s) suspect(s) — scan approfondi requis"
+    warn "Quick triage: ${TRIAGE_HITS} suspicious pattern(s) — deep scan required"
 else
-    ok "Triage rapide : aucun pattern suspect"
+    ok "Quick triage: no suspicious patterns"
 fi
 
-ok "Fetch terminé → $DEST"
+ok "Fetch complete → $DEST"
 # Write path to a dedicated result file so the caller can read it reliably
 # without grepping stdout (which may contain other absolute paths in log lines).
 echo "$DEST" > "${WORK_DIR}/.fetch_result"
