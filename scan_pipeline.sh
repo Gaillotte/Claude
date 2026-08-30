@@ -1115,6 +1115,21 @@ scan_archive() {
 # ── Unknown ───────────────────────────────────────────────────────────────────
 scan_unknown() {
     local f="$1"
+
+    # Extensionless scripts are common (entrypoint, run, hooks). Route them to
+    # the right scanner by shebang instead of skipping per-type analysis.
+    local first_line
+    IFS= read -r first_line < "$f" 2>/dev/null || first_line=""
+    case "$first_line" in
+        '#!'*python*) scan_python     "$f"; return ;;
+        '#!'*/bash|'#!'*/sh|'#!'*env\ bash|'#!'*env\ sh|'#!'*/zsh|'#!'*/ksh)
+                      scan_shell      "$f"; return ;;
+        '#!'*ruby*)   scan_ruby       "$f"; return ;;
+        '#!'*node*)   scan_javascript "$f"; return ;;
+        '#!'*php*)    scan_php        "$f"; return ;;
+        '#!'*pwsh*)   scan_powershell "$f"; return ;;
+    esac
+
     if has_cmd file; then
         local mime
         mime=$(file --mime-type -b "$f" 2>/dev/null || echo "unknown")

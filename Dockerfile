@@ -27,6 +27,15 @@ FROM ubuntu:22.04
 ARG TRIVY_VERSION=0.58.2
 ARG HADOLINT_VERSION=2.12.0
 
+# SHA-256 digests of the release artifacts above. An empty value downgrades the
+# build to a warning instead of failing, so a version bump does not hard-break
+# the image before someone fills in the new digest.
+#   hadolint 2.12.0  — verified against the real Linux-x86_64 artifact
+#   trivy            — UNVERIFIED: could not be resolved from the development
+#                      environment; the `pins` CI job prints the correct digest
+ARG HADOLINT_SHA256=56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010
+ARG TRIVY_SHA256=
+
 ENV DEBIAN_FRONTEND=noninteractive \
     WORK_DIR=/opt/ai-transit \
     OUTPUT_DIR=/output \
@@ -57,19 +66,41 @@ RUN pip3 install --no-cache-dir \
 # ── betterleaks (pre-built binary from builder stage) ─────────────────────────
 COPY --from=builder /usr/local/bin/betterleaks /usr/local/bin/betterleaks
 
-# ── trivy (pinned version) ────────────────────────────────────────────────────
-RUN curl -sfL \
-    "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-    -o /tmp/trivy.tar.gz \
-    && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
-    && rm /tmp/trivy.tar.gz \
-    && trivy --version
+# ── trivy (pinned version + integrity check) ──────────────────────────────────
+# A pinned version alone only defends against "wrong version", not "wrong
+# binary". Set TRIVY_SHA256 to enforce integrity; when it is empty the build
+# still succeeds but prints a loud warning, because the correct digest depends
+# on TRIVY_VERSION and must be filled in per pin. The `pins` CI job prints the
+# digest for the current pin — paste it here.
+RUN set -eux; \
+    url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"; \
+    curl -sfL "$url" -o /tmp/trivy.tar.gz; \
+    if [ -n "${TRIVY_SHA256}" ]; then \
+        echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c -; \
+    else \
+        echo "WARNING: TRIVY_SHA256 is unset — trivy installed WITHOUT integrity verification."; \
+        echo "         Actual digest: $(sha256sum /tmp/trivy.tar.gz | cut -d' ' -f1)"; \
+        echo "         Rebuild with --build-arg TRIVY_SHA256=<digest> to enforce it."; \
+    fi; \
+    tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy; \
+    rm /tmp/trivy.tar.gz; \
+    trivy --version
 
-# ── hadolint (pinned version) ─────────────────────────────────────────────────
-RUN curl -sSL \
-    "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
-    -o /usr/local/bin/hadolint \
-    && chmod +x /usr/local/bin/hadolint
+# ── hadolint (pinned version + integrity check) ───────────────────────────────
+# Digest verified against the real 2.12.0 Linux-x86_64 release artifact.
+# If HADOLINT_VERSION is changed, HADOLINT_SHA256 must be updated to match.
+RUN set -eux; \
+    curl -sSL \
+      "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
+      -o /usr/local/bin/hadolint; \
+    if [ -n "${HADOLINT_SHA256}" ]; then \
+        echo "${HADOLINT_SHA256}  /usr/local/bin/hadolint" | sha256sum -c -; \
+    else \
+        echo "WARNING: HADOLINT_SHA256 is unset — hadolint installed WITHOUT verification."; \
+        echo "         Actual digest: $(sha256sum /usr/local/bin/hadolint | cut -d' ' -f1)"; \
+    fi; \
+    chmod +x /usr/local/bin/hadolint; \
+    hadolint --version
 
 # ── ClamAV virus database ──────────────────────────────────────────────────────
 # Download the signature DB; warn loudly if it fails (e.g. air-gap) but do not

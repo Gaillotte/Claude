@@ -19,6 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./ai_transit.sh --min-severity medium https://github.com/org/repo  # lower threshold
 ./ai_transit.sh --since abc1234 https://github.com/org/repo        # diff mode (changed files only)
 ./ai_transit.sh --report-only https://github.com/org/repo          # never block (observe)
+./ai_transit.sh --no-zip --no-excel https://github.com/org/repo    # reports only, no archive
 
 # Private GitHub repos
 GITHUB_TOKEN=ghp_... ./ai_transit.sh https://github.com/org/private-repo
@@ -121,7 +122,12 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 
 ## Files with unknown extensions
 
-`scan_pipeline.sh` classifies unknown extensions via `scan_unknown()`. They pass through L1–L4 (pattern-based) but are skipped by L5 per-type SAST. ScanCode (L6) still inspects them for licences.
+`scan_pipeline.sh` classifies unknown extensions via `scan_unknown()`, which first
+inspects the shebang: an extensionless `entrypoint` starting with `#!/usr/bin/env
+python3` is routed to `scan_python()` and gets full per-language analysis. Only files
+with neither a recognised extension nor a recognised shebang fall back to a MIME-type
+check — those pass through L1–L4 (pattern-based) but are skipped by L5 per-type SAST.
+ScanCode (L6) still inspects them for licences.
 
 ## selfcheck.py flags
 
@@ -132,14 +138,57 @@ python3 selfcheck.py [--bundle-dir DIR] [--output report] [--checksums file.json
 
 - `--format both` produces both `report.pdf` and `report.json`
 - `--only 11.1,11.4` runs only the specified §11 checks
+- `--write-manifest` regenerates `.bundle_manifest.sha256` and exits
+
+**Manifest lifecycle:** `.bundle_manifest.sha256` is deliberately **not** tracked in
+git (it would report "tampering" after every ordinary edit). Generate it at install
+time, and after any intentional change to the bundle:
+
+```bash
+python3 selfcheck.py --write-manifest
+```
 
 ## Adding or modifying a scan layer
 
 1. Add a new function in `scan_pipeline.sh` following the `record_pass/warn/fail` pattern.
 2. Call the function in `classify_file()` or the execution block near line 1350.
-3. Update the `"standards"` array in `generate_report_json()`.
-4. Update `INSTALL.md` (§5 tool section), `build_pdf_en.py` (`TOOL_CATALOG` list), and `build_pdf_en.py` summary table.
-5. Regenerate all PDFs.
+3. **Add fixtures and assertions** in `tests/`: one file that must trigger the rule and
+   one similar-but-safe file that must not. Run the suite and confirm the new assertion
+   fails before the rule exists, then passes after.
+4. Update the `"standards"` array in `generate_report_json()`.
+5. Update `INSTALL.md` (§5 tool section), `build_pdf_en.py` (`TOOL_CATALOG` list), and `build_pdf_en.py` summary table.
+6. Regenerate all PDFs.
+
+### Two bug classes that have already shipped — lint enforces both
+
+- **Multi-character `IFS`.** `IFS=':::'` is a character *set*, silently identical to
+  `IFS=':'`. This broke the allowlist and the semgrep result parser.
+- **Top-level `local`.** Valid syntax, but aborts at runtime under `set -e`; `bash -n`
+  cannot see it. It silently broke private-repo cloning.
+
+## Tests
+
+```bash
+./tests/run_tests.sh          # full suite (needs no scanning tools installed)
+./tests/run_tests.sh -v       # show detail for failures
+./tests/run_tests.sh rules    # only groups matching "rules"
+```
+
+The suite runs in degraded mode (grep-based rules only), which is how CI executes it.
+Fixtures live in `tests/fixtures/`; `rules/` is a corpus where each file is crafted to
+trigger — or deliberately not trigger — one rule. `safe_sql.py` is the regression guard
+for a false positive that once flagged correct parameterised queries.
+
+When adding a rule, add both a positive fixture and a negative one, then confirm the
+new assertion **fails** before the rule exists. A test that has never been seen red
+proves nothing.
+
+## CI
+
+`.github/workflows/ci.yml` — `lint` (shellcheck, errors fatal) · `test` (suite, no
+tools) · `test-with-tools` (scanners installed, advisory) · `pins` (verify pinned tool
+versions resolve and match their SHA-256) · `docker` (build image, assert non-root,
+smoke-test both fixtures).
 
 ## Commit & push convention
 

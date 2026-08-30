@@ -6,3 +6,5 @@ build_kpi_app/
 **/*.pyc
 Good/
 .bundle_manifest.sha256
+selfcheck_report.pdf
+selfcheck_report.json

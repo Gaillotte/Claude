@@ -113,10 +113,17 @@ def check_meta_scan(bundle_dir: Path) -> CheckResult:
         for f in py_files:
             rc, out, err = _run(["bandit", "-ll", "-q", str(f)])
             if rc not in (0, 1):
-                warnings.append(f"bandit {f.name}: tool error")
+                warnings.append(f"bandit {f.name}: tool error — {(err or out)[:200]}")
             elif "Issue:" in out:
                 hits = [l for l in out.splitlines() if "Issue:" in l]
                 failures.append(f"bandit {f.name}: {len(hits)} issue(s) — {hits[0]}")
+            elif rc == 1:
+                # Exit 1 with no reported issue means bandit could not analyse
+                # the file (syntax error, unreadable). Treating that as a pass
+                # would silently drop the file from the scan.
+                warnings.append(
+                    f"bandit {f.name}: exited 1 with no findings — file likely not "
+                    f"analysed ({(err or out).strip()[:200] or 'no output'})")
             else:
                 details.append(f"bandit {f.name}: OK")
     else:
@@ -383,27 +390,51 @@ def check_host_cve() -> CheckResult:
 
 
 # ── §11.6  Bundle integrity ───────────────────────────────────────────────────
+MANIFEST_NAME = ".bundle_manifest.sha256"
+
+
+def bundle_files(bundle_dir: Path) -> list[Path]:
+    """Files the manifest covers, as paths relative to the bundle directory.
+
+    Covers the executable surface of the bundle: shell scripts, Python
+    modules, and the Dockerfile. Sorted for a stable manifest.
+    """
+    names: list[Path] = []
+    for pattern in ("*.sh", "*.py", "Dockerfile"):
+        names += [p.relative_to(bundle_dir) for p in bundle_dir.glob(pattern)]
+    return sorted(set(names), key=str)
+
+
+def write_manifest(bundle_dir: Path) -> tuple[Path, int]:
+    """(Re)generate the manifest. Returns (path, number of files covered).
+
+    Entries use paths relative to the bundle directory so the manifest stays
+    valid when the bundle is installed somewhere other than where it was
+    built. Verification therefore has to run with cwd=bundle_dir.
+    """
+    manifest = bundle_dir / MANIFEST_NAME
+    lines = []
+    for rel in bundle_files(bundle_dir):
+        rc, out, _ = _run(["sha256sum", str(rel)], cwd=bundle_dir)
+        if rc == 0:
+            lines.append(out)
+    manifest.write_text("\n".join(lines) + "\n")
+    return manifest, len(lines)
+
+
 def check_bundle_integrity(bundle_dir: Path) -> CheckResult:
     """Verify SHA-256 manifest of bundle files."""
-    manifest = bundle_dir / ".bundle_manifest.sha256"
+    manifest = bundle_dir / MANIFEST_NAME
 
     if not manifest.exists():
-        # Generate it now and report SKIP (first run)
-        sh_files = sorted(bundle_dir.glob("*.sh"))
-        py_files = sorted(bundle_dir.glob("*.py"))
-        target_files = sh_files + py_files
-        if not target_files:
+        # Generate it now and report WARN (first run).
+        if not bundle_files(bundle_dir):
             return CheckResult("11.6", "Bundle file integrity (SHA-256 manifest)",
-                               "SKIP", "No .sh or .py files found in bundle directory",
+                               "SKIP", "No bundle files found to cover",
                                [], "sha256sum --check .bundle_manifest.sha256")
 
-        lines = []
-        for f in target_files:
-            rc, out, _ = _run(["sha256sum", str(f)])
-            if rc == 0:
-                lines.append(out)
-
-        manifest.write_text("\n".join(lines) + "\n")
+        manifest, n = write_manifest(bundle_dir)
+        lines = ["x"] * n  # count only; contents are not needed below
         return CheckResult("11.6", "Bundle file integrity (SHA-256 manifest)",
                            "WARN",
                            "Manifest did not exist — created now. Re-run selfcheck.py to verify.",
@@ -706,6 +737,13 @@ def main() -> None:
              "Other checks are skipped.",
         default=None
     )
+    parser.add_argument(
+        "--write-manifest", action="store_true",
+        help="(Re)generate .bundle_manifest.sha256 for the bundle directory and exit. "
+             "Run this at install time, and after any intentional change to the "
+             "bundle, so that §11.6 reports genuine tampering rather than your own "
+             "edits. The manifest is deliberately not tracked in version control."
+    )
     args = parser.parse_args()
 
     bundle_dir = Path(args.bundle_dir).resolve()
@@ -714,6 +752,15 @@ def main() -> None:
     if not bundle_dir.is_dir():
         print(f"[ERROR] Bundle directory not found: {bundle_dir}", file=sys.stderr)
         sys.exit(1)
+
+    # --write-manifest is a maintenance action, not a check run.
+    if args.write_manifest:
+        manifest, n = write_manifest(bundle_dir)
+        print(f"[OK] Manifest written: {manifest}")
+        print(f"     Covers {n} file(s) in {bundle_dir}")
+        for rel in bundle_files(bundle_dir):
+            print(f"       {rel}")
+        sys.exit(0)
 
     # Parse --only filter
     only_ids: set[str] | None = None

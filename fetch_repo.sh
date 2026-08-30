@@ -99,8 +99,30 @@ if [[ "$IS_REMOTE" == true ]]; then
         git clone "${CLONE_ARGS[@]}" "$REPO_INPUT" "$DEST"
     fi
 else
+    # Enforce the size limit for local paths too. Previously only remote repos
+    # were checked (via the GitHub API), so an oversized local tree bypassed
+    # MAX_SIZE_MB entirely.
+    LOCAL_SIZE_MB=$(du -sm "$REPO_INPUT" 2>/dev/null | awk '{print $1}')
+    if [[ -n "${LOCAL_SIZE_MB:-}" ]] && (( LOCAL_SIZE_MB > MAX_SIZE_MB )); then
+        fail "Local path too large: ${LOCAL_SIZE_MB} MB exceeds limit of ${MAX_SIZE_MB} MB"
+    fi
+    info "Local path size: ${LOCAL_SIZE_MB:-?} MB (limit: ${MAX_SIZE_MB} MB)"
+
     info "Copying local path: $REPO_INPUT → $DEST"
-    cp -r "$REPO_INPUT" "$DEST"
+    # Exclude .git during the copy rather than deleting it afterwards: on a
+    # large repository the history can be gigabytes that are copied only to be
+    # removed moments later. Diff mode needs .git, so keep it in that case.
+    if [[ -n "${SINCE_COMMIT:-}" ]]; then
+        cp -r "$REPO_INPUT" "$DEST"
+    else
+        mkdir -p "$DEST"
+        if command -v rsync &>/dev/null; then
+            rsync -a --exclude='.git/' "${REPO_INPUT%/}/" "$DEST/"
+        else
+            # tar preserves the tree while skipping .git without needing rsync.
+            ( cd "$REPO_INPUT" && tar -cf - --exclude='./.git' . ) | ( cd "$DEST" && tar -xf - )
+        fi
+    fi
 fi
 
 # ── Diff mode: list files changed since SINCE_COMMIT ─────────────────────────

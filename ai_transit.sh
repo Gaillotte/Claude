@@ -10,6 +10,8 @@ VERBOSITY="normal"    # quiet | normal | verbose
 MIN_SEVERITY="high"   # low | medium | high | critical
 SINCE_COMMIT=""       # diff mode: only scan files changed since this commit SHA
 REPORT_ONLY=false     # when true: always exit 0 even on FAIL (observation mode)
+MAKE_ZIP=true         # when false: skip archive creation (CI: reports only)
+MAKE_EXCEL=true       # when false: skip Excel report generation
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'
@@ -27,6 +29,8 @@ while [[ $# -gt 0 && "$1" == --* ]]; do
         --quiet)        VERBOSITY="quiet";              shift ;;
         --verbose)      VERBOSITY="verbose";            shift ;;
         --report-only)  REPORT_ONLY=true;               shift ;;
+        --no-zip)       MAKE_ZIP=false;                 shift ;;
+        --no-excel)     MAKE_EXCEL=false;               shift ;;
         --help)         ;; # handled by usage block below
         --min-severity)
             [[ $# -ge 2 ]] || die "--min-severity requires an argument (low|medium|high|critical)"
@@ -50,6 +54,7 @@ if [[ $# -lt 1 ]]; then
     echo "    $0 --min-severity medium https://github.com/org/repo  # lower threshold"
     echo "    $0 --since abc1234 https://github.com/org/repo        # diff mode"
     echo "    $0 --report-only https://github.com/org/repo          # never block (observe)"
+    echo "    $0 --no-zip --no-excel https://github.com/org/repo     # reports only, no archive"
     echo
     echo "  Environment variables:"
     echo "    WORK_DIR      (default: /opt/ai-transit)   working directory"
@@ -142,9 +147,9 @@ if [[ "$VERDICT" == "PASS" ]]; then
     [[ -n "$REPO_NAME" ]] || REPO_NAME="repo"
     ARCHIVE="${OUTPUT_DIR}/${REPO_NAME}_${TIMESTAMP}.zip"
 
-    # Génération du rapport Excel (inclus dans le ZIP)
+    # Excel report (included in the ZIP when both are enabled)
     EXCEL_PATH="${FETCH_DIR}/scan_report_${TIMESTAMP}.xlsx"
-    if [[ -n "$REPORT_JSON" && -f "$REPORT_JSON" ]]; then
+    if [[ "$MAKE_EXCEL" == true && -n "$REPORT_JSON" && -f "$REPORT_JSON" ]]; then
         info "Generating Excel report…"
         if python3 "${SCRIPT_DIR}/generate_excel_report.py" \
                 "$REPORT_JSON" "$EXCEL_PATH" 2>/dev/null; then
@@ -154,22 +159,26 @@ if [[ "$VERDICT" == "PASS" ]]; then
         fi
     fi
 
-    info "Creating archive…"
-    # Archive paths must be repo-relative: zipping "$FETCH_DIR" by absolute path
-    # would store the internal WORK_DIR layout inside the archive and leak
-    # server-side paths to the recipient. Zip from inside the directory instead.
-    ZIP_FLAGS=(-r)
-    [[ "$VERBOSITY" == "quiet" ]] && ZIP_FLAGS+=(-q)
-    if ! ( cd "$FETCH_DIR" && zip "${ZIP_FLAGS[@]}" "$ARCHIVE" . -x ".manifest_sha256.txt" ); then
-        die "ZIP archive creation failed (disk full? insufficient permissions?)"
+    if [[ "$MAKE_ZIP" == true ]]; then
+        info "Creating archive…"
+        # Archive paths must be repo-relative: zipping "$FETCH_DIR" by absolute
+        # path would store the internal WORK_DIR layout inside the archive and
+        # leak server-side paths. Zip from inside the directory instead.
+        ZIP_FLAGS=(-r)
+        [[ "$VERBOSITY" == "quiet" ]] && ZIP_FLAGS+=(-q)
+        if ! ( cd "$FETCH_DIR" && zip "${ZIP_FLAGS[@]}" "$ARCHIVE" . -x ".manifest_sha256.txt" ); then
+            die "ZIP archive creation failed (disk full? insufficient permissions?)"
+        fi
+        [[ -f "$ARCHIVE" ]] || die "Archive not found after zip: $ARCHIVE"
+    else
+        info "--no-zip: archive creation skipped"
     fi
-    [[ -f "$ARCHIVE" ]] || die "Archive not found after zip: $ARCHIVE"
 
     echo
     echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
     echo -e "${GREEN}${BOLD}║              ✔  SCAN PASSED (PASS)          ║${RESET}"
     echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
-    ok "Archive         : $ARCHIVE"
+    [[ "$MAKE_ZIP" == true ]] && ok "Archive         : $ARCHIVE"
     [[ -f "$EXCEL_PATH" ]] && ok "Excel report    : scan_report_${TIMESTAMP}.xlsx (included in ZIP)"
     [[ -f "$REPORT_JSON" ]]  && ok "JSON report     : $REPORT_JSON"
     [[ -f "$REPORT_HTML" ]]  && ok "HTML report     : file://${REPORT_HTML}"

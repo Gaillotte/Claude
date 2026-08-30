@@ -165,6 +165,10 @@ if ! _skipping; then
             "exec.ps1 is flagged for Invoke-Expression"
         assert_contains "$(line_for deserialize.py)" "CWE-502" \
             "deserialize.py is flagged for insecure deserialization"
+        # Extensionless scripts are routed by shebang; without that they fall
+        # through to scan_unknown and skip per-language analysis entirely.
+        assert_contains "$(line_for entrypoint)" "CWE-502" \
+            "extensionless script is analysed via its shebang"
 
         # Status and message must agree: a PASS file carrying a [FAIL] message
         # means the report's parallel arrays have drifted out of alignment.
@@ -246,6 +250,13 @@ if ! _skipping; then
     # .transitignore excludes matched files from scanning.
     run_pipeline "${FIXTURES}/ignored" --quiet
     assert_eq "0" "$RUN_EXIT" ".transitignore excludes the offending file"
+
+    # --no-zip / --no-excel: reports still written, no archive produced.
+    run_pipeline "${FIXTURES}/clean" --quiet --no-zip --no-excel
+    assert_eq "0" "$RUN_EXIT" "--no-zip --no-excel still exits 0 on PASS"
+    ZN=$(ls "${RUN_WORK}/out"/*.zip 2>/dev/null | wc -l)
+    assert_eq "0" "$ZN" "--no-zip produces no archive"
+    assert_file_exists "$RUN_JSON" "--no-zip still writes the JSON report"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -342,6 +353,23 @@ if ! _skipping; then
             "diff mode scans exactly the changed file"
         assert_contains "$RUN_OUT" "Layer 5: 1 files scanned" \
             "diff mode scan count matches the changed-file count"
+
+        # Without --since, .git must not be copied at all: on a large repo the
+        # history is gigabytes copied only to be deleted moments later.
+        run_pipeline "$REPO" --quiet
+        FETCHED=$(ls -d "${RUN_WORK}"/fetch/repo_* 2>/dev/null | head -1 || true)
+        if [[ -z "$FETCHED" ]]; then
+            FETCHED=$(ls -d "${RUN_WORK}"/quarantine/repo_* 2>/dev/null | head -1 || true)
+        fi
+        if [[ -n "$FETCHED" ]]; then
+            if [[ -d "${FETCHED}/.git" ]]; then
+                fail_test "local copy excludes .git" "${FETCHED}/.git exists"
+            else
+                ok_test "local copy excludes .git"
+            fi
+        else
+            skip_test "local copy excludes .git" "no fetched directory found"
+        fi
     fi
 fi
 
