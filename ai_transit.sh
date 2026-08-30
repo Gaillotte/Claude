@@ -58,14 +58,16 @@ echo -e "${BOLD}── Phase 1 : Récupération ──────────�
 FETCH_ARGS=("$REPO_INPUT")
 [[ -n "$BRANCH" ]] && FETCH_ARGS+=("$BRANCH")
 
+rm -f "${WORK_DIR}/.fetch_result"
 FETCH_OUTPUT=$(WORK_DIR="$WORK_DIR" bash "${SCRIPT_DIR}/fetch_repo.sh" "${FETCH_ARGS[@]}" 2>&1) || {
     error "Échec de la récupération du dépôt."
     echo "$FETCH_OUTPUT" >&2
     die "Pipeline interrompu à la phase 1."
 }
 
-# Récupère le dernier chemin absolu retourné par fetch_repo.sh
-FETCH_DIR=$(echo "$FETCH_OUTPUT" | grep -E '^/' | tail -1)
+# Read the repo path from the dedicated result file written by fetch_repo.sh.
+# This avoids grepping stdout, which is fragile when log lines contain absolute paths.
+FETCH_DIR=$(cat "${WORK_DIR}/.fetch_result" 2>/dev/null || true)
 echo "$FETCH_OUTPUT" | grep -v '^/'   # affiche les logs (sans la ligne de chemin)
 
 [[ -d "$FETCH_DIR" ]] || die "Répertoire fetchté introuvable : $FETCH_DIR"

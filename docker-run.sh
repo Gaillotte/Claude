@@ -58,6 +58,7 @@ mkdir -p "$OUTPUT_DIR"
 
 # ── Decide: remote URL or local path ─────────────────────────────────────────
 DOCKER_ARGS=()
+EXIT_CODE=0   # initialise before the if/else so set -e cannot swallow it
 
 if [[ "$REPO_INPUT" =~ ^https?:// ]]; then
     # Remote URL — pass as-is to the container
@@ -68,7 +69,7 @@ if [[ "$REPO_INPUT" =~ ^https?:// ]]; then
     docker run --rm \
         -v "${OUTPUT_DIR}:/output" \
         -e OUTPUT_DIR=/output \
-        "$IMAGE" "${DOCKER_ARGS[@]}"
+        "$IMAGE" "${DOCKER_ARGS[@]}" || EXIT_CODE=$?
 else
     # Local path — mount it into the container as read-only
     LOCAL_PATH="$(realpath "$REPO_INPUT")"
@@ -82,10 +83,8 @@ else
         -v "${OUTPUT_DIR}:/output" \
         -v "${LOCAL_PATH}:${CONTAINER_PATH}:ro" \
         -e OUTPUT_DIR=/output \
-        "$IMAGE" "${DOCKER_ARGS[@]}"
+        "$IMAGE" "${DOCKER_ARGS[@]}" || EXIT_CODE=$?
 fi
-
-EXIT_CODE=$?
 
 echo
 if [[ $EXIT_CODE -eq 0 ]]; then

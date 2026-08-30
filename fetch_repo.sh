@@ -101,4 +101,7 @@ else
 fi
 
 ok "Fetch terminé → $DEST"
+# Write path to a dedicated result file so the caller can read it reliably
+# without grepping stdout (which may contain other absolute paths in log lines).
+echo "$DEST" > "${WORK_DIR}/.fetch_result"
 echo "$DEST"

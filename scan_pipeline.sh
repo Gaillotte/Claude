@@ -235,7 +235,9 @@ print(total)
     if [[ -n "$req_files" ]]; then
         if has_cmd pip-audit; then
             info "pip-audit…"
-            echo "$req_files" | while read -r req; do
+            # Use process substitution (not pipe) to keep record_fail in the parent shell
+            while read -r req; do
+                [[ -z "$req" ]] && continue
                 local out
                 out=$(pip-audit -r "$req" --format json 2>/dev/null || true)
                 local count
@@ -246,14 +248,15 @@ print(len([v for dep in d.get('dependencies',[]) for v in dep.get('vulns',[])]))
                 if [[ "$count" -gt 0 ]]; then
                     record_fail "$req" "pip-audit:${count}_CVEs_in_dependencies"
                 fi
-            done
+            done < <(echo "$req_files")
         elif has_cmd safety; then
             info "safety check…"
-            echo "$req_files" | while read -r req; do
+            while read -r req; do
+                [[ -z "$req" ]] && continue
                 if ! safety check -r "$req" --quiet 2>/dev/null; then
                     record_fail "$req" "safety:vulnerable_python_dependency"
                 fi
-            done
+            done < <(echo "$req_files")
         else
             record_warn "__global__" "pip-audit/safety missing — Python dep CVE scan skipped"
         fi
@@ -265,7 +268,9 @@ print(len([v for dep in d.get('dependencies',[]) for v in dep.get('vulns',[])]))
     if [[ -n "$pkg_files" ]]; then
         if has_cmd npm; then
             info "npm audit…"
-            echo "$pkg_files" | while read -r pkg; do
+            # Use process substitution (not pipe) to keep record_fail in the parent shell
+            while read -r pkg; do
+                [[ -z "$pkg" ]] && continue
                 local pkg_dir
                 pkg_dir=$(dirname "$pkg")
                 local out
@@ -279,7 +284,7 @@ print(d.get('metadata',{}).get('vulnerabilities',{}).get('total', 0))
                 if [[ "$count" -gt 0 ]]; then
                     record_fail "$pkg" "npm-audit:${count}_vulnerable_packages"
                 fi
-            done
+            done < <(echo "$pkg_files")
         else
             record_warn "__global__" "npm missing — JS dependency CVE scan skipped"
         fi
@@ -1192,45 +1197,58 @@ PYEOF2
 }
 
 generate_report_json() {
-    local findings_json="{"
-    local first=true
+    # Build bash arrays into newline-separated key/value streams, then
+    # delegate all JSON serialisation to Python to handle special characters safely.
+    local findings_keys="" findings_vals=""
     for path in "${!FINDINGS[@]}"; do
-        local msg="${FINDINGS[$path]%' | '}"
-        $first || findings_json+=","
-        msg="${msg//\"/\\\"}"
-        local path_esc="${path//\"/\\\"}"
-        findings_json+="\"${path_esc}\":\"${msg}\""
-        first=false
+        findings_keys+="${path}"$'\x01'
+        findings_vals+="${FINDINGS[$path]%' | '}"$'\x01'
     done
-    findings_json+="}"
 
-    local file_results_json="{"
-    first=true
+    local status_keys="" status_statuses="" status_msgs=""
     for path in "${!FILE_STATUS[@]}"; do
-        local status="${FILE_STATUS[$path]}"
-        local msg="${FILE_MSG[$path]:-}"
-        msg="${msg%' | '}"
-        msg="${msg//\"/\\\"}"
-        local path_esc="${path//\"/\\\"}"
-        $first || file_results_json+=","
-        file_results_json+="\"${path_esc}\":{\"status\":\"${status}\",\"message\":\"${msg}\"}"
-        first=false
+        status_keys+="${path}"$'\x01'
+        status_statuses+="${FILE_STATUS[$path]}"$'\x01'
+        status_msgs+="${FILE_MSG[$path]:-}"$'\x01'
     done
-    file_results_json+="}"
 
-    cat > "$REPORT_JSON" <<JSON
-{
-  "verdict": "${GLOBAL_VERDICT}",
-  "timestamp": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
-  "repo_input": "${REPO_INPUT:-}",
-  "directory": "${SCAN_DIR}",
-  "repo_hash": "$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')",
-  "standards": ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding", "SCA-CVE", "ScanCode-Licence-Copyright"],
-  "summary": { "pass": ${PASS_COUNT}, "warn": ${WARN_COUNT}, "fail": ${FAIL_COUNT} },
-  "findings": ${findings_json},
-  "file_results": ${file_results_json}
+    local repo_hash
+    repo_hash=$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')
+
+    python3 - <<PYEOF
+import json, os, sys
+
+findings_keys   = [k for k in """${findings_keys}""".split('\x01') if k]
+findings_vals   = [v for v in """${findings_vals}""".split('\x01') if v]
+status_keys     = [k for k in """${status_keys}""".split('\x01') if k]
+status_statuses = [s for s in """${status_statuses}""".split('\x01') if s]
+status_msgs     = [m for m in ("""${status_msgs}""".split('\x01') if """${status_msgs}""" else [])]
+# Pad msgs to match keys length
+while len(status_msgs) < len(status_keys):
+    status_msgs.append("")
+
+findings     = dict(zip(findings_keys, findings_vals))
+file_results = {
+    k: {"status": s, "message": m.rstrip(' | ')}
+    for k, s, m in zip(status_keys, status_statuses, status_msgs)
 }
-JSON
+
+report = {
+    "verdict":    "${GLOBAL_VERDICT}",
+    "timestamp":  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+    "repo_input": "${REPO_INPUT:-}",
+    "directory":  "${SCAN_DIR}",
+    "repo_hash":  "${repo_hash}",
+    "standards":  ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
+                   "SCA-CVE", "ScanCode-Licence-Copyright"],
+    "summary":    {"pass": ${PASS_COUNT}, "warn": ${WARN_COUNT}, "fail": ${FAIL_COUNT}},
+    "findings":     findings,
+    "file_results": file_results,
+}
+
+with open("${REPORT_JSON}", "w", encoding="utf-8") as fh:
+    json.dump(report, fh, ensure_ascii=False, indent=2)
+PYEOF
 }
 
 generate_report_html() {
