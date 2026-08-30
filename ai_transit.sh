@@ -106,8 +106,10 @@ if [[ "$VERDICT" == "PASS" ]]; then
     fi
 
     info "Archivage en cours…"
-    zip -r "$ARCHIVE" "$FETCH_DIR" \
-        -x "*.manifest_sha256.txt" > /dev/null
+    if ! zip -r "$ARCHIVE" "$FETCH_DIR" -x "*.manifest_sha256.txt"; then
+        die "Échec de la création de l'archive ZIP (disque plein ? droits insuffisants ?)"
+    fi
+    [[ -f "$ARCHIVE" ]] || die "Archive introuvable après zip : $ARCHIVE"
 
     echo
     echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
@@ -117,11 +119,18 @@ if [[ "$VERDICT" == "PASS" ]]; then
     [[ -f "$EXCEL_PATH" ]] && ok "Rapport Excel inclus : scan_report_${TIMESTAMP}.xlsx"
     echo
 else
-    # Déplacement en quarantaine
+    # Déplacement en quarantaine (cp -a + rm comme fallback cross-filesystem)
     QUARANTINE="${WORK_DIR}/quarantine"
     mkdir -p "$QUARANTINE"
     chmod 700 "$QUARANTINE"
-    mv "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null || true
+    if ! mv "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null; then
+        # mv can fail across different filesystems — fall back to copy + delete
+        if cp -a "$FETCH_DIR" "$QUARANTINE/" 2>/dev/null; then
+            rm -rf "$FETCH_DIR"
+        else
+            warn "Quarantaine : impossible de déplacer $FETCH_DIR vers $QUARANTINE — vérifiez les droits et l'espace disque"
+        fi
+    fi
 
     # Recherche du rapport le plus récent
     LATEST_REPORT=$(ls -t "${WORK_DIR}/reports/report_"*.json 2>/dev/null | head -1 || true)

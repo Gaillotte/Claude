@@ -898,9 +898,21 @@ scan_docker() {
         failed=true
     fi
 
-    # CWE-250 — container runs as root (no USER instruction)
-    if ! grep_check '^USER\s+[^r]' "$f"; then
-        record_warn "$f" "CWE-250:no_USER_directive_container_runs_as_root"
+    # CWE-250 — container runs as root
+    # Warn if no USER directive exists, or if the only USER is root / uid 0
+    local has_nonroot_user=false
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^USER[[:space:]]+ ]]; then
+            local user_arg
+            user_arg=$(echo "$line" | awk '{print $2}' | tr -d '"'"'" | cut -d: -f1)
+            if [[ "$user_arg" != "root" && "$user_arg" != "0" && -n "$user_arg" ]]; then
+                has_nonroot_user=true
+                break
+            fi
+        fi
+    done < "$f"
+    if [[ "$has_nonroot_user" == false ]]; then
+        record_warn "$f" "CWE-250:no_nonroot_USER_directive_container_may_run_as_root"
     fi
 
     # Sensitive env vars in image layers

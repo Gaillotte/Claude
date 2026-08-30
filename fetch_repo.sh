@@ -40,14 +40,27 @@ fi
 # ── Vérification taille (API GitHub) ────────────────────────────────────────
 if [[ "$IS_REMOTE" == true ]] && has_cmd jq && has_cmd curl; then
     REPO_PATH=$(echo "$REPO_INPUT" | sed 's|https://github.com/||;s|\.git$||')
-    SIZE_KB=$(curl -sf "https://api.github.com/repos/${REPO_PATH}" \
-        -H "Accept: application/vnd.github+json" 2>/dev/null \
-        | jq -r '.size // 0') || SIZE_KB=0
-    SIZE_MB=$(( SIZE_KB / 1024 ))
-    if (( SIZE_MB > MAX_SIZE_MB )); then
-        fail "Repo trop volumineux : ${SIZE_MB} MB > limite ${MAX_SIZE_MB} MB"
+    # Capture body and HTTP status code on separate lines
+    API_RESPONSE=$(curl -sf \
+        -H "Accept: application/vnd.github+json" \
+        ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} \
+        -w "\n%{http_code}" \
+        "https://api.github.com/repos/${REPO_PATH}" 2>/dev/null || true)
+    HTTP_CODE=$(echo "$API_RESPONSE" | tail -1)
+    API_BODY=$(echo "$API_RESPONSE" | head -n -1)
+
+    if [[ "$HTTP_CODE" == "404" ]]; then
+        fail "Repo introuvable ou privé : ${REPO_INPUT} (HTTP 404). Pour un repo privé, définissez GITHUB_TOKEN."
+    elif [[ "$HTTP_CODE" != "200" ]]; then
+        warn "API GitHub non disponible (HTTP ${HTTP_CODE:-timeout}) — vérification de taille ignorée"
+    else
+        SIZE_KB=$(echo "$API_BODY" | jq -r '.size // 0' 2>/dev/null || echo "0")
+        SIZE_MB=$(( SIZE_KB / 1024 ))
+        if (( SIZE_MB > MAX_SIZE_MB )); then
+            fail "Repo trop volumineux : ${SIZE_MB} MB > limite ${MAX_SIZE_MB} MB"
+        fi
+        info "Taille repo : ${SIZE_MB} MB (limite ${MAX_SIZE_MB} MB)"
     fi
-    info "Taille repo : ${SIZE_MB} MB (limite ${MAX_SIZE_MB} MB)"
 fi
 
 # ── Préparation répertoires ──────────────────────────────────────────────────

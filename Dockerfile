@@ -49,7 +49,18 @@ RUN curl -sSL \
     && chmod +x /usr/local/bin/hadolint
 
 # ── ClamAV virus database ──────────────────────────────────────────────────────
-RUN freshclam --quiet || true
+# Download the signature DB; warn loudly if it fails (e.g. air-gap) but do not
+# abort the build — the DB files can be copied in later via a volume mount.
+RUN freshclam --quiet 2>&1 || { \
+      echo ""; \
+      echo "⚠  WARNING: freshclam failed — ClamAV signature database is EMPTY."; \
+      echo "   The container will start but ClamAV scans will produce no detections."; \
+      echo "   To fix: mount a pre-downloaded DB at /var/lib/clamav/ or run"; \
+      echo "   'docker exec <container> freshclam' after the container starts."; \
+      echo ""; \
+    }; \
+    ls /var/lib/clamav/*.cvd /var/lib/clamav/*.cld 2>/dev/null \
+      || echo "WARNING: no ClamAV database files found in /var/lib/clamav/"
 
 # ── Pipeline scripts ───────────────────────────────────────────────────────────
 WORKDIR /app

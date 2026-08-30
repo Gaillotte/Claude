@@ -508,11 +508,13 @@ def build_pdf(results: list[CheckResult], output_path: Path, bundle_dir: Path) -
     # ── Global verdict ────────────────────────────────────────────────────────
     counts = {s: sum(1 for r in results if r.status == s)
               for s in ("PASS", "FAIL", "WARN", "SKIP")}
+    # A majority of SKIPs means the installation is incomplete — do not report PASS.
+    skip_threshold = len(results) // 2  # more than half
     if counts["FAIL"] > 0:
         global_verdict = "FAIL"
         verdict_style = S["verdict_fail"]
         verdict_bg = C_FAIL
-    elif counts["WARN"] > 0:
+    elif counts["WARN"] > 0 or counts["SKIP"] > skip_threshold:
         global_verdict = "WARN"
         verdict_style = S["verdict_warn"]
         verdict_bg = C_WARN
