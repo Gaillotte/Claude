@@ -1274,6 +1274,10 @@ export OFFLINE_CACHE=/opt/ai-transit/offline-cache
 ./ai_transit.sh --offline /path/to/repo
 ```
 
+> **For the step-by-step operating procedure** — building and transferring the
+> cache, verifying it on arrival, and the acceptance gate that rejects a scan
+> whose verdict rests on layers that never ran — see **OFFLINE_RUNBOOK.md**.
+
 Remote URLs are refused in this mode — copy the repository to the host and pass
 its path.
 

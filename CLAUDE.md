@@ -64,6 +64,9 @@ Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantin
 # Installation guide PDF (from INSTALL.md)
 python3 build_install_pdf.py
 
+# Air-gapped operating procedure PDF (from OFFLINE_RUNBOOK.md)
+python3 build_install_pdf.py OFFLINE_RUNBOOK.md AI_Transit_Pipeline_OFFLINE_RUNBOOK.pdf
+
 # French slides PDF
 python3 build_pdf.py
 
@@ -132,7 +135,13 @@ means very little.
 passes update-suppressing flags, and records an explicit `OFFLINE:` warning for any
 layer that could not run. pip-audit, safety, npm audit and ScanCode's CVE lookup have
 no offline mode at all; the staged trivy database is the only offline CVE coverage.
-Full per-tool reference: INSTALL.md §10.
+Full per-tool reference: INSTALL.md §10. Step-by-step operating procedure,
+including the acceptance gate: OFFLINE_RUNBOOK.md.
+
+The JSON report carries a `coverage` block naming, per layer, whether it ran, plus
+`coverage_complete` and `coverage_gaps`. A verdict alone cannot distinguish "clean"
+from "nothing was examined" — automated consumers should gate on coverage, not on
+the verdict.
 
 ## WARN vs FAIL semantics
 

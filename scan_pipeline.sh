@@ -29,6 +29,16 @@ fail_f() { _clr; echo -e "\033[31m[FAIL]\033[0m  $*" >&2; GLOBAL_VERDICT="FAIL";
 
 has_cmd() { command -v "$1" &>/dev/null; }
 
+# ── Layer coverage tracking ──────────────────────────────────────────────────
+# A verdict is only as meaningful as the layers that produced it. A layer can
+# fail to run for two unrelated reasons — the tool is not installed, or (offline)
+# its data was not staged — and both produce an empty result that is
+# indistinguishable from a clean one. Recording coverage explicitly lets a
+# consumer reject a PASS that rests on layers which never executed, instead of
+# grepping warning prose for the two cases separately.
+declare -A LAYER_COVERAGE
+record_layer() { LAYER_COVERAGE["$1"]="$2"; }   # "ran" | "skipped:<reason>"
+
 # ── Argument ─────────────────────────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then
     fail "Usage: $0 <directory_to_scan>  [VERBOSITY=quiet|normal|verbose]"
@@ -245,8 +255,10 @@ scan_global() {
             record_pass "$SCAN_DIR"
             ok "betterleaks: no secrets"
         fi
+        record_layer L1_secrets_betterleaks "ran"
     else
         record_warn "__global__" "betterleaks missing — secret scan skipped"
+        record_layer L1_secrets_betterleaks "skipped:betterleaks not installed"
     fi
 
     if has_cmd detect-secrets; then
@@ -263,8 +275,10 @@ scan_global() {
             record_pass "$SCAN_DIR"
             ok "detect-secrets: no secrets detected"
         fi
+        record_layer L1_secrets_entropy "ran"
     else
         record_warn "__global__" "detect-secrets missing"
+        record_layer L1_secrets_entropy "skipped:detect-secrets not installed"
     fi
 
     if has_cmd clamscan; then
@@ -279,6 +293,7 @@ scan_global() {
             elif ! compgen -G "/var/lib/clamav/*.c[vl]d" >/dev/null 2>&1; then
                 record_warn "__global__" \
                     "OFFLINE:ClamAV signature database is empty — malware scan detected nothing because it has no signatures, not because the code is clean; stage a DB in ${CLAMAV_DB_DIR}"
+                record_layer L1_malware "skipped:no ClamAV signatures available"
             fi
         fi
         if ! clamscan -r --quiet ${clam_opts[@]+"${clam_opts[@]}"} \
@@ -288,8 +303,10 @@ scan_global() {
             record_pass "$SCAN_DIR"
             ok "ClamAV: clean"
         fi
+        [[ -z "${LAYER_COVERAGE[L1_malware]:-}" ]] && record_layer L1_malware "ran"
     else
         record_warn "__global__" "clamscan missing"
+        record_layer L1_malware "skipped:clamav not installed"
     fi
 
     if has_cmd yara && [[ -d "${WORK_DIR}/yara-rules" ]]; then
@@ -305,6 +322,7 @@ scan_global() {
         fi
     else
         record_warn "__global__" "yara or rules directory missing"
+        record_layer L1_ioc_yara "skipped:yara or rules directory missing"
     fi
 }
 
@@ -317,6 +335,7 @@ scan_owasp_cwe() {
 
     if ! has_cmd semgrep; then
         record_warn "__global__" "semgrep missing — OWASP/CWE layer skipped (pip install semgrep)"
+        record_layer L2_owasp_cwe "skipped:semgrep not installed"
         return
     fi
 
@@ -347,10 +366,12 @@ scan_owasp_cwe() {
         if (( ${#missing[@]} > 0 )); then
             record_warn "__global__" \
                 "OFFLINE:semgrep rulesets not staged (${missing[*]}) — those OWASP/CWE rules did NOT run; export them with 'semgrep --config p/<name> --dump-config' on a connected host into ${SEMGREP_RULES_DIR}"
+            record_layer L2_owasp_cwe "partial:rulesets missing (${missing[*]})"
         fi
         if (( ${#staged[@]} == 0 )); then
             record_warn "__global__" \
                 "OFFLINE:Layer 2 skipped entirely — no semgrep rulesets available in ${SEMGREP_RULES_DIR}"
+            record_layer L2_owasp_cwe "skipped:no semgrep rulesets staged for offline use"
             return
         fi
         rulesets=("${staged[@]}")
@@ -395,6 +416,8 @@ print('\n'.join(rows))
     done
 
     $found_any || ok "OWASP/CWE scan: no findings"
+    # Do not overwrite a "partial" already recorded for missing rulesets.
+    [[ -z "${LAYER_COVERAGE[L2_owasp_cwe]:-}" ]] && record_layer L2_owasp_cwe "ran"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -418,6 +441,7 @@ scan_dependencies() {
             else
                 record_warn "__global__" \
                     "OFFLINE:trivy database not staged in ${TRIVY_CACHE_DIR} — dependency CVE scan did NOT run; populate it with 'trivy fs --download-db-only --cache-dir <dir>' on a connected host"
+                record_layer L3_dependency_cve "skipped:trivy database not staged for offline use"
                 trivy_extra=()
             fi
         fi
@@ -425,6 +449,7 @@ scan_dependencies() {
         if [[ "$OFFLINE" != "true" || ${#trivy_extra[@]} -gt 0 ]]; then
             trivy_out=$(trivy fs --quiet --exit-code 0 --format json \
                         ${trivy_extra[@]+"${trivy_extra[@]}"} "$SCAN_DIR" 2>/dev/null || true)
+            record_layer L3_dependency_cve "ran"
         fi
         local vuln_count
         vuln_count=$(echo "$trivy_out" | python3 -c "
@@ -443,6 +468,7 @@ print(total)
         fi
     else
         record_warn "__global__" "trivy missing — dependency CVE scan skipped"
+        record_layer L3_dependency_cve "skipped:trivy not installed"
     fi
 
     # pip-audit: Python requirements
@@ -1423,6 +1449,8 @@ scan_by_type() {
     # Clear the progress line (_clr is a no-op when stderr is not a terminal)
     _clr
     ok "Layer 5: $current files scanned"
+    record_layer L4_patterns "ran"
+    record_layer L5_per_language_sast "ran"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1433,6 +1461,7 @@ scan_scancode() {
 
     if ! has_cmd scancode; then
         record_warn "__global__" "scancode missing — licence/copyright layer skipped (pip install scancode-toolkit)"
+        record_layer L6_licence "skipped:scancode not installed"
         return
     fi
 
@@ -1533,6 +1562,7 @@ PYEOF2
         ok "scancode: no risky licences or vulnerabilities detected"
     fi
 
+    record_layer L6_licence "ran"
     ok "ScanCode report: ${sc_report}"
 }
 
@@ -1557,6 +1587,13 @@ generate_report_json() {
         printf '%s\x00' "${FILE_MSG[$path]:-}"         >> "$_status_m"
     done
 
+    local _cov_k="${_tmp}/ck" _cov_v="${_tmp}/cv"
+    local layer
+    for layer in "${!LAYER_COVERAGE[@]}"; do
+        printf '%s\x00' "$layer"                       >> "$_cov_k"
+        printf '%s\x00' "${LAYER_COVERAGE[$layer]}"    >> "$_cov_v"
+    done
+
     local repo_hash
     repo_hash=$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')
 
@@ -1571,7 +1608,8 @@ generate_report_json() {
     REPORT_WARN="$WARN_COUNT" \
     REPORT_FAIL="$FAIL_COUNT" \
     REPORT_OUT="$REPORT_JSON" \
-    python3 - "$_findings_k" "$_findings_v" "$_status_k" "$_status_s" "$_status_m" <<'PYEOF'
+    python3 - "$_findings_k" "$_findings_v" "$_status_k" "$_status_s" "$_status_m" \
+             "$_cov_k" "$_cov_v" <<'PYEOF'
 import json, os, sys
 
 def _read_nul(path):
@@ -1596,6 +1634,7 @@ def _read_nul(path):
 
 fk = _read_nul(sys.argv[1]); fv = _read_nul(sys.argv[2])
 sk = _read_nul(sys.argv[3]); ss = _read_nul(sys.argv[4]); sm = _read_nul(sys.argv[5])
+ck = _read_nul(sys.argv[6]); cv = _read_nul(sys.argv[7])
 while len(sm) < len(sk):
     sm.append("")
 
@@ -1605,8 +1644,16 @@ file_results = {
     for k, s, m in zip(sk, ss, sm)
 }
 
+coverage = dict(zip(ck, cv))
+# A layer is "covered" when it ran in full. "partial" and "skipped" both mean
+# the verdict rests on less analysis than it appears to.
+incomplete = sorted(k for k, v in coverage.items() if not v.startswith("ran"))
+
 report = {
     "verdict":      os.environ["REPORT_VERDICT"],
+    "coverage":           coverage,
+    "coverage_complete":  not incomplete,
+    "coverage_gaps":      incomplete,
     "timestamp":    os.environ["REPORT_TS"],
     "repo_input":   os.environ["REPORT_REPO_INPUT"],
     "directory":    os.environ["REPORT_SCAN_DIR"],

@@ -339,6 +339,34 @@ EOF
     assert_eq "1" "$EC" "offline refuses a remote URL"
     assert_contains "$OUT" "without a network" \
         "offline explains why a remote URL cannot be used"
+
+    # The report must state, per layer, whether it ran. A verdict alone cannot
+    # distinguish "clean" from "nothing was examined"; this is what the
+    # air-gapped acceptance gate keys on (OFFLINE_RUNBOOK.md phase 5).
+    run_pipeline "${FIXTURES}/clean" --offline --quiet
+    if [[ -n "$RUN_JSON" ]]; then
+        assert_contains "$(cat "$RUN_JSON")" '"coverage"' \
+            "report includes a per-layer coverage block"
+        assert_contains "$(cat "$RUN_JSON")" '"coverage_complete"' \
+            "report states whether coverage was complete"
+
+        # With no scanners installed, the layers that need them must be
+        # reported as gaps -- not silently omitted.
+        GAPS=$(python3 -c "
+import json,sys
+d=json.load(open('$RUN_JSON'))
+print(' '.join(sorted(d.get('coverage_gaps',[]))))
+" 2>/dev/null || true)
+        assert_contains "$GAPS" "L2_owasp_cwe" \
+            "a layer whose tool is absent is recorded as a coverage gap"
+
+        # Layers built into the pipeline always run and must say so.
+        L4=$(python3 -c "
+import json
+print(json.load(open('$RUN_JSON')).get('coverage',{}).get('L4_patterns',''))
+" 2>/dev/null || true)
+        assert_eq "ran" "$L4" "built-in pattern layer reports that it ran"
+    fi
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
