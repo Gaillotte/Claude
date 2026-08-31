@@ -20,6 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./ai_transit.sh --since abc1234 https://github.com/org/repo        # diff mode (changed files only)
 ./ai_transit.sh --report-only https://github.com/org/repo          # never block (observe)
 ./ai_transit.sh --no-zip --no-excel https://github.com/org/repo    # reports only, no archive
+OFFLINE_CACHE=/opt/ai-transit/offline-cache \
+  ./ai_transit.sh --offline /local/path/to/repo                    # air-gapped
 
 # Private GitHub repos
 GITHUB_TOKEN=ghp_... ./ai_transit.sh https://github.com/org/private-repo
@@ -45,6 +47,8 @@ Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantin
 | `MIN_SEVERITY` | `high` | Minimum severity to FAIL (`low\|medium\|high\|critical`) |
 | `VERBOSITY` | `normal` | Log verbosity (`quiet\|normal\|verbose`) |
 | `SINCE_COMMIT` | _(unset)_ | Diff mode: only scan files changed since this commit SHA |
+| `OFFLINE` | `false` | Air-gapped: no scanner attempts a network call |
+| `OFFLINE_CACHE` | `$WORK_DIR/offline-cache` | Staged Semgrep rules, trivy DB, ClamAV signatures |
 
 ## Allowlist and exclusions
 
@@ -114,6 +118,21 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 **Diff mode** (`--since COMMIT`): `fetch_repo.sh` writes changed file paths to `.diff_files`; `scan_by_type()` skips files not in that set.
 
 **Output:** `generate_report_json` + `generate_report_html` → JSON/HTML in `$WORK_DIR/reports/`; then `echo "$GLOBAL_VERDICT"`.
+
+## Air-gapped operation
+
+`--offline` exists because several scanners fetch at **scan** time (semgrep pulls
+rulesets, trivy downloads a CVE database, pip-audit/safety/npm audit query advisory
+services, ScanCode's `--vulnerability` queries VulnerableCode). Without it on an
+isolated host those calls block on timeouts and return nothing, so L2 and L3 quietly
+contribute no findings while the report still shows them as having run — a PASS that
+means very little.
+
+`--offline` points each tool at staged data (`prepare_offline_cache.sh` builds it),
+passes update-suppressing flags, and records an explicit `OFFLINE:` warning for any
+layer that could not run. pip-audit, safety, npm audit and ScanCode's CVE lookup have
+no offline mode at all; the staged trivy database is the only offline CVE coverage.
+Full per-tool reference: INSTALL.md §10.
 
 ## WARN vs FAIL semantics
 

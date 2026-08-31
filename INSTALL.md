@@ -30,7 +30,7 @@
 7. [Directory Structure Setup](#directories)
 8. [Environment Variables & Flags](#env-vars)
 9. [Full Installation Verification](#verification)
-10. [Offline Operation](#offline)
+10. [Air-Gapped Operation](#offline)
 11. [Sample Scans — Testing the Pipeline](#samples)
 12. [Self-Scan: Verifying the Installation is Safe](#self-scan)
 13. [Security Hardening Recommendations](#hardening)
@@ -1089,6 +1089,9 @@ Copy your YARA rules to `/opt/ai-transit/yara-rules/` (see §5.4 for a minimal t
                         quarantining it, so nothing is moved or deleted.
   --no-zip              Skip creation of the approved ZIP archive
   --no-excel            Skip generation of the Excel report
+  --offline             Air-gapped mode: no scanner attempts a network call.
+                        Uses locally staged rules and databases, and reports any
+                        layer that could not run. See section 10.
 ```
 
 `--no-zip --no-excel` is the usual combination for CI, where the JSON and HTML
@@ -1105,6 +1108,11 @@ reports are consumed by another job and the archive would only be discarded.
 | `MIN_SEVERITY` | `high` | Minimum severity to block (`low\|medium\|high\|critical`) |
 | `VERBOSITY` | `normal` | Log verbosity passed to scanner (`quiet\|normal\|verbose`) |
 | `SINCE_COMMIT` | _(unset)_ | Diff mode commit SHA (same as `--since`) |
+| `OFFLINE` | `false` | Air-gapped mode (same as `--offline`) |
+| `OFFLINE_CACHE` | `$WORK_DIR/offline-cache` | Root of staged offline assets |
+| `SEMGREP_RULES_DIR` | `$OFFLINE_CACHE/semgrep-rules` | Exported Semgrep rulesets |
+| `TRIVY_CACHE_DIR` | `$OFFLINE_CACHE/trivy-db` | trivy vulnerability database |
+| `CLAMAV_DB_DIR` | `$OFFLINE_CACHE/clamav` | ClamAV signature files |
 
 Add persistent values to `~/.bashrc`:
 ```bash
@@ -1240,55 +1248,153 @@ chmod +x verify_install.sh && ./verify_install.sh
 
 ---
 
-## 10. Offline Operation {#offline}
+## 10. Air-Gapped Operation {#offline}
 
-The table below summarises offline readiness for each tool:
+The pipeline supports fully disconnected operation through `--offline`. This
+section is the reference for what each tool needs in that mode.
 
-| Tool | Offline? | Preparation needed |
-|------|----------|--------------------|
-| betterleaks | ✔ Yes | None — rules embedded in binary |
-| detect-secrets | ✔ Yes | None — rules embedded |
-| ClamAV | ✔ Yes | Run `freshclam` on a connected machine, then copy `/var/lib/clamav/` DB files |
-| YARA | ✔ Yes | None — local `.yar` rule files only |
-| Semgrep | ✔ Yes* | Pre-download rules: `semgrep --config p/owasp-top-ten --dump-config > rules.yaml` |
-| trivy | ✔ Yes* | Run `trivy image --download-db-only` first; use `--skip-db-update --offline-scan` |
-| pip-audit | ✗ No | Use trivy offline as fallback |
-| safety | ✗ No | Use trivy offline as fallback |
-| npm audit | ✗ No | No offline mode available |
-| grep (L4) | ✔ Yes | Built-in — always available |
-| Bandit | ✔ Yes | None |
-| ShellCheck | ✔ Yes | None |
-| cppcheck | ✔ Yes | None |
-| hadolint | ✔ Yes | None |
-| checkov | ✔ Yes | None — local checks only |
-| ScanCode | ✔ Yes | None — all licence texts bundled |
+### 10.1 Why `--offline` is required, and not merely advisable
 
-### Offline preparation script
+Several scanners reach the network at **scan** time, not just at install time.
+Without `--offline` on an isolated host those calls are still attempted. They do
+not crash the run — each is individually guarded — but they block on DNS and TCP
+timeouts and then return nothing.
 
-Run this once on a machine with internet access, then copy `/opt/ai-transit/offline-cache/` to the air-gapped host:
+The consequence is worse than slowness. Layer 2 (OWASP/CWE) and Layer 3 (CVE)
+contribute no findings, while the report still presents them as having run. The
+verdict can be **PASS on a repository that was never meaningfully scanned**.
+
+`--offline` changes that: each tool is pointed at locally staged data and given
+the flags that suppress update attempts and telemetry, and any layer that
+genuinely cannot run is recorded as an explicit `OFFLINE:` warning naming what
+did not execute. A silent gap becomes a stated one.
 
 ```bash
-#!/usr/bin/env bash
-# prepare_offline_cache.sh
-CACHE="/opt/ai-transit/offline-cache"
-mkdir -p "${CACHE}/semgrep-rules" "${CACHE}/trivy-db"
-
-echo "[1/3] Downloading Semgrep rules..."
-semgrep --config p/owasp-top-ten  --dump-config > "${CACHE}/semgrep-rules/owasp.yaml"
-semgrep --config p/cwe-top-25     --dump-config > "${CACHE}/semgrep-rules/cwe.yaml"
-semgrep --config p/security-audit --dump-config > "${CACHE}/semgrep-rules/audit.yaml"
-semgrep --config p/secrets        --dump-config > "${CACHE}/semgrep-rules/secrets.yaml"
-
-echo "[2/3] Downloading trivy DB..."
-TRIVY_DB_REPOSITORY=ghcr.io/aquasecurity/trivy-db \
-    trivy image --download-db-only --cache-dir "${CACHE}/trivy-db"
-
-echo "[3/3] Copying ClamAV DB..."
-cp /var/lib/clamav/*.cvd  "${CACHE}/" 2>/dev/null || \
-cp /var/lib/clamav/*.cld  "${CACHE}/" 2>/dev/null || true
-
-echo "Done. Copy ${CACHE} to the offline host."
+export OFFLINE_CACHE=/opt/ai-transit/offline-cache
+./ai_transit.sh --offline /path/to/repo
 ```
+
+Remote URLs are refused in this mode — copy the repository to the host and pass
+its path.
+
+### 10.2 Per-tool reference
+
+**Group A — works offline with no preparation.** Rules are compiled into the
+tool; nothing to stage, no flags required.
+
+| Tool | Layer | Notes |
+|------|-------|-------|
+| betterleaks | L1 | Detection rules embedded in the binary |
+| detect-secrets | L1 | Entropy and regex rules embedded |
+| YARA | L1 | Reads your own `.yar` files from `$WORK_DIR/yara-rules/` |
+| grep built-ins | L4 | CWE-798/22/918/327/338 patterns, entirely local |
+| Bandit | L5 | Local Python AST analysis |
+| ShellCheck | L5 | Local |
+| cppcheck | L5 | Local |
+| hadolint | L5 | Local |
+
+**Group B — works offline once data is staged.** These are the ones that make
+air-gapped operation worth configuring properly.
+
+| Tool | Layer | Must be staged | Flags applied by `--offline` |
+|------|-------|----------------|------------------------------|
+| Semgrep | L2 | One YAML per ruleset in `$SEMGREP_RULES_DIR` | `--config <file>` instead of `p/<name>`, plus `--metrics=off` |
+| trivy | L3 | Vulnerability DB in `$TRIVY_CACHE_DIR` | `--skip-db-update --skip-java-db-update --offline-scan --cache-dir` |
+| ClamAV | L1 | `*.cvd` / `*.cld` in `$CLAMAV_DB_DIR` | `--database=<dir>` |
+| checkov | L5 | Nothing | `--skip-download` (stops remote provider-schema fetches) |
+| ScanCode | L6 | Nothing for licence/copyright | `--vulnerability` is **dropped**; licence and copyright detection are local and still run |
+
+**Group C — no offline mode exists.** These query a remote advisory service by
+design and cannot be staged. Under `--offline` they are not attempted, and each
+emits an `OFFLINE:` warning so the gap is on the record.
+
+| Tool | Layer | Why | Mitigation |
+|------|-------|-----|------------|
+| pip-audit | L3 | Resolves advisories from PyPI/OSV | Python CVEs covered by the staged trivy DB |
+| safety | L3 | Queries the Safety DB service | As above |
+| npm audit | L3 | Queries the npm registry endpoint | JS CVEs covered by the staged trivy DB |
+| ScanCode `--vulnerability` | L6 | Queries VulnerableCode | Package CVEs covered by the staged trivy DB |
+| GitHub API size check | fetch | Needs `api.github.com` | Not applicable: `--offline` accepts local paths only |
+
+The single practical consequence: **trivy is the only dependency-CVE coverage
+you have offline.** If its database is not staged, Layer 3 contributes nothing.
+
+### 10.3 Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OFFLINE` | `false` | Same as `--offline` |
+| `OFFLINE_CACHE` | `$WORK_DIR/offline-cache` | Root of the staged assets |
+| `SEMGREP_RULES_DIR` | `$OFFLINE_CACHE/semgrep-rules` | Exported ruleset YAML files |
+| `TRIVY_CACHE_DIR` | `$OFFLINE_CACHE/trivy-db` | trivy database cache |
+| `CLAMAV_DB_DIR` | `$OFFLINE_CACHE/clamav` | ClamAV signature files |
+
+`--offline` also exports `SEMGREP_SEND_METRICS=off`, `DO_NOT_TRACK=1`,
+`CHECKPOINT_DISABLE=1` and `PIP_NO_INDEX=1`, so no tool blocks on a telemetry or
+version-check call.
+
+### 10.4 Building the cache — on a connected host
+
+```bash
+./prepare_offline_cache.sh /path/to/offline-cache
+```
+
+It stages the Semgrep rulesets, the trivy database, the ClamAV signatures and
+your YARA rules, writes a SHA-256 manifest, and prints a summary of what it
+could and could not stage.
+
+Expect roughly **300–800 MB**, dominated by the trivy database.
+
+### 10.5 Transferring and verifying
+
+```bash
+# connected host
+tar -czf offline-cache.tar.gz -C /path/to offline-cache
+sha256sum offline-cache.tar.gz          # note this value
+
+# air-gapped host, after transfer
+sha256sum offline-cache.tar.gz          # must match
+tar -xzf offline-cache.tar.gz -C /opt/ai-transit/
+cd /opt/ai-transit/offline-cache && sha256sum --check .cache_manifest.sha256
+```
+
+### 10.6 Running
+
+```bash
+export OFFLINE_CACHE=/opt/ai-transit/offline-cache
+./ai_transit.sh --offline /path/to/repo
+
+# Docker (the wrapper forwards OFFLINE and the cache paths)
+OFFLINE=true OFFLINE_CACHE=/opt/ai-transit/offline-cache \
+  ./docker-run.sh --offline /path/to/repo
+```
+
+### 10.7 Confirming a clean offline run
+
+The report should contain **no** `OFFLINE:` warning about Layer 2 or trivy:
+
+```bash
+grep -o 'OFFLINE:[^|]*' "$WORK_DIR"/reports/report_*.json
+```
+
+| Warning seen | Meaning | Fix |
+|--------------|---------|-----|
+| `Layer 2 skipped entirely` | No rulesets staged — OWASP/CWE did not run | Re-run `prepare_offline_cache.sh` |
+| `semgrep rulesets not staged (...)` | Some rulesets missing — partial coverage | Export the named rulesets |
+| `trivy database not staged` | No dependency CVE coverage at all | Stage the trivy DB |
+| `ClamAV signature database is empty` | Malware scan found nothing because it had no signatures | Stage `*.cvd` files |
+| `Python/JavaScript dependency CVE scan unavailable` | Expected — see Group C | None; trivy covers this |
+
+### 10.8 Keeping the cache current
+
+Vulnerability data ages. A stale trivy database reports a clean result for CVEs
+published after it was built, which is the same failure mode as not scanning at
+all — only harder to notice.
+
+Rebuild and re-transfer the cache on a defined cadence (**weekly** is a
+reasonable default for the trivy DB and ClamAV signatures; Semgrep rulesets
+change more slowly). Record the build date alongside the archive so the
+air-gapped side can tell how old its data is.
 
 ---
 
@@ -1531,6 +1637,27 @@ export GITHUB_TOKEN="ghp_your_token_here"
 
 ---
 
+### 11.13 Air-gapped scan
+
+```bash
+# On a connected host: build the cache and transfer it
+./prepare_offline_cache.sh /tmp/offline-cache
+tar -czf offline-cache.tar.gz -C /tmp offline-cache
+
+# On the air-gapped host
+tar -xzf offline-cache.tar.gz -C /opt/ai-transit/
+cd /opt/ai-transit/offline-cache && sha256sum --check .cache_manifest.sha256
+
+export OFFLINE_CACHE=/opt/ai-transit/offline-cache
+./ai_transit.sh --offline /path/to/repo
+
+# Confirm no layer was silently skipped
+grep -o 'OFFLINE:[^|]*' "$WORK_DIR"/reports/report_*.json
+# Expected: only the Python/JavaScript dependency notices (see 10.2 group C)
+```
+
+---
+
 ## 12. Self-Scan: Verifying the Installation is Safe {#self-scan}
 
 Before deploying in a production environment, run the full self-check:
@@ -1653,6 +1780,11 @@ pip install --upgrade betterleaks detect-secrets semgrep bandit \
 | Diff mode scans everything | `--since` commit unreachable in a shallow clone | The pipeline warns and falls back to a full scan; fetch more history or use a local path |
 | Docker build fails downloading trivy | Pinned version no longer published | Update `ARG TRIVY_VERSION` / `TRIVY_SHA256` (see §17.1); the `pins` CI job prints the correct digest |
 | ZIP contains `tmp/…/fetch/repo_…` paths | Archive built by a pre-P8 version | Upgrade; archives are now rooted at the repository |
+| Scan hangs for minutes on an isolated host | Running without `--offline`; tools are blocking on network timeouts | Use `--offline` (see §10) |
+| Offline run passes suspiciously fast with few findings | Layers 2 and 3 had no staged data | Check for `OFFLINE:` warnings in the report; stage the cache (§10.4) |
+| `OFFLINE:Layer 2 skipped entirely` | Semgrep rulesets not staged | Run `prepare_offline_cache.sh` on a connected host |
+| `OFFLINE:trivy database not staged` | No dependency CVE coverage offline | Stage the trivy DB; it is the only offline CVE source |
+| `Cannot clone … without a network` | `--offline` with a remote URL | Copy the repository to the host and pass its path |
 
 ---
 

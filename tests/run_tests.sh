@@ -260,6 +260,88 @@ if ! _skipping; then
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+# LAYER C2 — Offline / air-gapped operation
+# Stubs stand in for semgrep and trivy so the flags passed to them can be
+# asserted without installing either. What matters is that offline the pipeline
+# never reaches for the network AND never stays silent about a layer it could
+# not run: a quiet skip would present an empty result as a clean one.
+# ═════════════════════════════════════════════════════════════════════════════
+group "Layer C2 — offline mode"
+if ! _skipping; then
+    STUBS="${SCRATCH}/stubs"
+    mkdir -p "$STUBS"
+    for tool in semgrep trivy; do
+        cat > "${STUBS}/${tool}" <<EOF
+#!/bin/sh
+echo "\$@" >> "${STUBS}/${tool}_calls.txt"
+echo '{"results":[],"Results":[]}'
+EOF
+        chmod +x "${STUBS}/${tool}"
+    done
+
+    # Offline with nothing staged: both layers must be reported as not run.
+    rm -f "${STUBS}"/*_calls.txt
+    RUN_WORK="${SCRATCH}/off_bare"; mkdir -p "$RUN_WORK"
+    OUT=$(cd "$ROOT_DIR" && PATH="${STUBS}:$PATH" WORK_DIR="$RUN_WORK" \
+          OUTPUT_DIR="${RUN_WORK}/out" timeout 300 ./ai_transit.sh --offline \
+          "${FIXTURES}/clean" 2>&1)
+
+    assert_contains "$OUT" "OFFLINE:Layer 2 skipped entirely" \
+        "offline without staged rules reports Layer 2 as not run"
+    assert_contains "$OUT" "OFFLINE:trivy database not staged" \
+        "offline without a staged DB reports the CVE scan as not run"
+    assert_contains "$OUT" "OFFLINE:Python dependency CVE scan unavailable" \
+        "offline names pip-audit/safety as unavailable rather than skipping quietly"
+
+    if [[ -f "${STUBS}/semgrep_calls.txt" ]]; then
+        fail_test "offline never invokes semgrep without staged rules" \
+                  "semgrep was called"
+    else
+        ok_test "offline never invokes semgrep without staged rules"
+    fi
+    if [[ -f "${STUBS}/trivy_calls.txt" ]]; then
+        fail_test "offline never invokes trivy without a staged database" \
+                  "trivy was called"
+    else
+        ok_test "offline never invokes trivy without a staged database"
+    fi
+
+    # Offline with staged assets: local paths and update-suppressing flags.
+    rm -f "${STUBS}"/*_calls.txt
+    CACHE="${SCRATCH}/cache"
+    mkdir -p "${CACHE}/semgrep-rules" "${CACHE}/trivy-db/db"
+    for r in owasp-top-ten cwe-top-25 security-audit secrets; do
+        echo "rules: []" > "${CACHE}/semgrep-rules/${r}.yaml"
+    done
+    touch "${CACHE}/trivy-db/db/trivy.db"
+    RUN_WORK="${SCRATCH}/off_staged"; mkdir -p "$RUN_WORK"
+    (cd "$ROOT_DIR" && PATH="${STUBS}:$PATH" WORK_DIR="$RUN_WORK" \
+     OUTPUT_DIR="${RUN_WORK}/out" OFFLINE_CACHE="$CACHE" \
+     timeout 300 ./ai_transit.sh --offline "${FIXTURES}/clean" >/dev/null 2>&1) || true
+
+    SG=$(cat "${STUBS}/semgrep_calls.txt" 2>/dev/null || true)
+    assert_contains "$SG" "${CACHE}/semgrep-rules/owasp-top-ten.yaml" \
+        "offline points semgrep at the staged ruleset file"
+    assert_not_contains "$SG" "--config=p/" \
+        "offline never resolves a semgrep registry identifier"
+    assert_contains "$SG" "--metrics=off" \
+        "offline disables semgrep telemetry"
+
+    TV=$(cat "${STUBS}/trivy_calls.txt" 2>/dev/null || true)
+    assert_contains "$TV" "--skip-db-update" "offline stops trivy updating its database"
+    assert_contains "$TV" "--offline-scan"   "offline puts trivy in offline-scan mode"
+    assert_contains "$TV" "$CACHE"           "offline points trivy at the staged cache"
+
+    # A remote URL cannot be honoured without a network; refuse, do not hang.
+    RUN_WORK="${SCRATCH}/off_remote"; mkdir -p "$RUN_WORK"
+    OUT=$(cd "$ROOT_DIR" && WORK_DIR="$RUN_WORK" timeout 60 ./ai_transit.sh \
+          --offline https://github.com/org/repo 2>&1); EC=$?
+    assert_eq "1" "$EC" "offline refuses a remote URL"
+    assert_contains "$OUT" "without a network" \
+        "offline explains why a remote URL cannot be used"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LAYER D — Output artifacts
 # ═════════════════════════════════════════════════════════════════════════════
 group "Layer D — output artifacts"

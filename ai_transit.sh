@@ -10,6 +10,7 @@ VERBOSITY="normal"    # quiet | normal | verbose
 MIN_SEVERITY="high"   # low | medium | high | critical
 SINCE_COMMIT=""       # diff mode: only scan files changed since this commit SHA
 REPORT_ONLY=false     # when true: always exit 0 even on FAIL (observation mode)
+OFFLINE=false         # when true: no scanner attempts any network call
 MAKE_ZIP=true         # when false: skip archive creation (CI: reports only)
 MAKE_EXCEL=true       # when false: skip Excel report generation
 
@@ -29,6 +30,7 @@ while [[ $# -gt 0 && "$1" == --* ]]; do
         --quiet)        VERBOSITY="quiet";              shift ;;
         --verbose)      VERBOSITY="verbose";            shift ;;
         --report-only)  REPORT_ONLY=true;               shift ;;
+        --offline)      OFFLINE=true;                   shift ;;
         --no-zip)       MAKE_ZIP=false;                 shift ;;
         --no-excel)     MAKE_EXCEL=false;               shift ;;
         --help)         ;; # handled by usage block below
@@ -55,6 +57,7 @@ if [[ $# -lt 1 ]]; then
     echo "    $0 --since abc1234 https://github.com/org/repo        # diff mode"
     echo "    $0 --report-only https://github.com/org/repo          # never block (observe)"
     echo "    $0 --no-zip --no-excel https://github.com/org/repo     # reports only, no archive"
+    echo "    $0 --offline /local/path/to/repo                       # air-gapped host"
     echo
     echo "  Environment variables:"
     echo "    WORK_DIR      (default: /opt/ai-transit)   working directory"
@@ -99,7 +102,7 @@ FETCH_ARGS=("$REPO_INPUT")
 rm -f "${WORK_DIR}/.fetch_result" "${WORK_DIR}/.diff_files" \
       "${WORK_DIR}/.scan_verdict" "${WORK_DIR}/.scan_report_json"
 FETCH_OUTPUT=$(WORK_DIR="$WORK_DIR" GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
-    SINCE_COMMIT="$SINCE_COMMIT" \
+    SINCE_COMMIT="$SINCE_COMMIT" OFFLINE="$OFFLINE" \
     bash "${SCRIPT_DIR}/fetch_repo.sh" "${FETCH_ARGS[@]}" 2>&1) || {
     error "Repository fetch failed."
     echo "$FETCH_OUTPUT" >&2
@@ -118,7 +121,7 @@ ok "Repository available: $FETCH_DIR"
 # ── Phase 2: Security scan ────────────────────────────────────────────────────
 [[ "$VERBOSITY" != "quiet" ]] && echo -e "${BOLD}── Phase 2: Security scan ──────────────────────${RESET}" || true
 SCAN_OUTPUT=$(REPO_INPUT="$REPO_INPUT" WORK_DIR="$WORK_DIR" VERBOSITY="$VERBOSITY" \
-    MIN_SEVERITY="$MIN_SEVERITY" \
+    MIN_SEVERITY="$MIN_SEVERITY" OFFLINE="$OFFLINE" \
     bash "${SCRIPT_DIR}/scan_pipeline.sh" "$FETCH_DIR" 2>&1) || true
 
 # Read verdict and report path from sidecar files written by scan_pipeline.sh.

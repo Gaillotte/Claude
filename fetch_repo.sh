@@ -38,6 +38,11 @@ else
 fi
 
 # ── Size check via GitHub API ─────────────────────────────────────────────────
+if [[ "$IS_REMOTE" == true && "${OFFLINE:-false}" == "true" ]]; then
+    warn "Offline mode: remote repositories cannot be fetched. Use a local path."
+    fail "Cannot clone ${REPO_INPUT} without a network. Copy the repository to this host and pass its path instead."
+fi
+
 if [[ "$IS_REMOTE" == true ]] && has_cmd jq && has_cmd curl; then
     REPO_PATH=$(echo "$REPO_INPUT" | sed 's|https://github.com/||;s|\.git$||')
     # Capture body and HTTP status code on separate lines

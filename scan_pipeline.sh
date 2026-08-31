@@ -37,6 +37,38 @@ fi
 SCAN_DIR="$1"
 [[ -d "$SCAN_DIR" ]] || fail "Directory not found: $SCAN_DIR"
 
+# ── Offline / air-gapped operation ───────────────────────────────────────────
+# Several scanners reach out to the network at SCAN time, not just install time:
+# semgrep fetches rulesets from its registry, trivy downloads a vulnerability
+# database, pip-audit/safety/npm audit query advisory services, and ScanCode's
+# --vulnerability option queries VulnerableCode.
+#
+# Without OFFLINE=true those calls are still attempted on an isolated host. They
+# do not crash the run (each is guarded), but they block on DNS and TCP timeouts
+# and then yield nothing — so Layer 2 and Layer 3 quietly contribute no findings
+# while the report still presents them as having run. A PASS produced that way
+# means very little, which is the dangerous part.
+#
+# OFFLINE=true instead: points each tool at locally staged data, passes the
+# flags that suppress update attempts and telemetry, and records an explicit
+# WARN naming any layer that genuinely cannot run without a network.
+OFFLINE="${OFFLINE:-false}"
+
+# Locations of pre-staged offline assets (see INSTALL.md §10).
+OFFLINE_CACHE="${OFFLINE_CACHE:-${WORK_DIR}/offline-cache}"
+SEMGREP_RULES_DIR="${SEMGREP_RULES_DIR:-${OFFLINE_CACHE}/semgrep-rules}"
+TRIVY_CACHE_DIR="${TRIVY_CACHE_DIR:-${OFFLINE_CACHE}/trivy-db}"
+CLAMAV_DB_DIR="${CLAMAV_DB_DIR:-${OFFLINE_CACHE}/clamav}"
+
+if [[ "$OFFLINE" == "true" ]]; then
+    info "Offline mode: no scanner will attempt a network call"
+    # Suppress telemetry that would otherwise block on a timeout.
+    export SEMGREP_SEND_METRICS=off
+    export DO_NOT_TRACK=1
+    export CHECKPOINT_DISABLE=1        # Terraform/checkov version check
+    export PIP_NO_INDEX=1
+fi
+
 # ── .transit-allow.json — exception allowlist ────────────────────────────────
 # Structure: [{"rule": "CWE-78", "path": "scripts/legacy.sh", "reason": "..."}]
 # Matched findings are downgraded from FAIL to WARN.
@@ -237,7 +269,20 @@ scan_global() {
 
     if has_cmd clamscan; then
         info "clamscan…"
-        if ! clamscan -r --quiet "${CLAMSCAN_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null; then
+        # clamscan reads a local signature DB, so it works offline — but only if
+        # signatures were staged. An empty DB detects nothing while still
+        # exiting 0, which would read as "clean".
+        local -a clam_opts=()
+        if [[ "$OFFLINE" == "true" ]]; then
+            if compgen -G "${CLAMAV_DB_DIR}/*.c[vl]d" >/dev/null 2>&1; then
+                clam_opts+=(--database="$CLAMAV_DB_DIR")
+            elif ! compgen -G "/var/lib/clamav/*.c[vl]d" >/dev/null 2>&1; then
+                record_warn "__global__" \
+                    "OFFLINE:ClamAV signature database is empty — malware scan detected nothing because it has no signatures, not because the code is clean; stage a DB in ${CLAMAV_DB_DIR}"
+            fi
+        fi
+        if ! clamscan -r --quiet ${clam_opts[@]+"${clam_opts[@]}"} \
+                "${CLAMSCAN_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null; then
             record_fail "$SCAN_DIR" "clamav:malware_detected"
         else
             record_pass "$SCAN_DIR"
@@ -282,12 +327,42 @@ scan_owasp_cwe() {
         "p/secrets"          # additional secret patterns
     )
 
+    # Offline: "p/..." identifiers resolve against the semgrep registry over the
+    # network. Substitute the pre-exported YAML for each ruleset instead. A
+    # ruleset with no staged file is skipped loudly rather than silently
+    # producing zero findings.
+    local -a semgrep_extra=()
+    if [[ "$OFFLINE" == "true" ]]; then
+        semgrep_extra+=(--metrics=off)
+        local -a staged=() missing=()
+        local rs name
+        for rs in "${rulesets[@]}"; do
+            name="${rs#p/}"
+            if [[ -f "${SEMGREP_RULES_DIR}/${name}.yaml" ]]; then
+                staged+=("${SEMGREP_RULES_DIR}/${name}.yaml")
+            else
+                missing+=("$name")
+            fi
+        done
+        if (( ${#missing[@]} > 0 )); then
+            record_warn "__global__" \
+                "OFFLINE:semgrep rulesets not staged (${missing[*]}) — those OWASP/CWE rules did NOT run; export them with 'semgrep --config p/<name> --dump-config' on a connected host into ${SEMGREP_RULES_DIR}"
+        fi
+        if (( ${#staged[@]} == 0 )); then
+            record_warn "__global__" \
+                "OFFLINE:Layer 2 skipped entirely — no semgrep rulesets available in ${SEMGREP_RULES_DIR}"
+            return
+        fi
+        rulesets=("${staged[@]}")
+    fi
+
     local found_any=false
     for ruleset in "${rulesets[@]}"; do
         info "  semgrep ${ruleset}…"
         # Single run — parse JSON output once to avoid double execution (10-20 min saved)
         local out
         out=$(semgrep --config="${ruleset}" --quiet --json --no-autofix \
+              ${semgrep_extra[@]+"${semgrep_extra[@]}"} \
               "${SEMGREP_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null || true)
 
         local ruleset_findings
@@ -332,8 +407,25 @@ scan_dependencies() {
     # trivy: universal SCA (Python, JS, Go, Ruby, Java, etc.)
     if has_cmd trivy; then
         info "trivy fs…"
-        local trivy_out
-        trivy_out=$(trivy fs --quiet --exit-code 0 --format json "$SCAN_DIR" 2>/dev/null || true)
+        # Offline: forbid every update attempt and read the staged database.
+        # --offline-scan additionally stops trivy from resolving dependencies
+        # that would require a network round-trip (e.g. Java GAV lookups).
+        local -a trivy_extra=()
+        if [[ "$OFFLINE" == "true" ]]; then
+            if [[ -d "$TRIVY_CACHE_DIR" ]] && compgen -G "${TRIVY_CACHE_DIR}/db/*" >/dev/null 2>&1; then
+                trivy_extra+=(--skip-db-update --skip-java-db-update --offline-scan
+                              --cache-dir "$TRIVY_CACHE_DIR")
+            else
+                record_warn "__global__" \
+                    "OFFLINE:trivy database not staged in ${TRIVY_CACHE_DIR} — dependency CVE scan did NOT run; populate it with 'trivy fs --download-db-only --cache-dir <dir>' on a connected host"
+                trivy_extra=()
+            fi
+        fi
+        local trivy_out=""
+        if [[ "$OFFLINE" != "true" || ${#trivy_extra[@]} -gt 0 ]]; then
+            trivy_out=$(trivy fs --quiet --exit-code 0 --format json \
+                        ${trivy_extra[@]+"${trivy_extra[@]}"} "$SCAN_DIR" 2>/dev/null || true)
+        fi
         local vuln_count
         vuln_count=$(echo "$trivy_out" | python3 -c "
 import sys, json
@@ -357,7 +449,13 @@ print(total)
     local req_files
     req_files=$(find "$SCAN_DIR" -name "requirements*.txt" -o -name "Pipfile.lock" \
                 -o -name "pyproject.toml" 2>/dev/null | head -5)
-    if [[ -n "$req_files" ]]; then
+    if [[ -n "$req_files" && "$OFFLINE" == "true" ]]; then
+        # pip-audit and safety both resolve advisories from a remote service and
+        # have no offline database. Say so explicitly: a silent skip here would
+        # leave Python dependency CVEs unreported with nothing in the record.
+        record_warn "__global__" \
+            "OFFLINE:Python dependency CVE scan unavailable (pip-audit and safety both require a network advisory service) — rely on the staged trivy database for Python CVEs"
+    elif [[ -n "$req_files" ]]; then
         if has_cmd pip-audit; then
             info "pip-audit…"
             # Use process substitution (not pipe) to keep record_fail in the parent shell
@@ -390,7 +488,12 @@ print(len([v for dep in d.get('dependencies',[]) for v in dep.get('vulns',[])]))
     # npm audit: JavaScript package.json
     local pkg_files
     pkg_files=$(find "$SCAN_DIR" -name "package-lock.json" -o -name "yarn.lock" 2>/dev/null | head -3)
-    if [[ -n "$pkg_files" ]]; then
+    if [[ -n "$pkg_files" && "$OFFLINE" == "true" ]]; then
+        # npm audit always queries the registry advisory endpoint; there is no
+        # offline equivalent.
+        record_warn "__global__" \
+            "OFFLINE:JavaScript dependency CVE scan unavailable (npm audit requires the registry) — rely on the staged trivy database for JS CVEs"
+    elif [[ -n "$pkg_files" ]]; then
         if has_cmd npm; then
             info "npm audit…"
             # Use process substitution (not pipe) to keep record_fail in the parent shell
@@ -955,7 +1058,10 @@ scan_terraform() {
 
     if has_cmd checkov; then
         local out
-        out=$(checkov -f "$f" --quiet 2>/dev/null || true)
+        # --skip-download prevents checkov fetching remote provider schemas.
+        local -a ck_opts=()
+        [[ "$OFFLINE" == "true" ]] && ck_opts+=(--skip-download)
+        out=$(checkov -f "$f" --quiet ${ck_opts[@]+"${ck_opts[@]}"} 2>/dev/null || true)
         if echo "$out" | grep -q 'FAILED'; then
             local count
             count=$(echo "$out" | grep -c 'FAILED' || true)
@@ -1340,11 +1446,19 @@ scan_scancode() {
     # --json-pp   : pretty-printed JSON output
     # --quiet     : suppress progress bar
     # --timeout   : per-file timeout in seconds
+    # --vulnerability resolves CVEs against the VulnerableCode service. Licence
+    # and copyright detection are fully local, so offline we keep those and drop
+    # only the part that needs a network.
+    local -a sc_opts=(--license --copyright --package)
+    if [[ "$OFFLINE" == "true" ]]; then
+        record_warn "__global__" \
+            "OFFLINE:scancode CVE lookup disabled (--vulnerability queries VulnerableCode) — licence and copyright detection still run"
+    else
+        sc_opts+=(--vulnerability)
+    fi
+
     if ! scancode \
-            --license \
-            --copyright \
-            --vulnerability \
-            --package \
+            "${sc_opts[@]}" \
             --json-pp "$sc_report" \
             --quiet \
             --timeout 120 \

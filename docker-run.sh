@@ -48,6 +48,7 @@ fi
     echo "  Forwarded to the pipeline inside the container:"
     echo "    --quiet | --verbose    Log verbosity"
     echo "    --report-only          Never block; generate reports and exit 0"
+    echo "    --offline              Air-gapped: no scanner attempts a network call"
     echo "    --min-severity LEVEL   low | medium | high | critical"
     echo "    --since COMMIT         Diff mode: scan only files changed since COMMIT"
     exit 1
@@ -60,7 +61,7 @@ fi
 PIPELINE_FLAGS=()
 while [[ $# -gt 0 && "$1" == --* ]]; do
     case "$1" in
-        --quiet|--verbose|--report-only)
+        --quiet|--verbose|--report-only|--offline|--no-zip|--no-excel)
             PIPELINE_FLAGS+=("$1"); shift ;;
         --min-severity|--since)
             [[ $# -ge 2 ]] || die "$1 requires an argument"
@@ -87,7 +88,8 @@ fi
 # ── Forward environment variables to the container ───────────────────────────
 # Variables from the host shell are automatically propagated when set.
 DOCKER_ENV_ARGS=(-e OUTPUT_DIR=/output)
-for _var in WORK_DIR MAX_SIZE_MB MIN_SEVERITY VERBOSITY GITHUB_TOKEN SINCE_COMMIT; do
+for _var in WORK_DIR MAX_SIZE_MB MIN_SEVERITY VERBOSITY GITHUB_TOKEN SINCE_COMMIT \
+             OFFLINE OFFLINE_CACHE SEMGREP_RULES_DIR TRIVY_CACHE_DIR CLAMAV_DB_DIR; do
     [[ -n "${!_var:-}" ]] && DOCKER_ENV_ARGS+=(-e "${_var}=${!_var}")
 done
 
