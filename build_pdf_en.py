@@ -1712,7 +1712,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "51 assertions", [
+    ("Test suite", "69 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",
@@ -1751,6 +1751,59 @@ text_block(cv, [
     "multi-character IFS — IFS=':::' is a character set, silently identical to IFS=':'",
     "top-level 'local'  — valid syntax, but aborts at runtime under set -e",
 ], 55, H - 646, size=11.5, color=GRAY, line_h=21)
+cv.showPage()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SLIDE — AIR-GAPPED OPERATION
+# ═══════════════════════════════════════════════════════════════════════════════
+bg(cv)
+header_bar(cv, HexColor("#8E44AD"), "Air-Gapped Operation")
+text(cv, "Disconnected scanning, and the failure it is designed to prevent",
+     35, H - 110, size=14, color=GRAY)
+
+text(cv, "The risk", 35, H - 150, size=17, color=DARK, bold=True)
+card(cv, 30, H - 268, W - 60, 105)
+text_block(cv, [
+    "Several scanners fetch at SCAN time: semgrep pulls rulesets, trivy downloads a CVE database,",
+    "pip-audit / safety / npm audit query advisory services. On an isolated host those calls do not",
+    "fail loudly — they block on timeouts, return nothing, and Layers 2 and 3 contribute no findings",
+    "while the report still shows them as having run. The result is PASS on a repository never examined.",
+], 50, H - 190, size=11.5, color=DARK, line_h=24)
+
+groups = [
+    ("No preparation", HexColor("#2E7D32"),
+     ["betterleaks, detect-secrets", "YARA, pattern rules", "Bandit, ShellCheck", "cppcheck, hadolint"],
+     "Rules are local"),
+    ("Needs staged data", HexColor("#C06010"),
+     ["Semgrep  (ruleset YAML)", "trivy  (CVE database)", "ClamAV  (signatures)", "checkov, ScanCode"],
+     "Staged by prepare_offline_cache.sh"),
+    ("No offline mode", HexColor("#C0392B"),
+     ["pip-audit", "safety", "npm audit", "ScanCode CVE lookup"],
+     "Not attempted; gap is recorded"),
+]
+cw = (W - 100) / 3
+cx = 35
+for title, col, items, note in groups:
+    card(cv, cx, H - 468, cw, 180)
+    rect(cv, cx, H - 330, cw, 42, col, radius=10)
+    text(cv, title, cx + 14, H - 306, size=14, color=WHITE, bold=True)
+    for i, it in enumerate(items):
+        text(cv, it, cx + 16, H - 358 - i * 24, size=11, color=DARK, max_w=cw - 30)
+    text(cv, note, cx + 16, H - 456, size=9.5, color=GRAY, max_w=cw - 30)
+    cx += cw + 15
+
+text(cv, "Offline, the staged trivy database is the ONLY dependency-CVE coverage there is.",
+     W / 2, H - 500, size=13, color=HexColor("#C0392B"), bold=True, align="center")
+
+text(cv, "Proving the scan was real", 35, H - 545, size=17, color=DARK, bold=True)
+card(cv, 30, H - 660, W - 60, 100)
+text_block(cv, [
+    'Every report carries a coverage block: "L2_owasp_cwe": "ran"  ·  "L3_dependency_cve": "skipped:trivy database not staged"',
+    "A layer can fail to run because the tool is absent OR its data was not staged — both are recorded identically,",
+    "so automated consumers gate on coverage_complete rather than parsing warning text. A verdict alone cannot",
+    "distinguish \u201cclean\u201d from \u201cnothing was examined\u201d.",
+], 50, H - 580, size=11, color=DARK, line_h=23)
 cv.showPage()
 
 

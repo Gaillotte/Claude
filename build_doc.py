@@ -217,6 +217,11 @@ toc_items = [
     ("    10.2", "Contrôles par dépôt"),
     ("    10.3", "Dépôts privés"),
     ("11.", "Assurance qualité"),
+    ("12.", "Fonctionnement en environnement isolé"),
+    ("    12.1", "Pourquoi un mode dédié est nécessaire"),
+    ("    12.2", "Comportement des outils hors ligne"),
+    ("    12.3", "Procédure"),
+    ("    12.4", "Vérifier que le scan a réellement eu lieu"),
     ("    11.1", "Suite de tests"),
     ("    11.2", "Intégration continue"),
     ("    11.3", "Intégrité du bundle"),
@@ -1287,6 +1292,114 @@ para(doc, (
     "contrôle qui crie au loup est un contrôle que l'on apprend à ignorer."
 ))
 code_block(doc, MANIFEST_USAGE_FR)
+
+doc.add_paragraph()
+
+OFFLINE_PREP_FR = (
+    "./prepare_offline_cache.sh /tmp/offline-cache\n"
+    "date -u +%Y-%m-%d > /tmp/offline-cache/.cache_built_on\n"
+    "tar -czf offline-cache.tar.gz -C /tmp offline-cache\n"
+    "sha256sum offline-cache.tar.gz    # transmettre par un autre canal"
+)
+OFFLINE_VERIFY_FR = (
+    "sha256sum -c offline-cache.tar.gz.sha256\n"
+    "tar -xzf offline-cache.tar.gz -C /opt/ai-transit/\n"
+    "cd /opt/ai-transit/offline-cache\n"
+    "sha256sum --check .cache_manifest.sha256"
+)
+OFFLINE_RUN_FR = (
+    "export OFFLINE_CACHE=/opt/ai-transit/offline-cache\n"
+    "./ai_transit.sh --offline /chemin/vers/depot"
+)
+OFFLINE_COVERAGE_FR = (
+    "REPORT=$(ls -t $WORK_DIR/reports/report_*.json | head -1)\n"
+    "python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); \\\n"
+    "  print(d['coverage_complete'], d['coverage_gaps'])\" \"$REPORT\""
+)
+
+page_break(doc)
+
+heading(doc, "12. Fonctionnement en environnement isolé", level=1)
+
+para(doc, (
+    "Le pipeline prend en charge un fonctionnement totalement déconnecté via "
+    "l'option --offline. Cette section en donne la synthèse ; la référence "
+    "outil par outil se trouve dans INSTALL.md section 10, et la procédure "
+    "d'exploitation pas à pas dans OFFLINE_RUNBOOK.md."
+))
+
+heading(doc, "12.1 Pourquoi un mode dédié est nécessaire", level=2)
+para(doc, (
+    "Plusieurs scanners sollicitent le réseau au moment du scan, et pas "
+    "uniquement à l'installation. Semgrep résout ses jeux de règles depuis un "
+    "registre, trivy télécharge une base de vulnérabilités, pip-audit, safety et "
+    "npm audit interrogent des services d'avis de sécurité, et l'option "
+    "vulnerability de ScanCode interroge VulnerableCode."
+))
+para(doc, (
+    "Sur une machine isolée sans --offline, ces appels sont malgré tout tentés. "
+    "Ils n'interrompent pas l'exécution, chacun étant protégé individuellement. "
+    "Ils bloquent sur des délais de connexion puis ne renvoient rien : les "
+    "couches 2 et 3 ne produisent alors aucun résultat, alors que le rapport les "
+    "présente toujours comme ayant été exécutées. Le pipeline peut donc conclure "
+    "PASS sur un dépôt qui n'a jamais été réellement analysé. Éviter ce résultat "
+    "est l'objet même de ce mode."
+))
+
+heading(doc, "12.2 Comportement des outils hors ligne", level=2)
+t = doc.add_table(rows=1, cols=3)
+t.style = "Table Grid"
+add_table_header(t, ["Groupe", "Outils", "Comportement hors ligne"])
+set_col_widths(t, [3.5, 6, 8])
+rows = [
+    ("Aucune préparation",
+     "betterleaks, detect-secrets, YARA, règles de motifs, Bandit, ShellCheck, "
+     "cppcheck, hadolint",
+     "Pleinement fonctionnels ; les règles sont locales"),
+    ("Données à pré-positionner",
+     "Semgrep, trivy, ClamAV, checkov, ScanCode",
+     "Fonctionnels une fois les règles, bases ou signatures pré-positionnées ; "
+     "le pipeline passe les options qui suppriment les tentatives de mise à jour"),
+    ("Aucun mode hors ligne",
+     "pip-audit, safety, npm audit, recherche CVE de ScanCode",
+     "Non exécutés ; chacun consigne un avertissement explicite nommant ce qui "
+     "n'a pas été couvert"),
+]
+for row in rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+para(doc, (
+    "Une conséquence mérite d'être soulignée. En ligne, quatre outils se "
+    "recoupent sur les vulnérabilités de dépendances et en perdre un reste "
+    "tolérable. Hors ligne, la base trivy pré-positionnée constitue la seule "
+    "couverture CVE des dépendances. Si elle est absente ou périmée, ces "
+    "vulnérabilités ne sont pas signalées."
+), italic=True)
+
+heading(doc, "12.3 Procédure", level=2)
+para(doc, "Sur une machine connectée, construire et signer le cache :")
+code_block(doc, OFFLINE_PREP_FR)
+para(doc, "Sur la machine isolée, vérifier le transfert avant toute utilisation :")
+code_block(doc, OFFLINE_VERIFY_FR)
+para(doc, "Puis lancer le scan. Les URL distantes ne peuvent pas être récupérées :")
+code_block(doc, OFFLINE_RUN_FR)
+
+heading(doc, "12.4 Vérifier que le scan a réellement eu lieu", level=2)
+para(doc, (
+    "Chaque rapport comporte un bloc coverage indiquant, couche par couche, si "
+    "elle a été exécutée. Une couche peut ne pas s'exécuter pour deux raisons "
+    "distinctes - l'outil n'est pas installé, ou ses données n'ont pas été "
+    "pré-positionnées - et le bloc consigne les deux de manière identique : un "
+    "consommateur automatisé n'a donc pas à analyser le texte des avertissements "
+    "pour les distinguer."
+))
+code_block(doc, OFFLINE_COVERAGE_FR)
+para(doc, (
+    "Les traitements automatisés doivent s'appuyer sur la couverture plutôt que "
+    "sur le verdict. Un PASS dont le bloc coverage indique la couche 2 ou 3 comme "
+    "non exécutée est non concluant, et non pas sain. OFFLINE_RUNBOOK.md fournit "
+    "une barrière d'acceptation prête à l'emploi."
+))
 
 doc.add_paragraph()
 

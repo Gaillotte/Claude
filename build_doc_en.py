@@ -227,6 +227,11 @@ toc_items = [
     ("    12.2", "Per-Repository Controls"),
     ("    12.3", "Private Repositories"),
     ("13.", "Quality Assurance"),
+    ("14.", "Air-Gapped Operation"),
+    ("    14.1", "Why a dedicated mode is required"),
+    ("    14.2", "Tool behaviour offline"),
+    ("    14.3", "Procedure"),
+    ("    14.4", "Confirming the scan was real"),
     ("    13.1", "Test Suite"),
     ("    13.2", "Continuous Integration"),
     ("    13.3", "Bundle Integrity"),
@@ -2012,6 +2017,108 @@ para(doc, (
     "ordinary edit, and a check that cries wolf is a check people learn to ignore."
 ))
 code_block(doc, MANIFEST_USAGE)
+
+doc.add_paragraph()
+
+OFFLINE_PREP_EN = (
+    "./prepare_offline_cache.sh /tmp/offline-cache\n"
+    "date -u +%Y-%m-%d > /tmp/offline-cache/.cache_built_on\n"
+    "tar -czf offline-cache.tar.gz -C /tmp offline-cache\n"
+    "sha256sum offline-cache.tar.gz    # send via a separate channel"
+)
+OFFLINE_VERIFY_EN = (
+    "sha256sum -c offline-cache.tar.gz.sha256\n"
+    "tar -xzf offline-cache.tar.gz -C /opt/ai-transit/\n"
+    "cd /opt/ai-transit/offline-cache\n"
+    "sha256sum --check .cache_manifest.sha256"
+)
+OFFLINE_RUN_EN = (
+    "export OFFLINE_CACHE=/opt/ai-transit/offline-cache\n"
+    "./ai_transit.sh --offline /path/to/repo"
+)
+OFFLINE_COVERAGE_EN = (
+    "REPORT=$(ls -t $WORK_DIR/reports/report_*.json | head -1)\n"
+    "python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); \\\n"
+    "  print(d['coverage_complete'], d['coverage_gaps'])\" \"$REPORT\""
+)
+
+page_break(doc)
+
+heading(doc, "14. Air-Gapped Operation", level=1)
+
+para(doc, (
+    "The pipeline supports fully disconnected operation through the --offline "
+    "flag. This section summarises it; the per-tool reference is INSTALL.md "
+    "section 10, and the step-by-step procedure is OFFLINE_RUNBOOK.md."
+))
+
+heading(doc, "14.1 Why a dedicated mode is required", level=2)
+para(doc, (
+    "Several scanners reach the network at scan time, not merely at install "
+    "time. Semgrep resolves its rulesets from a registry, trivy downloads a "
+    "vulnerability database, pip-audit, safety and npm audit query advisory "
+    "services, and ScanCode's vulnerability option queries VulnerableCode."
+))
+para(doc, (
+    "On an isolated host without --offline those calls are still attempted. They "
+    "do not abort the run, because each is individually guarded. They block on "
+    "connection timeouts and then return nothing, so Layer 2 and Layer 3 "
+    "contribute no findings while the report still presents them as having run. "
+    "The pipeline can therefore report PASS on a repository that was never "
+    "meaningfully examined. Preventing that outcome is the entire purpose of the "
+    "mode."
+))
+
+heading(doc, "14.2 Tool behaviour offline", level=2)
+t = doc.add_table(rows=1, cols=3)
+t.style = "Table Grid"
+add_table_header(t, ["Group", "Tools", "Offline behaviour"])
+set_col_widths(t, [3.5, 6, 8])
+rows = [
+    ("No preparation",
+     "betterleaks, detect-secrets, YARA, pattern rules, Bandit, ShellCheck, "
+     "cppcheck, hadolint",
+     "Fully functional; rules are local"),
+    ("Requires staged data",
+     "Semgrep, trivy, ClamAV, checkov, ScanCode",
+     "Functional once rules, databases or signatures are staged; the pipeline "
+     "passes the flags that suppress update attempts"),
+    ("No offline mode",
+     "pip-audit, safety, npm audit, ScanCode CVE lookup",
+     "Not attempted; each records an explicit warning naming what was not covered"),
+]
+for row in rows:
+    add_row(t, row, bold_first=True)
+doc.add_paragraph()
+para(doc, (
+    "One consequence deserves emphasis. Connected, four tools overlap on "
+    "dependency vulnerabilities and losing one is survivable. Offline, the "
+    "staged trivy database is the only dependency CVE coverage that exists. If "
+    "it is missing or out of date, those vulnerabilities go unreported."
+), italic=True)
+
+heading(doc, "14.3 Procedure", level=2)
+para(doc, "On a connected host, build and sign the asset cache:")
+code_block(doc, OFFLINE_PREP_EN)
+para(doc, "On the air-gapped host, verify the transfer before using it:")
+code_block(doc, OFFLINE_VERIFY_EN)
+para(doc, "Then scan. Remote URLs cannot be fetched; pass a local path:")
+code_block(doc, OFFLINE_RUN_EN)
+
+heading(doc, "14.4 Confirming the scan was real", level=2)
+para(doc, (
+    "Every report carries a coverage block stating, per layer, whether it ran. A "
+    "layer can fail to run for two unrelated reasons - the tool is not installed, "
+    "or its data was not staged - and the block records both identically, so an "
+    "automated consumer does not have to parse warning text to tell them apart."
+))
+code_block(doc, OFFLINE_COVERAGE_EN)
+para(doc, (
+    "Automated consumers should gate on coverage rather than on the verdict. A "
+    "PASS whose coverage block shows Layer 2 or Layer 3 as skipped is "
+    "inconclusive, not clean. OFFLINE_RUNBOOK.md provides a ready-made "
+    "acceptance gate."
+))
 
 doc.add_paragraph()
 

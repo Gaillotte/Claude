@@ -553,6 +553,50 @@ if ! _skipping; then
         fi
     done
 
+    # Documentation quotes the assertion count ("68/68 passed", "68 assertions")
+    # in several places. Those numbers drift silently every time a test is added,
+    # and a doc that misstates its own verification is a doc readers stop
+    # trusting. Check them against the real total.
+    #
+    # TOTAL is not final while the suite is still running, so derive the expected
+    # count by counting assertion calls in this file instead.
+    EXPECTED_N=$(grep -cE '^\s*(assert_eq|assert_contains|assert_not_contains|assert_file_exists|ok_test|fail_test) ' \
+                 "${TESTS_DIR}/run_tests.sh" 2>/dev/null || echo 0)
+    STALE=""
+    while IFS= read -r hit; do
+        [[ -z "$hit" ]] && continue
+        num="${hit##*:}"
+        num="${num%%/*}"; num="${num%% *}"
+        # Allow a small margin: the point is to catch drift, not to force an
+        # edit for every single new assertion.
+        if (( num < PASS_N - 6 || num > PASS_N + 6 )); then
+            STALE+="${hit}"$'\n'
+        fi
+    done < <(grep -rnoE '[0-9]+/[0-9]+ passed|[0-9]+ assertions' \
+             "${ROOT_DIR}"/*.md "${ROOT_DIR}"/build_*.py 2>/dev/null || true)
+
+    # Count how many references exist at all. A sed that runs with an empty
+    # variable silently deletes the number rather than updating it, leaving
+    # "Expected: ✔ / passed" — and a guard that only checks values would pass on
+    # that, because there is no longer a value to disagree with.
+    N_REFS=$(grep -rcoE '[0-9]+/[0-9]+ passed|[0-9]+ assertions' \
+             "${ROOT_DIR}"/*.md "${ROOT_DIR}"/build_*.py 2>/dev/null \
+             | awk -F: '{n+=$2} END{print n+0}')
+
+    if [[ -n "$FILTER" ]]; then
+        # Under a filter PASS_N counts only the selected groups, so comparing
+        # documented totals against it would report false drift.
+        skip_test "documented assertion counts match the suite" "run without a filter"
+    elif (( N_REFS < 5 )); then
+        fail_test "documented assertion counts match the suite" \
+                  "only ${N_REFS} count reference(s) found across the docs — numbers were likely deleted rather than updated"
+    elif [[ -z "$STALE" ]]; then
+        ok_test "documented assertion counts match the suite"
+    else
+        fail_test "documented assertion counts match the suite" \
+                  "suite reports ${PASS_N}; stale references:"$'\n'"${STALE}"
+    fi
+
     if command -v shellcheck &>/dev/null; then
         SC_FAIL=""
         for f in ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh; do

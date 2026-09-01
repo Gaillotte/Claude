@@ -1045,7 +1045,7 @@ scanning tools — see §15.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 51/51 passed
+# Expected: ✔ 69/69 passed
 ```
 
 ### 6.6 Generate the integrity manifest
@@ -1389,7 +1389,49 @@ grep -o 'OFFLINE:[^|]*' "$WORK_DIR"/reports/report_*.json
 | `ClamAV signature database is empty` | Malware scan found nothing because it had no signatures | Stage `*.cvd` files |
 | `Python/JavaScript dependency CVE scan unavailable` | Expected — see Group C | None; trivy covers this |
 
-### 10.8 Keeping the cache current
+### 10.8 Coverage — proving the scan actually ran
+
+Every JSON report carries a `coverage` block stating, per layer, whether it ran.
+This exists because a verdict alone cannot distinguish "clean" from "nothing was
+examined", and offline that distinction is easy to lose.
+
+```json
+"coverage": {
+  "L1_secrets_betterleaks": "ran",
+  "L1_malware":             "skipped:no ClamAV signatures available",
+  "L2_owasp_cwe":           "ran",
+  "L3_dependency_cve":      "skipped:trivy database not staged for offline use",
+  "L4_patterns":            "ran",
+  "L5_per_language_sast":   "ran",
+  "L6_licence":             "ran"
+},
+"coverage_complete": false,
+"coverage_gaps":     ["L1_malware", "L3_dependency_cve"]
+```
+
+A layer can fail to run for two unrelated reasons — the tool is not installed, or
+its data was not staged — and the block records both the same way, so a consumer
+does not have to parse warning text to tell them apart.
+
+**Automated consumers should gate on coverage, not on the verdict:**
+
+```bash
+REPORT=$(ls -t "$WORK_DIR"/reports/report_*.json | head -1)
+python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+print('verdict :', d['verdict'])
+print('gaps    :', ', '.join(d['coverage_gaps']) or 'none')
+sys.exit(0 if d['coverage_complete'] else 2)
+" "$REPORT"
+```
+
+`OFFLINE_RUNBOOK.md` contains a ready-made acceptance gate keyed on the five
+layers a verdict most depends on.
+
+---
+
+### 10.9 Keeping the cache current
 
 Vulnerability data ages. A stale trivy database reports a clean result for CVEs
 published after it was built, which is the same failure mode as not scanning at
@@ -1817,7 +1859,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  51/51 passed
+  ✔  69/69 passed
 ```
 
 ### 15.1 What each layer covers

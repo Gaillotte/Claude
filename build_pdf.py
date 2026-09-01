@@ -720,7 +720,7 @@ text_block(cv, [
 text(cv, "Le pipeline se vérifie lui-même", W / 2 + 20, H - 125, size=18, color=ACCENT2, bold=True)
 card(cv, W / 2 + 10, H - 375, W / 2 - 50, 230)
 qa_lines = [
-    ("Suite de tests", "51 assertions, sans aucun outil de scan requis"),
+    ("Suite de tests", "69 assertions, sans aucun outil de scan requis"),
     ("Corpus de règles", "chaque finding doit viser le bon fichier"),
     ("Garde-fous", "le code sûr ne doit jamais être signalé"),
     ("Intégration continue", "lint · test · pins · docker"),
@@ -730,6 +730,13 @@ for i, (title, desc) in enumerate(qa_lines):
     yy = H - 175 - i * 38
     text(cv, title, W / 2 + 30, yy, size=12, color=WHITE, bold=True)
     text(cv, desc, W / 2 + 30, yy - 16, size=10.5, color=GRAY, max_w=W / 2 - 90)
+
+text(cv, "Environnement isolé (--offline)", W / 2 + 20, H - 415, size=18, color=ACCENT, bold=True)
+text_block(cv, [
+    "Semgrep, trivy, ClamAV  —  règles et bases pré-positionnées",
+    "pip-audit, safety, npm audit  —  aucun mode hors ligne : l'absence est consignée",
+    "Bloc coverage : indique, couche par couche, si elle a réellement été exécutée",
+], W / 2 + 20, H - 448, size=11.5, color=GRAY, line_h=24)
 
 line(cv, 40, H - 520, W - 40, H - 520, HexColor("#22374D"), 1)
 text(cv, "Une suite qu'on n'a jamais vue échouer n'apporte aucune preuve.",

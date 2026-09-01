@@ -939,7 +939,7 @@ txt(sl, "Le pipeline se vérifie lui-même", Inches(6.9), Inches(1.2), Inches(6)
     size=19, bold=True, color=C_GREEN)
 rounded_box(sl, Inches(6.9), Inches(1.75), Inches(5.9), Inches(3.1), C_BG_CARD)
 qa = [
-    ("Suite de tests",         "51 assertions, aucun outil requis"),
+    ("Suite de tests",         "69 assertions, aucun outil requis"),
     ("Corpus de règles",       "chaque finding doit viser le bon fichier"),
     ("Garde-fous",             "le code sûr ne doit jamais être signalé"),
     ("Intégration continue",   "lint · test · pins · docker"),
@@ -958,10 +958,12 @@ txt(sl, "Contrôles par dépôt", Inches(0.5), Inches(5.0), Inches(6), Inches(0.
 txt_lines(sl, [
     ".transitignore  —  motifs gitignore, fichiers exclus de toutes les couches",
     ".transit-allow.json  —  rétrograde un FAIL connu en WARN, avec justification",
-], Inches(0.5), Inches(5.45), Inches(12.3), Inches(0.9), size=12, color=C_GRAY)
+    "--offline  —  environnement isolé : règles et bases pré-positionnées ; le bloc coverage",
+    "                indique, couche par couche, si elle a réellement été exécutée",
+], Inches(0.5), Inches(5.35), Inches(12.3), Inches(1.4), size=11.5, color=C_GRAY)
 
 txt(sl, "Une suite qu'on n'a jamais vue échouer n'apporte aucune preuve.",
-    Inches(0.5), Inches(6.5), Inches(12.3), Inches(0.5),
+    Inches(0.5), Inches(6.75), Inches(12.3), Inches(0.5),
     size=15, bold=True, italic=True, color=C_ACCENT2, align=PP_ALIGN.CENTER)
 
 
