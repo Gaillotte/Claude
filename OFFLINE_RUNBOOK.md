@@ -1,6 +1,6 @@
 # Air-Gapped Scan — Operating Procedure
 
-**AI Transit Pipeline | Companion to INSTALL.md §10**
+**AI Transit Pipeline | Companion to INSTALL.md §11**
 
 ---
 
@@ -43,7 +43,7 @@ bash -n ai_transit.sh fetch_repo.sh scan_pipeline.sh && echo "scripts OK"
 
 # 2. The test suite passes — it needs no scanning tools and no network
 ./tests/run_tests.sh
-# Expected: ✔ 69/69 passed
+# Expected: ✔ 70/70 passed
 
 # 3. Record which scanners are present
 for t in betterleaks detect-secrets clamscan yara semgrep trivy \
@@ -333,7 +333,7 @@ SKIP or WARN offline. That is expected.
 | Scan finishes suspiciously fast, few findings | Cache not staged | Run the Phase 5 check |
 | `sha256sum -c` fails on arrival | Corrupt or tampered transfer | Do not extract; request a fresh transfer |
 | `.cache_built_on` missing | Cache built without dating | Treat CVE results as untrusted; rebuild |
-| Everything WARNs as "tool missing" | Scanners not installed on this host | Phase 0 step 3; install per INSTALL.md §5 |
+| Everything WARNs as "tool missing" | Scanners not installed on this host | Phase 0 step 3; install per INSTALL.md §6 |
 | `declare -A: invalid option` | bash < 4.0 | Install bash 5 |
 
 ---
@@ -401,5 +401,5 @@ to accept scans that do not cover it — make it deliberately, not by omission.
 
 ---
 
-*Per-tool technical reference: INSTALL.md §10. Flags and environment variables:
-INSTALL.md §8.*
+*Per-tool technical reference: INSTALL.md §11. Flags and environment variables:
+INSTALL.md §9.*

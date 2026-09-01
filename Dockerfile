@@ -118,7 +118,7 @@ RUN freshclam --quiet 2>&1 || { \
 
 # ── Pipeline scripts ───────────────────────────────────────────────────────────
 WORKDIR /app
-COPY fetch_repo.sh scan_pipeline.sh ai_transit.sh prepare_offline_cache.sh prepare_offline_install.sh \
+COPY fetch_repo.sh scan_pipeline.sh ai_transit.sh prepare_offline_cache.sh prepare_offline_install.sh verify_offline_install.sh \
      generate_excel_report.py selfcheck.py ./
 RUN chmod +x *.sh
 

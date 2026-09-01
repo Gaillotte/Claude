@@ -597,6 +597,24 @@ if ! _skipping; then
                   "suite reports ${PASS_N}; stale references:"$'\n'"${STALE}"
     fi
 
+    # Section cross-references break silently when sections are renumbered, and
+    # INSTALL.md has been renumbered twice. Verify every "§N" and "§N.M" points
+    # at a heading that exists.
+    BADREF=$(python3 - "${ROOT_DIR}/INSTALL.md" <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+heads = {(m.group(1) if not m.group(2) else f"{m.group(1)}.{m.group(2)}")
+         for m in re.finditer(r'^#{2,3} (\d+)(?:\.(\d+))?\.?\s', s, re.M)}
+bad = sorted({r for r in re.findall(r'§(\d+(?:\.\d+)?)', s) if r not in heads})
+print(' '.join('§'+b for b in bad))
+PY
+)
+    if [[ -z "$BADREF" ]]; then
+        ok_test "INSTALL.md cross-references all resolve"
+    else
+        fail_test "INSTALL.md cross-references all resolve" "dangling: ${BADREF}"
+    fi
+
     if command -v shellcheck &>/dev/null; then
         SC_FAIL=""
         for f in ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh; do

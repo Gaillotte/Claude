@@ -720,7 +720,7 @@ text_block(cv, [
 text(cv, "Le pipeline se vérifie lui-même", W / 2 + 20, H - 125, size=18, color=ACCENT2, bold=True)
 card(cv, W / 2 + 10, H - 375, W / 2 - 50, 230)
 qa_lines = [
-    ("Suite de tests", "69 assertions, sans aucun outil de scan requis"),
+    ("Suite de tests", "70 assertions, sans aucun outil de scan requis"),
     ("Corpus de règles", "chaque finding doit viser le bon fichier"),
     ("Garde-fous", "le code sûr ne doit jamais être signalé"),
     ("Intégration continue", "lint · test · pins · docker"),

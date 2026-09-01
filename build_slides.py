@@ -939,7 +939,7 @@ txt(sl, "Le pipeline se vérifie lui-même", Inches(6.9), Inches(1.2), Inches(6)
     size=19, bold=True, color=C_GREEN)
 rounded_box(sl, Inches(6.9), Inches(1.75), Inches(5.9), Inches(3.1), C_BG_CARD)
 qa = [
-    ("Suite de tests",         "69 assertions, aucun outil requis"),
+    ("Suite de tests",         "70 assertions, aucun outil requis"),
     ("Corpus de règles",       "chaque finding doit viser le bon fichier"),
     ("Garde-fous",             "le code sûr ne doit jamais être signalé"),
     ("Intégration continue",   "lint · test · pins · docker"),

@@ -94,7 +94,7 @@ ai_transit.sh          ← orchestrator: flag parsing, phase 1 → fetch, phase 
   scan_pipeline.sh     ← 6-layer scanner; emits PASS or FAIL on stdout last line
 
 generate_excel_report.py  ← report_<ts>.json → .xlsx (Summary / Files / Findings tabs)
-selfcheck.py              ← §11 self-integrity check → PDF/JSON report (7 checks)
+selfcheck.py              ← self-check integrity report → PDF/JSON report (7 checks)
 docker-run.sh             ← Docker wrapper; auto-builds; forwards env vars to container
 Dockerfile                ← multi-stage image (builder: Go/betterleaks; runtime: 16 tools)
 ```
@@ -134,14 +134,18 @@ means very little.
 Two separate bundles, with different lifetimes: `prepare_offline_install.sh` stages
 the **software** (apt packages, Python wheels, binaries, scripts — rebuild only when a
 tool version changes), and `prepare_offline_cache.sh` stages the **data** the scanners
-read (rules, CVE database, signatures — perishable, rebuild weekly). INSTALL.md §11
-covers disconnected installation; §10 covers disconnected scanning.
+read (rules, CVE database, signatures — perishable, rebuild weekly). INSTALL.md §2 is the
+end-to-end walkthrough (blank machine → install → offline-enable each tool →
+disconnect and verify); §12 covers disconnected installation, §11 disconnected
+scanning. `verify_offline_install.sh` is the final acceptance step: it checks each
+tool individually before running the pipeline, because a tool that cannot work
+offline yields an empty result that looks exactly like a clean one.
 
 `--offline` points each tool at staged data (`prepare_offline_cache.sh` builds it),
 passes update-suppressing flags, and records an explicit `OFFLINE:` warning for any
 layer that could not run. pip-audit, safety, npm audit and ScanCode's CVE lookup have
 no offline mode at all; the staged trivy database is the only offline CVE coverage.
-Full per-tool reference: INSTALL.md §10. Step-by-step operating procedure,
+Full per-tool reference: INSTALL.md §11. Step-by-step operating procedure,
 including the acceptance gate: OFFLINE_RUNBOOK.md.
 
 The JSON report carries a `coverage` block naming, per layer, whether it ran, plus
@@ -171,7 +175,7 @@ python3 selfcheck.py [--bundle-dir DIR] [--output report] [--checksums file.json
 ```
 
 - `--format both` produces both `report.pdf` and `report.json`
-- `--only 11.1,11.4` runs only the specified §11 checks
+- `--only 11.1,11.4` runs only the specified self-check checks
 - `--write-manifest` regenerates `.bundle_manifest.sha256` and exits
 
 **Manifest lifecycle:** `.bundle_manifest.sha256` is deliberately **not** tracked in

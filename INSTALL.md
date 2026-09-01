@@ -7,38 +7,39 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Prerequisites](#prerequisites)
-3. [Core System Packages](#core-system-packages)
-4. [Python Environment](#python-environment)
-5. [Tool-by-Tool Installation](#tool-by-tool)
-   - 5.1 [betterleaks — secret detection (L1)](#betterleaks)
-   - 5.2 [detect-secrets — entropy scanning (L1)](#detect-secrets)
-   - 5.3 [ClamAV — antivirus (L1)](#clamav)
-   - 5.4 [YARA — custom IOC rules (L1)](#yara)
-   - 5.5 [Semgrep — OWASP / CWE / CERT (L2)](#semgrep)
-   - 5.6 [trivy — SCA / CVE (L3)](#trivy)
-   - 5.7 [pip-audit — Python CVE (L3)](#pip-audit)
-   - 5.8 [safety — Python advisories (L3)](#safety)
-   - 5.9 [npm + npm audit — Node.js CVE (L3)](#npm-audit)
-   - 5.10 [Bandit — Python SAST (L5)](#bandit)
-   - 5.11 [ShellCheck — shell SAST (L5)](#shellcheck)
-   - 5.12 [cppcheck — C/C++ SAST (L5)](#cppcheck)
-   - 5.13 [hadolint — Dockerfile linter (L5)](#hadolint)
-   - 5.14 [checkov — Terraform / IaC (L5)](#checkov)
-   - 5.15 [ScanCode Toolkit — licence & copyright (L6)](#scancode)
-6. [Pipeline Scripts Installation](#scripts)
-7. [Directory Structure Setup](#directories)
-8. [Environment Variables & Flags](#env-vars)
-9. [Full Installation Verification](#verification)
-10. [Air-Gapped Operation](#offline)
-11. [Installing on a Disconnected Host](#offline-install)
-12. [Sample Scans — Testing the Pipeline](#samples)
-13. [Self-Scan: Verifying the Installation is Safe](#self-scan)
-14. [Security Hardening Recommendations](#hardening)
-15. [Troubleshooting](#troubleshooting)
-16. [Running the Test Suite](#tests)
-17. [Continuous Integration](#ci)
-18. [Docker Image — Build Arguments & Integrity](#docker-build)
+2. [**End-to-End Walkthrough — Blank Machine to Verified Offline Install**](#walkthrough)
+3. [Prerequisites](#prerequisites)
+4. [Core System Packages](#core-system-packages)
+5. [Python Environment](#python-environment)
+6. [Tool-by-Tool Installation](#tool-by-tool)
+   - 6.1 [betterleaks — secret detection (L1)](#betterleaks)
+   - 6.2 [detect-secrets — entropy scanning (L1)](#detect-secrets)
+   - 6.3 [ClamAV — antivirus (L1)](#clamav)
+   - 6.4 [YARA — custom IOC rules (L1)](#yara)
+   - 6.5 [Semgrep — OWASP / CWE / CERT (L2)](#semgrep)
+   - 6.6 [trivy — SCA / CVE (L3)](#trivy)
+   - 6.7 [pip-audit — Python CVE (L3)](#pip-audit)
+   - 6.8 [safety — Python advisories (L3)](#safety)
+   - 6.9 [npm + npm audit — Node.js CVE (L3)](#npm-audit)
+   - 6.10 [Bandit — Python SAST (L5)](#bandit)
+   - 6.11 [ShellCheck — shell SAST (L5)](#shellcheck)
+   - 6.12 [cppcheck — C/C++ SAST (L5)](#cppcheck)
+   - 6.13 [hadolint — Dockerfile linter (L5)](#hadolint)
+   - 6.14 [checkov — Terraform / IaC (L5)](#checkov)
+   - 6.15 [ScanCode Toolkit — licence & copyright (L6)](#scancode)
+7. [Pipeline Scripts Installation](#scripts)
+8. [Directory Structure Setup](#directories)
+9. [Environment Variables & Flags](#env-vars)
+10. [Full Installation Verification](#verification)
+11. [Air-Gapped Operation](#offline)
+12. [Installing on a Disconnected Host](#offline-install)
+13. [Sample Scans — Testing the Pipeline](#samples)
+14. [Self-Scan: Verifying the Installation is Safe](#self-scan)
+15. [Security Hardening Recommendations](#hardening)
+16. [Troubleshooting](#troubleshooting)
+17. [Running the Test Suite](#tests)
+18. [Continuous Integration](#ci)
+19. [Docker Image — Build Arguments & Integrity](#docker-build)
 
 ---
 
@@ -59,7 +60,253 @@ The AI Transit Pipeline is a 6-layer security gateway that scans AI-generated co
 
 ---
 
-## 2. Prerequisites {#prerequisites}
+## 2. End-to-End Walkthrough — Blank Machine to Verified Offline Install {#walkthrough}
+
+This is the spine of the manual. It takes one machine from bare OS to a fully
+offline-capable installation that has been *proved* to work disconnected.
+
+Later sections are the detail behind each step; follow this one and refer to them
+as directed.
+
+### The shape of it
+
+```
+   ┌─ Stage A ──────────┐   ┌─ Stage B ──────────┐   ┌─ Stage C ─────────┐
+   │  CONNECTED         │   │  CONNECTED         │   │  DISCONNECTED     │
+   │                    │   │                    │   │                   │
+   │  Install the 16    │──▶│  Stage the data    │──▶│  Pull the cable   │
+   │  tools + pipeline  │   │  each tool reads   │   │  Verify per tool  │
+   │                    │   │  offline           │   │  Verify pipeline  │
+   └────────────────────┘   └────────────────────┘   └───────────────────┘
+```
+
+The machine is connected for A and B, then disconnected for C. **Stage C is not
+optional.** Until it has run, "offline-ready" is an assumption, and the failure
+mode it protects against — a scan that reports PASS having examined nothing — is
+silent.
+
+> Building on one machine and deploying to another? Do Stages A and B here, then
+> §12 covers packaging and transferring the result. Stage C is run on the target.
+
+---
+
+### Stage A — Install everything (machine connected)
+
+| Step | Action | Section |
+|------|--------|---------|
+| A1 | Confirm the OS, hardware and bash version | §3 |
+| A2 | Install the system packages | §4 |
+| A3 | Create the Python virtual environment | §5 |
+| A4 | Install the 16 tools, one at a time | §6 |
+| A5 | Install the pipeline scripts | §7 |
+| A6 | Create the working directories | §8 |
+| A7 | Run the full verification | §10 |
+
+Condensed, for a fresh Ubuntu 22.04 / 24.04 host:
+
+```bash
+# A2 — system packages
+sudo apt-get update && sudo apt-get install -y \
+    bash git curl ca-certificates wget gpg rsync \
+    jq zip unzip file coreutils \
+    python3 python3-pip python3-venv build-essential golang-go \
+    nodejs npm shellcheck cppcheck clamav clamav-daemon clamav-freshclam yara
+
+# A3 — virtual environment
+python3 -m venv /opt/ai-transit/venv
+source /opt/ai-transit/venv/bin/activate
+
+# A4 — Python tools
+pip install --upgrade pip
+pip install openpyxl reportlab python-docx detect-secrets bandit \
+            pip-audit safety semgrep checkov scancode-toolkit
+
+# A4 — Go tool
+go install github.com/betterleaks/betterleaks@latest
+sudo cp ~/go/bin/betterleaks /usr/local/bin/
+
+# A4 — standalone binaries (pin versions; see §19.1 for digests)
+curl -sfL "https://github.com/aquasecurity/trivy/releases/download/v0.58.2/trivy_0.58.2_Linux-64bit.tar.gz" \
+    | sudo tar -xzf - -C /usr/local/bin trivy
+sudo curl -sSL "https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64" \
+    -o /usr/local/bin/hadolint && sudo chmod +x /usr/local/bin/hadolint
+
+# A4 — ClamAV signatures (needed now; staged again in Stage B)
+sudo systemctl stop clamav-freshclam 2>/dev/null || true
+sudo freshclam
+sudo systemctl start clamav-freshclam 2>/dev/null || true
+
+# A5/A6 — pipeline and directories
+sudo mkdir -p /opt/ai-transit/{fetch,quarantine,approved,reports,logs,yara-rules}
+sudo chmod 700 /opt/ai-transit/quarantine
+```
+
+**A7 — confirm every tool is actually present before going further:**
+
+```bash
+for t in betterleaks detect-secrets clamscan yara semgrep trivy \
+         bandit shellcheck cppcheck hadolint checkov scancode; do
+    command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
+done
+./tests/run_tests.sh          # Expected: ✔ 70/70 passed
+```
+
+A tool missing here will still be missing offline, where it is much harder to
+notice. Resolve every `MISSING` before continuing.
+
+---
+
+### Stage B — Make each tool work offline (machine still connected)
+
+Eight of the tools already work offline; five need data staged first; four
+cannot work offline at all. This is the table that matters:
+
+| Tool | Layer | Offline requirement | How it is satisfied |
+|------|-------|--------------------|---------------------|
+| betterleaks | L1 | None — rules compiled in | — |
+| detect-secrets | L1 | None — rules embedded | — |
+| **ClamAV** | L1 | **Signature database** | `freshclam`, then signatures copied to the cache |
+| YARA | L1 | Your own `.yar` files | Copy them to `$WORK_DIR/yara-rules/` |
+| **Semgrep** | L2 | **Ruleset YAML per ruleset** | `semgrep --config p/<name> --dump-config` |
+| **trivy** | L3 | **Vulnerability database** | `trivy fs --download-db-only --cache-dir` |
+| pip-audit | L3 | *Impossible* — remote service | Covered by trivy instead |
+| safety | L3 | *Impossible* — remote service | Covered by trivy instead |
+| npm audit | L3 | *Impossible* — remote registry | Covered by trivy instead |
+| grep rules | L4 | None — built in | — |
+| Bandit | L5 | None — local AST analysis | — |
+| ShellCheck | L5 | None | — |
+| cppcheck | L5 | None | — |
+| hadolint | L5 | None | — |
+| **checkov** | L5 | None, but must not fetch schemas | `--skip-download`, applied automatically |
+| **ScanCode** | L6 | None for licence/copyright | `--vulnerability` dropped automatically |
+
+One command stages everything in the middle column:
+
+```bash
+./prepare_offline_cache.sh /opt/ai-transit/offline-cache
+```
+
+**Read its summary.** It reports what it staged and what it could not, and a
+skipped item here becomes a silent gap later.
+
+**Verify the staged data is plausible before disconnecting:**
+
+```bash
+cd /opt/ai-transit/offline-cache
+ls -1 semgrep-rules/     # expect 5 .yaml files
+du -sh trivy-db/         # expect several hundred MB — a few KB means it failed
+ls -1 clamav/            # expect *.cvd or *.cld
+date -u +%Y-%m-%d > .cache_built_on
+```
+
+**Make offline the default**, so a later operator who forgets the flag still gets
+offline behaviour instead of a scan that hangs on network timeouts:
+
+```bash
+cat >> ~/.bashrc <<'EOF'
+export WORK_DIR=/opt/ai-transit
+export OFFLINE=true
+export OFFLINE_CACHE=/opt/ai-transit/offline-cache
+EOF
+source ~/.bashrc
+```
+
+---
+
+### Stage C — Disconnect and verify
+
+**Disconnect the machine.** Physically unplug it, or:
+
+```bash
+sudo ip link set "$(ip route | awk '/default/{print $5; exit}')" down
+```
+
+Then run the verification, which checks each tool individually before running the
+pipeline:
+
+```bash
+./verify_offline_install.sh
+```
+
+Per-tool checking matters because the pipeline degrades quietly: a tool that
+cannot work offline produces an empty result, and an empty result is
+indistinguishable from a clean one. Checking tools one at a time turns that
+silence into a named failure.
+
+Expected output on a correctly prepared machine:
+
+```
+── Network state
+  ✔ Network is unreachable — this is a genuine offline test.
+
+── Group A — no staged data required
+  ✔ betterleaks works offline
+  ✔ detect-secrets works offline
+  ✔ bandit works offline
+  ...
+
+── Group B — requires staged data
+  ✔ semgrep runs from staged rules (5 ruleset file(s))
+  ✔ semgrep cannot reach its registry (expected offline)
+  ✔ trivy scans from the staged database
+  ✔ clamscan runs against signatures in /opt/ai-transit/offline-cache/clamav
+  ...
+
+── End-to-end — pipeline scan with coverage check
+  ✔ offline pipeline run completed
+      [OK ] L2_owasp_cwe               ran
+      [OK ] L3_dependency_cve          ran
+      ...
+  ✔ all required layers ran offline
+
+  ✔  13/13 checks passed
+```
+
+Exit status `0` means the installation is offline-ready. Any failure names the
+tool and points at the staging step that fixes it.
+
+**Cannot disconnect the machine?** `--simulate` forces outbound HTTP to a dead
+port, which catches the common case:
+
+```bash
+./verify_offline_install.sh --simulate
+```
+
+It is weaker than a real disconnection — it does not defeat cached DNS or a local
+proxy — so treat a pass as provisional until you have tested genuinely
+disconnected.
+
+### C1 — Scan something real
+
+```bash
+./ai_transit.sh --offline /path/to/some/repo
+
+REPORT=$(ls -t "$WORK_DIR"/reports/report_*.json | head -1)
+python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+print('verdict :', d['verdict'])
+print('gaps    :', ', '.join(d['coverage_gaps']) or 'none')
+" "$REPORT"
+```
+
+`L1_ioc_yara` is a legitimate gap if you have written no custom IOC rules.
+Everything else should be absent. §11.8 explains the coverage block; the
+step-by-step operating procedure is **OFFLINE_RUNBOOK.md**.
+
+### C2 — Keep it working
+
+The install is static, but the staged data is not. A stale CVE database reports
+clean for everything published since it was built — the same outcome as not
+scanning, and harder to notice.
+
+Reconnect, re-run `prepare_offline_cache.sh`, disconnect, re-run
+`verify_offline_install.sh`. **Weekly** for the trivy database and ClamAV
+signatures; monthly is sufficient for Semgrep rulesets. See §11.9.
+
+---
+
+## 3. Prerequisites {#prerequisites}
 
 **Supported platforms:** Ubuntu 22.04 LTS / Debian 12 (production), Ubuntu 24.04 LTS (recommended).
 Windows users: install via **WSL2** (see Section 4 of base guide).
@@ -68,7 +315,7 @@ Windows users: install via **WSL2** (see Section 4 of base guide).
 
 ---
 
-## 3. Core System Packages {#core-system-packages}
+## 4. Core System Packages {#core-system-packages}
 
 Install the baseline packages first. These are required for the pipeline to run at all.
 
@@ -95,7 +342,7 @@ jq     --version              # expect: jq-1.6+
 
 ---
 
-## 4. Python Virtual Environment {#python-environment}
+## 5. Python Virtual Environment {#python-environment}
 
 Using a dedicated venv avoids conflicts with system packages and makes the installation self-contained.
 
@@ -116,13 +363,13 @@ python3 --version # Python 3.10+
 
 ---
 
-## 5. Tool-by-Tool Installation {#tool-by-tool}
+## 6. Tool-by-Tool Installation {#tool-by-tool}
 
 Each section covers: finding the latest version, installing, verifying, offline setup, and a functional test.
 
 ---
 
-### 5.1 betterleaks — Secret Detection (Layer 1) {#betterleaks}
+### 6.1 betterleaks — Secret Detection (Layer 1) {#betterleaks}
 
 **What it does:** scans all file types for secrets, API keys, credentials and tokens. Successor to gitleaks with a more expressive allowlist system.
 
@@ -179,7 +426,7 @@ rm -rf /tmp/bl-test
 
 ---
 
-### 5.2 detect-secrets — Entropy Scanning (Layer 1) {#detect-secrets}
+### 6.2 detect-secrets — Entropy Scanning (Layer 1) {#detect-secrets}
 
 **What it does:** complements betterleaks with Shannon entropy analysis and regex-based patterns to find high-entropy strings that look like secrets.
 
@@ -221,7 +468,7 @@ rm -rf /tmp/ds-test
 
 ---
 
-### 5.3 ClamAV — Antivirus (Layer 1) {#clamav}
+### 6.3 ClamAV — Antivirus (Layer 1) {#clamav}
 
 **What it does:** scans files against a database of known malware signatures. Requires regular DB updates to stay effective.
 
@@ -287,7 +534,7 @@ rm /tmp/eicar.txt
 
 ---
 
-### 5.4 YARA — Custom IOC Rules (Layer 1) {#yara}
+### 6.4 YARA — Custom IOC Rules (Layer 1) {#yara}
 
 **What it does:** loads organisation-specific YARA rules from `yara-rules/` and matches them against every file. Fully customisable pattern engine.
 
@@ -345,7 +592,7 @@ rm /tmp/test.php /tmp/clean.php
 
 ---
 
-### 5.5 Semgrep — OWASP / CWE / CERT Static Analysis (Layer 2) {#semgrep}
+### 6.5 Semgrep — OWASP / CWE / CERT Static Analysis (Layer 2) {#semgrep}
 
 **What it does:** runs four security rulesets (OWASP Top 10, CWE Top 25, security-audit, secrets) across all supported languages using pattern matching on the AST.
 
@@ -409,7 +656,7 @@ rm /tmp/test_sqli.py /tmp/test_clean.py
 
 ---
 
-### 5.6 trivy — SCA / CVE (Layer 3) {#trivy}
+### 6.6 trivy — SCA / CVE (Layer 3) {#trivy}
 
 **What it does:** scans dependency manifests (requirements.txt, package-lock.json, go.sum, pom.xml, Cargo.lock …) against NVD, OSV and GitHub Advisory databases.
 
@@ -495,7 +742,7 @@ rm -rf /tmp/trivy-test
 
 ---
 
-### 5.7 pip-audit — Python CVE (Layer 3) {#pip-audit}
+### 6.7 pip-audit — Python CVE (Layer 3) {#pip-audit}
 
 **What it does:** audits Python requirements files against the Python Packaging Advisory Database (PyPA) and OSV.
 
@@ -541,7 +788,7 @@ rm /tmp/req_vuln.txt /tmp/req_clean.txt
 
 ---
 
-### 5.8 safety — Python Advisories (Layer 3) {#safety}
+### 6.8 safety — Python Advisories (Layer 3) {#safety}
 
 **What it does:** checks Python dependencies against the Safety DB (PyUp.io), a curated advisory database with additional entries not always in OSV.
 
@@ -585,7 +832,7 @@ rm /tmp/req_vuln.txt /tmp/req_clean.txt
 
 ---
 
-### 5.9 npm + npm audit — Node.js CVE (Layer 3) {#npm-audit}
+### 6.9 npm + npm audit — Node.js CVE (Layer 3) {#npm-audit}
 
 **What it does:** built into npm — audits `package-lock.json` against the npm security advisory registry for known CVEs in Node.js dependencies.
 
@@ -636,7 +883,7 @@ cd / && rm -rf /tmp/npm-test
 
 ---
 
-### 5.10 Bandit — Python SAST (Layer 5) {#bandit}
+### 6.10 Bandit — Python SAST (Layer 5) {#bandit}
 
 **What it does:** Python-specific static analyser with 100+ plugins detecting SQL injection, shell injection, hardcoded passwords, weak crypto, insecure deserialization, and more.
 
@@ -696,7 +943,7 @@ rm /tmp/test_bandit.py /tmp/test_bandit_clean.py
 
 ---
 
-### 5.11 ShellCheck — Shell Script SAST (Layer 5) {#shellcheck}
+### 6.11 ShellCheck — Shell Script SAST (Layer 5) {#shellcheck}
 
 **What it does:** static analyser for bash/sh/dash/ksh. Detects quoting errors, command injection risks, undefined variables, deprecated syntax, and unsafe patterns.
 
@@ -761,7 +1008,7 @@ rm /tmp/test.sh /tmp/test_clean.sh
 
 ---
 
-### 5.12 cppcheck — C/C++ SAST (Layer 5) {#cppcheck}
+### 6.12 cppcheck — C/C++ SAST (Layer 5) {#cppcheck}
 
 **What it does:** static analyser for C and C++ detecting buffer overflows, memory leaks, null-pointer dereferences, use-after-free, and undefined behaviour without compiling.
 
@@ -820,7 +1067,7 @@ rm /tmp/test.cpp /tmp/test_clean.cpp
 
 ---
 
-### 5.13 hadolint — Dockerfile Linter (Layer 5) {#hadolint}
+### 6.13 hadolint — Dockerfile Linter (Layer 5) {#hadolint}
 
 **What it does:** enforces Dockerfile best practices and detects security misconfigurations: running as root, `:latest` tags, baked-in secrets, ADD vs COPY, shell injection.
 
@@ -878,7 +1125,7 @@ rm /tmp/Dockerfile_bad /tmp/Dockerfile_good
 
 ---
 
-### 5.14 checkov — Terraform / IaC SAST (Layer 5) {#checkov}
+### 6.14 checkov — Terraform / IaC SAST (Layer 5) {#checkov}
 
 **What it does:** static analysis for Terraform, CloudFormation, Kubernetes YAML, Ansible and ARM templates. Maps findings to CIS Benchmarks, NIST, SOC2, and OWASP. 1000+ built-in checks.
 
@@ -942,7 +1189,7 @@ rm -rf /tmp/tf-test
 
 ---
 
-### 5.15 ScanCode Toolkit — Licence & Copyright (Layer 6) {#scancode}
+### 6.15 ScanCode Toolkit — Licence & Copyright (Layer 6) {#scancode}
 
 **What it does:** full-text licence detection using 30 000+ licence texts (SPDX), copyright notice extraction, package manifest detection, and CVE lookup in detected packages. Produces JSON/SPDX/CycloneDX reports.
 
@@ -1009,26 +1256,26 @@ rm -rf /tmp/sc-test /tmp/sc-report.json
 
 ---
 
-## 6. Pipeline Scripts Installation {#scripts}
+## 7. Pipeline Scripts Installation {#scripts}
 
-### 6.1 Clone from GitHub
+### 7.1 Clone from GitHub
 ```bash
 git clone https://github.com/gaillotte/claude.git
 cd claude
 git checkout claude/vigilant-carson-f8twy0
 ```
 
-### 6.2 Install Python dependencies for report generation
+### 7.2 Install Python dependencies for report generation
 ```bash
 pip install openpyxl reportlab
 ```
 
-### 6.3 Make scripts executable
+### 7.3 Make scripts executable
 ```bash
 chmod +x ai_transit.sh fetch_repo.sh scan_pipeline.sh
 ```
 
-### 6.4 Verify scripts
+### 7.4 Verify scripts
 ```bash
 bash -n ai_transit.sh    && echo "ai_transit.sh: syntax OK"
 bash -n fetch_repo.sh    && echo "fetch_repo.sh: syntax OK"
@@ -1039,28 +1286,28 @@ python3 -c "import ast; ast.parse(open('selfcheck.py').read())" \
     && echo "selfcheck.py: syntax OK"
 ```
 
-### 6.5 Run the test suite
+### 7.5 Run the test suite
 
 This is the fastest way to confirm the installation is sound. It needs no
-scanning tools — see §16.
+scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 69/69 passed
+# Expected: ✔ 70/70 passed
 ```
 
-### 6.6 Generate the integrity manifest
+### 7.6 Generate the integrity manifest
 
 ```bash
 python3 selfcheck.py --write-manifest
 ```
 
-Do this once the bundle is in its final location. See §13.2 for why the manifest
+Do this once the bundle is in its final location. See §14.2 for why the manifest
 is generated at install time rather than shipped in version control.
 
 ---
 
-## 7. Directory Structure Setup {#directories}
+## 8. Directory Structure Setup {#directories}
 
 ```bash
 sudo mkdir -p /opt/ai-transit/{fetch,quarantine,approved,reports,logs,yara-rules}
@@ -1069,13 +1316,13 @@ sudo chown -R $USER:$USER /opt/ai-transit
 mkdir -p Good
 ```
 
-Copy your YARA rules to `/opt/ai-transit/yara-rules/` (see §5.4 for a minimal test rule).
+Copy your YARA rules to `/opt/ai-transit/yara-rules/` (see §6.4 for a minimal test rule).
 
 ---
 
-## 8. Environment Variables & Flags {#env-vars}
+## 9. Environment Variables & Flags {#env-vars}
 
-### 8.1 Command-line flags
+### 9.1 Command-line flags
 
 ```
 ./ai_transit.sh [FLAGS] <repo_url_or_path> [branch]
@@ -1098,7 +1345,7 @@ Copy your YARA rules to `/opt/ai-transit/yara-rules/` (see §5.4 for a minimal t
 `--no-zip --no-excel` is the usual combination for CI, where the JSON and HTML
 reports are consumed by another job and the archive would only be discarded.
 
-### 8.2 Environment variables
+### 9.2 Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -1126,7 +1373,7 @@ Or pass inline:
 WORK_DIR=/data/ai-transit ./ai_transit.sh https://github.com/org/repo
 ```
 
-### 8.3 Per-repo exclusions
+### 9.3 Per-repo exclusions
 
 Place either of these files in the **root of the scanned repository** (not the pipeline directory):
 
@@ -1153,7 +1400,7 @@ Place either of these files in the **root of the scanned repository** (not the p
 
 ---
 
-## 9. Full Installation Verification {#verification}
+## 10. Full Installation Verification {#verification}
 
 Save this as `verify_install.sh` and run it after completing all sections above:
 
@@ -1249,12 +1496,27 @@ chmod +x verify_install.sh && ./verify_install.sh
 
 ---
 
-## 10. Air-Gapped Operation {#offline}
+### 10.1 Final step — verify the install works offline
+
+Tool presence is not the same as tool *readiness*. Once the offline cache is
+staged (§11.4), disconnect the machine and run:
+
+```bash
+./verify_offline_install.sh
+```
+
+It checks each tool individually before running the pipeline, because the
+pipeline degrades quietly: a tool that cannot work offline yields an empty
+result, which looks exactly like a clean one. Full walkthrough: §2, Stage C.
+
+---
+
+## 11. Air-Gapped Operation {#offline}
 
 The pipeline supports fully disconnected operation through `--offline`. This
 section is the reference for what each tool needs in that mode.
 
-### 10.1 Why `--offline` is required, and not merely advisable
+### 11.1 Why `--offline` is required, and not merely advisable
 
 Several scanners reach the network at **scan** time, not just at install time.
 Without `--offline` on an isolated host those calls are still attempted. They do
@@ -1282,7 +1544,7 @@ export OFFLINE_CACHE=/opt/ai-transit/offline-cache
 Remote URLs are refused in this mode — copy the repository to the host and pass
 its path.
 
-### 10.2 Per-tool reference
+### 11.2 Per-tool reference
 
 **Group A — works offline with no preparation.** Rules are compiled into the
 tool; nothing to stage, no flags required.
@@ -1324,7 +1586,7 @@ emits an `OFFLINE:` warning so the gap is on the record.
 The single practical consequence: **trivy is the only dependency-CVE coverage
 you have offline.** If its database is not staged, Layer 3 contributes nothing.
 
-### 10.3 Environment variables
+### 11.3 Environment variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -1338,7 +1600,7 @@ you have offline.** If its database is not staged, Layer 3 contributes nothing.
 `CHECKPOINT_DISABLE=1` and `PIP_NO_INDEX=1`, so no tool blocks on a telemetry or
 version-check call.
 
-### 10.4 Building the cache — on a connected host
+### 11.4 Building the cache — on a connected host
 
 ```bash
 ./prepare_offline_cache.sh /path/to/offline-cache
@@ -1350,7 +1612,7 @@ could and could not stage.
 
 Expect roughly **300–800 MB**, dominated by the trivy database.
 
-### 10.5 Transferring and verifying
+### 11.5 Transferring and verifying
 
 ```bash
 # connected host
@@ -1363,7 +1625,7 @@ tar -xzf offline-cache.tar.gz -C /opt/ai-transit/
 cd /opt/ai-transit/offline-cache && sha256sum --check .cache_manifest.sha256
 ```
 
-### 10.6 Running
+### 11.6 Running
 
 ```bash
 export OFFLINE_CACHE=/opt/ai-transit/offline-cache
@@ -1374,7 +1636,7 @@ OFFLINE=true OFFLINE_CACHE=/opt/ai-transit/offline-cache \
   ./docker-run.sh --offline /path/to/repo
 ```
 
-### 10.7 Confirming a clean offline run
+### 11.7 Confirming a clean offline run
 
 The report should contain **no** `OFFLINE:` warning about Layer 2 or trivy:
 
@@ -1390,7 +1652,7 @@ grep -o 'OFFLINE:[^|]*' "$WORK_DIR"/reports/report_*.json
 | `ClamAV signature database is empty` | Malware scan found nothing because it had no signatures | Stage `*.cvd` files |
 | `Python/JavaScript dependency CVE scan unavailable` | Expected — see Group C | None; trivy covers this |
 
-### 10.8 Coverage — proving the scan actually ran
+### 11.8 Coverage — proving the scan actually ran
 
 Every JSON report carries a `coverage` block stating, per layer, whether it ran.
 This exists because a verdict alone cannot distinguish "clean" from "nothing was
@@ -1432,7 +1694,7 @@ layers a verdict most depends on.
 
 ---
 
-### 10.9 Keeping the cache current
+### 11.9 Keeping the cache current
 
 Vulnerability data ages. A stale trivy database reports a clean result for CVEs
 published after it was built, which is the same failure mode as not scanning at
@@ -1445,7 +1707,7 @@ air-gapped side can tell how old its data is.
 
 ---
 
-## 11. Installing on a Disconnected Host {#offline-install}
+## 12. Installing on a Disconnected Host {#offline-install}
 
 Section 10 covers running scans without a network. This section covers the step
 before it: getting the pipeline and its tools onto a machine that has never had
@@ -1457,14 +1719,14 @@ lifetimes:
 | Bundle | Contains | Rebuild when |
 |--------|----------|--------------|
 | **Install bundle** (this section) | The software: tools, binaries, pipeline scripts | A tool version changes |
-| **Scan cache** (§10.4) | The data scanners read: rules, CVE database, signatures | **Weekly** — it is perishable |
+| **Scan cache** (§11.4) | The data scanners read: rules, CVE database, signatures | **Weekly** — it is perishable |
 
 Every command in sections 3–6 assumes a network. `apt-get install` reaches
 archive.ubuntu.com, `pip install` reaches pypi.org, `go install` reaches the Go
 module proxy, and `docker build` reaches all of them plus Docker Hub. None of
 that works on an isolated host.
 
-### 11.1 Choose a path
+### 12.1 Choose a path
 
 | Path | Effort | Best when |
 |------|--------|-----------|
@@ -1481,7 +1743,7 @@ all sixteen tools at known versions, so nothing can be partially installed.
 
 ---
 
-### 11.2 Path A — Docker image transfer
+### 12.2 Path A — Docker image transfer
 
 **On the connected host:**
 
@@ -1516,7 +1778,7 @@ bundle to your install directory.
 
 ---
 
-### 11.3 Path B — Native package staging
+### 12.3 Path B — Native package staging
 
 **On the connected host** (same OS and architecture as the target):
 
@@ -1534,7 +1796,7 @@ It stages four groups:
 | `pipeline/` | Scripts, tests, documentation | Copied from the repository |
 
 `bin/` is populated from the tools already installed on the build host, so
-install them there first (§5) before running the script.
+install them there first (§6) before running the script.
 
 **Transfer and verify:**
 
@@ -1587,7 +1849,7 @@ network access, hiding the fact that the bundle was incomplete.
 
 ---
 
-### 11.4 Verify the installation
+### 12.4 Verify the installation
 
 ```bash
 cd /opt/ai-transit
@@ -1600,17 +1862,17 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 69/69 passed
+# Expected: ✔ 70/70 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
 ```
 
 Anything reported `MISSING` will WARN on every scan and never contribute
-findings. Resolve it now rather than discovering it in a report later — §10.8
+findings. Resolve it now rather than discovering it in a report later — §11.8
 explains how the coverage block makes such gaps visible.
 
-### 11.5 Then stage the scan data
+### 12.5 Then stage the scan data
 
 Installing the tools is only half the job. The scanners still need their rules
 and databases, which is a **separate and perishable** bundle:
@@ -1620,13 +1882,13 @@ and databases, which is a **separate and perishable** bundle:
 ./prepare_offline_cache.sh /tmp/offline-cache
 ```
 
-Follow §10.4–10.6, or the step-by-step procedure in **OFFLINE_RUNBOOK.md**.
+Follow §11.4–10.6, or the step-by-step procedure in **OFFLINE_RUNBOOK.md**.
 
 ---
 
-## 12. Sample Scans — Testing the Pipeline {#samples}
+## 13. Sample Scans — Testing the Pipeline {#samples}
 
-### 12.1 Quick smoke test (local directory)
+### 13.1 Quick smoke test (local directory)
 
 Create a small test repository to validate the pipeline end-to-end:
 
@@ -1682,7 +1944,7 @@ bash create_test_repo.sh
 
 ---
 
-### 12.2 FAIL test — embedded secret
+### 13.2 FAIL test — embedded secret
 
 ```bash
 mkdir -p /tmp/fail-secret
@@ -1702,7 +1964,7 @@ rm -rf /tmp/fail-secret
 
 ---
 
-### 12.3 FAIL test — SQL injection (OWASP A03)
+### 13.3 FAIL test — SQL injection (OWASP A03)
 
 ```bash
 mkdir -p /tmp/fail-sqli
@@ -1725,7 +1987,7 @@ rm -rf /tmp/fail-sqli
 
 ---
 
-### 12.4 FAIL test — vulnerable dependency (CVE)
+### 13.4 FAIL test — vulnerable dependency (CVE)
 
 ```bash
 mkdir -p /tmp/fail-cve
@@ -1743,7 +2005,7 @@ rm -rf /tmp/fail-cve
 
 ---
 
-### 12.5 WARN test — risky licence (GPL)
+### 13.5 WARN test — risky licence (GPL)
 
 ```bash
 mkdir -p /tmp/warn-licence
@@ -1766,7 +2028,7 @@ rm -rf /tmp/warn-licence
 
 ---
 
-### 12.6 FAIL test — Dockerfile misconfigurations
+### 13.6 FAIL test — Dockerfile misconfigurations
 
 ```bash
 mkdir -p /tmp/fail-docker
@@ -1786,7 +2048,7 @@ rm -rf /tmp/fail-docker
 
 ---
 
-### 12.7 Scan a real public GitHub repository
+### 13.7 Scan a real public GitHub repository
 
 ```bash
 # Scan a small, well-known public repo (adjust URL as needed)
@@ -1796,7 +2058,7 @@ rm -rf /tmp/fail-docker
 
 ---
 
-### 12.8 Run the self-check to verify the pipeline itself
+### 13.8 Run the self-check to verify the pipeline itself
 
 ```bash
 # PDF report (default)
@@ -1812,18 +2074,18 @@ python3 selfcheck.py --bundle-dir . --format both --output selfcheck_report
 python3 selfcheck.py --bundle-dir . --only 11.1,11.4,11.6
 
 # Expected output:
-#   §11.1 Meta-scan        → PASS or WARN
-#   §11.2 Binary checks    → SKIP (unless --checksums provided)
-#   §11.3 GPG/cosign       → PASS or WARN
-#   §11.4 Python CVE       → PASS
-#   §11.5 Host OS CVE      → PASS or WARN
-#   §11.6 Bundle integrity → PASS
-#   §11.7 AIDE             → SKIP (unless AIDE installed)
+#   11.1 Meta-scan        → PASS or WARN
+#   11.2 Binary checks    → SKIP (unless --checksums provided)
+#   11.3 GPG/cosign       → PASS or WARN
+#   11.4 Python CVE       → PASS
+#   11.5 Host OS CVE      → PASS or WARN
+#   11.6 Bundle integrity → PASS
+#   11.7 AIDE             → SKIP (unless AIDE installed)
 ```
 
 ---
 
-### 12.9 CI mode — quiet verdict with severity filter
+### 13.9 CI mode — quiet verdict with severity filter
 
 ```bash
 # Only block on CRITICAL CVEs/findings; warnings and lower are ignored
@@ -1833,7 +2095,7 @@ echo "Exit code: $?"   # 0 = PASS, 1 = FAIL
 
 ---
 
-### 12.10 Diff mode — scan only changed files (PR workflow)
+### 13.10 Diff mode — scan only changed files (PR workflow)
 
 ```bash
 # Scan only files changed since the merge base commit
@@ -1843,7 +2105,7 @@ SINCE=$(git merge-base HEAD origin/main)
 
 ---
 
-### 12.11 Private repository scan
+### 13.11 Private repository scan
 
 ```bash
 # Generate a fine-grained PAT with "Contents: read" on github.com
@@ -1853,7 +2115,7 @@ export GITHUB_TOKEN="ghp_your_token_here"
 
 ---
 
-### 12.12 Report-only mode (audit without blocking)
+### 13.12 Report-only mode (audit without blocking)
 
 ```bash
 # Scan and generate reports but always exit 0 — useful for first-pass auditing
@@ -1863,7 +2125,7 @@ export GITHUB_TOKEN="ghp_your_token_here"
 
 ---
 
-### 12.13 Air-gapped scan
+### 13.13 Air-gapped scan
 
 ```bash
 # On a connected host: build the cache and transfer it
@@ -1884,7 +2146,7 @@ grep -o 'OFFLINE:[^|]*' "$WORK_DIR"/reports/report_*.json
 
 ---
 
-## 13. Self-Scan: Verifying the Installation is Safe {#self-scan}
+## 14. Self-Scan: Verifying the Installation is Safe {#self-scan}
 
 Before deploying in a production environment, run the full self-check:
 
@@ -1892,9 +2154,9 @@ Before deploying in a production environment, run the full self-check:
 python3 selfcheck.py --bundle-dir . --output selfcheck_report.pdf
 ```
 
-This executes all §11 checks (meta-scan, binary checksums, GPG/cosign, Python CVE scan, host OS CVE, bundle integrity, AIDE) and produces a colour-coded PDF report. See `selfcheck.py --help` for all options.
+This executes all self-check checks (meta-scan, binary checksums, GPG/cosign, Python CVE scan, host OS CVE, bundle integrity, AIDE) and produces a colour-coded PDF report. See `selfcheck.py --help` for all options.
 
-### 13.1 Output formats and selective checks
+### 14.1 Output formats and selective checks
 
 ```bash
 python3 selfcheck.py --format json --output selfcheck_report   # machine-readable
@@ -1905,9 +2167,9 @@ python3 selfcheck.py --only 11.1,11.4,11.6                     # subset, faster
 The JSON report carries a top-level `verdict` field (`PASS` / `WARN` / `FAIL`),
 which is what a CI job should key on.
 
-### 13.2 The bundle manifest — generate it at install time
+### 14.2 The bundle manifest — generate it at install time
 
-Check §11.6 (bundle file integrity) compares every bundle file against
+Self-check 11.6 (bundle file integrity) compares every bundle file against
 `.bundle_manifest.sha256`. That manifest is **deliberately not tracked in version
 control**: if it were, it would report "File tampering detected" after every
 ordinary edit, and a check that cries wolf is a check people learn to ignore.
@@ -1921,7 +2183,7 @@ python3 selfcheck.py --write-manifest
 ```
 
 Regenerate it after any *intentional* change to the bundle. From then on, any
-§11.6 failure means a file changed without your knowledge.
+self-check 11.6 failure means a file changed without your knowledge.
 
 ```bash
 # Verify (should PASS on an untouched installation)
@@ -1934,7 +2196,7 @@ bundle directory (selfcheck.py does this automatically).
 
 ---
 
-## 14. Security Hardening Recommendations {#hardening}
+## 15. Security Hardening Recommendations {#hardening}
 
 ### Dedicated service account
 ```bash
@@ -1982,13 +2244,13 @@ pip install --upgrade betterleaks detect-secrets semgrep bandit \
 
 ---
 
-## 15. Troubleshooting {#troubleshooting}
+## 16. Troubleshooting {#troubleshooting}
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | `betterleaks: command not found` | Binary not in PATH | `sudo cp ~/go/bin/betterleaks /usr/local/bin/` |
 | `freshclam: connect refused` | clamav-freshclam not running | `sudo systemctl start clamav-freshclam` |
-| `semgrep: network error` | No internet — first run | Pre-download rules (see §10) |
+| `semgrep: network error` | No internet — first run | Pre-download rules (see §11) |
 | `trivy: DB not found` | First run without internet | `trivy image --download-db-only` |
 | `scancode: takes too long` | Large repo | Use `--timeout 30` to limit per-file time |
 | `pip-audit: no vulnerabilities` on old packages | DB unreachable | Check internet; use trivy offline instead |
@@ -1997,24 +2259,24 @@ pip install --upgrade betterleaks detect-secrets semgrep bandit \
 | `declare -A: invalid option` | Bash < 4.0 | Install bash 5: `brew install bash` / use WSL2 |
 | `zip: command not found` | zip not installed | `sudo apt-get install zip` |
 | WARN on all files | Missing optional tools | Install missing tools; WARNs do not block |
-| Git clone fails on a private repo | No credentials | Set `GITHUB_TOKEN` (see §8.2); the token is passed via `GIT_ASKPASS`, never in the clone URL |
+| Git clone fails on a private repo | No credentials | Set `GITHUB_TOKEN` (see §9.2); the token is passed via `GIT_ASKPASS`, never in the clone URL |
 | `Repository not found or private (HTTP 404)` | Private repo without a token, or a typo | Set `GITHUB_TOKEN`, or check the URL |
-| §11.6 reports "File tampering detected" after your own edits | Manifest is stale | Regenerate it: `python3 selfcheck.py --write-manifest` (see §12.2) |
+| self-check 11.6 reports "File tampering detected" after your own edits | Manifest is stale | Regenerate it: `python3 selfcheck.py --write-manifest` (see §13.2) |
 | `--only` reports 0 checks and exits 2 | Check IDs mistyped (`1.1` instead of `11.1`) | Use the full IDs: `11.1` … `11.7` |
 | Findings appear against the wrong file | Report written by a pre-P8 version | Upgrade; the JSON writer dropped empty records and shifted rows |
 | Allowlist entries have no effect | `.transit-allow.json` not at the repository root, or `rule`/`path` do not match | `path` is relative to the repo root; `rule` matches the finding's leading token, e.g. `CWE-89` |
 | Diff mode scans everything | `--since` commit unreachable in a shallow clone | The pipeline warns and falls back to a full scan; fetch more history or use a local path |
-| Docker build fails downloading trivy | Pinned version no longer published | Update `ARG TRIVY_VERSION` / `TRIVY_SHA256` (see §18.1); the `pins` CI job prints the correct digest |
+| Docker build fails downloading trivy | Pinned version no longer published | Update `ARG TRIVY_VERSION` / `TRIVY_SHA256` (see §19.1); the `pins` CI job prints the correct digest |
 | ZIP contains `tmp/…/fetch/repo_…` paths | Archive built by a pre-P8 version | Upgrade; archives are now rooted at the repository |
-| Scan hangs for minutes on an isolated host | Running without `--offline`; tools are blocking on network timeouts | Use `--offline` (see §10) |
-| Offline run passes suspiciously fast with few findings | Layers 2 and 3 had no staged data | Check for `OFFLINE:` warnings in the report; stage the cache (§10.4) |
+| Scan hangs for minutes on an isolated host | Running without `--offline`; tools are blocking on network timeouts | Use `--offline` (see §11) |
+| Offline run passes suspiciously fast with few findings | Layers 2 and 3 had no staged data | Check for `OFFLINE:` warnings in the report; stage the cache (§11.4) |
 | `OFFLINE:Layer 2 skipped entirely` | Semgrep rulesets not staged | Run `prepare_offline_cache.sh` on a connected host |
 | `OFFLINE:trivy database not staged` | No dependency CVE coverage offline | Stage the trivy DB; it is the only offline CVE source |
 | `Cannot clone … without a network` | `--offline` with a remote URL | Copy the repository to the host and pass its path |
 
 ---
 
-## 16. Running the Test Suite {#tests}
+## 17. Running the Test Suite {#tests}
 
 The suite verifies the pipeline itself: that rules fire on unsafe code, that they
 **do not** fire on safe code, that flags behave, and that the reports and archive
@@ -2039,10 +2301,10 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  69/69 passed
+  ✔  70/70 passed
 ```
 
-### 16.1 What each layer covers
+### 17.1 What each layer covers
 
 | Layer | Covers |
 |-------|--------|
@@ -2053,7 +2315,7 @@ Expected output on a healthy installation:
 | E — diff mode | `--since` scans exactly the changed files; `.git` excluded from local copies |
 | F — static | Parse checks, shellcheck, and lint rules for two bug classes that have already shipped |
 
-### 16.2 Fixtures
+### 17.2 Fixtures
 
 `tests/fixtures/` holds small repositories, each with one job:
 
@@ -2068,7 +2330,7 @@ Expected output on a healthy installation:
 `rules/safe_sql.py` is a regression guard: it contains correct parameterised
 queries that a previous version of the SQL rule wrongly flagged as injection.
 
-### 16.3 Adding a rule
+### 17.3 Adding a rule
 
 Add **both** a file that must trigger the rule and a similar-but-safe file that
 must not, then confirm the new assertion **fails before the rule exists**. A test
@@ -2078,7 +2340,7 @@ were wrong.
 
 ---
 
-## 17. Continuous Integration {#ci}
+## 18. Continuous Integration {#ci}
 
 `.github/workflows/ci.yml` runs on every push and pull request.
 
@@ -2100,13 +2362,13 @@ pin; update `ARG TRIVY_VERSION` / `ARG TRIVY_SHA256` accordingly.
 
 ---
 
-## 18. Docker Image — Build Arguments & Integrity {#docker-build}
+## 19. Docker Image — Build Arguments & Integrity {#docker-build}
 
 The image is a two-stage build: a `builder` stage compiles betterleaks with Go,
 and the runtime stage copies only the resulting binary, so the Go toolchain never
 reaches the final image. It runs as the non-root user `transit`.
 
-### 18.1 Build arguments
+### 19.1 Build arguments
 
 | Argument | Default | Purpose |
 |----------|---------|---------|
@@ -2122,7 +2384,7 @@ docker build -t ai-transit:latest \
   --build-arg TRIVY_SHA256=<digest> .
 ```
 
-### 18.2 Why the digests matter
+### 19.2 Why the digests matter
 
 Pinning a version defends against getting a *different release*. It does not
 defend against getting a *different binary* for that release — a compromised or
@@ -2136,7 +2398,7 @@ without a separate download. The `pins` CI job prints the same value.
 > resolved from the development environment. Fill it in from the first `pins` CI
 > run before treating the image as production-ready.
 
-### 18.3 Running through the wrapper
+### 19.3 Running through the wrapper
 
 `docker-run.sh` forwards pipeline flags into the container, so the Docker and
 native interfaces behave identically:
