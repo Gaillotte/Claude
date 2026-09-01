@@ -31,13 +31,14 @@
 8. [Environment Variables & Flags](#env-vars)
 9. [Full Installation Verification](#verification)
 10. [Air-Gapped Operation](#offline)
-11. [Sample Scans — Testing the Pipeline](#samples)
-12. [Self-Scan: Verifying the Installation is Safe](#self-scan)
-13. [Security Hardening Recommendations](#hardening)
-14. [Troubleshooting](#troubleshooting)
-15. [Running the Test Suite](#tests)
-16. [Continuous Integration](#ci)
-17. [Docker Image — Build Arguments & Integrity](#docker-build)
+11. [Installing on a Disconnected Host](#offline-install)
+12. [Sample Scans — Testing the Pipeline](#samples)
+13. [Self-Scan: Verifying the Installation is Safe](#self-scan)
+14. [Security Hardening Recommendations](#hardening)
+15. [Troubleshooting](#troubleshooting)
+16. [Running the Test Suite](#tests)
+17. [Continuous Integration](#ci)
+18. [Docker Image — Build Arguments & Integrity](#docker-build)
 
 ---
 
@@ -1041,7 +1042,7 @@ python3 -c "import ast; ast.parse(open('selfcheck.py').read())" \
 ### 6.5 Run the test suite
 
 This is the fastest way to confirm the installation is sound. It needs no
-scanning tools — see §15.
+scanning tools — see §16.
 
 ```bash
 ./tests/run_tests.sh
@@ -1054,7 +1055,7 @@ scanning tools — see §15.
 python3 selfcheck.py --write-manifest
 ```
 
-Do this once the bundle is in its final location. See §12.2 for why the manifest
+Do this once the bundle is in its final location. See §13.2 for why the manifest
 is generated at install time rather than shipped in version control.
 
 ---
@@ -1444,9 +1445,188 @@ air-gapped side can tell how old its data is.
 
 ---
 
-## 11. Sample Scans — Testing the Pipeline {#samples}
+## 11. Installing on a Disconnected Host {#offline-install}
 
-### 11.1 Quick smoke test (local directory)
+Section 10 covers running scans without a network. This section covers the step
+before it: getting the pipeline and its tools onto a machine that has never had
+one.
+
+The distinction matters operationally, because the two bundles have different
+lifetimes:
+
+| Bundle | Contains | Rebuild when |
+|--------|----------|--------------|
+| **Install bundle** (this section) | The software: tools, binaries, pipeline scripts | A tool version changes |
+| **Scan cache** (§10.4) | The data scanners read: rules, CVE database, signatures | **Weekly** — it is perishable |
+
+Every command in sections 3–6 assumes a network. `apt-get install` reaches
+archive.ubuntu.com, `pip install` reaches pypi.org, `go install` reaches the Go
+module proxy, and `docker build` reaches all of them plus Docker Hub. None of
+that works on an isolated host.
+
+### 11.1 Choose a path
+
+| Path | Effort | Best when |
+|------|--------|-----------|
+| **A — Docker image transfer** | Low | Docker is permitted on the target. Strongly preferred. |
+| **B — Native package staging** | High | Docker is not permitted, or the target must run the tools directly. |
+
+Path A moves one file and is far less error-prone: the image already contains
+all sixteen tools at known versions, so nothing can be partially installed.
+
+> **Both paths require a connected build host running the same OS release and
+> CPU architecture as the target.** Debian packages and many Python wheels are
+> compiled artefacts — an amd64 Ubuntu 22.04 bundle will not install on an arm64
+> host or on Debian 12, and the failures are confusing rather than obvious.
+
+---
+
+### 11.2 Path A — Docker image transfer
+
+**On the connected host:**
+
+```bash
+./docker-run.sh --build                      # build once
+./prepare_offline_install.sh /tmp/offline-install
+```
+
+That exports the image with `docker save` into the bundle. To do it by hand:
+
+```bash
+docker save ai-transit:latest | gzip > ai-transit.tar.gz
+sha256sum ai-transit.tar.gz | tee ai-transit.tar.gz.sha256
+```
+
+Expect roughly **2–3 GB** compressed.
+
+**On the air-gapped host:**
+
+```bash
+sha256sum -c ai-transit.tar.gz.sha256        # must pass before loading
+gunzip -c ai-transit.tar.gz | docker load
+docker image ls ai-transit                   # confirm it is present
+
+# Verify it runs and is non-root
+docker run --rm --entrypoint id ai-transit:latest -u    # must not be 0
+```
+
+The pipeline scripts are inside the image, but you still need them on the host
+to use `docker-run.sh` and to hold the scan cache. Copy `pipeline/` from the
+bundle to your install directory.
+
+---
+
+### 11.3 Path B — Native package staging
+
+**On the connected host** (same OS and architecture as the target):
+
+```bash
+./prepare_offline_install.sh /tmp/offline-install
+```
+
+It stages four groups:
+
+| Directory | Contents | How it was obtained |
+|-----------|----------|---------------------|
+| `deb/` | System packages and their dependencies | `apt-get install --download-only` |
+| `wheels/` | Python packages | `pip3 download` |
+| `bin/` | betterleaks, trivy, hadolint | Copied from the build host's `PATH` |
+| `pipeline/` | Scripts, tests, documentation | Copied from the repository |
+
+`bin/` is populated from the tools already installed on the build host, so
+install them there first (§5) before running the script.
+
+**Transfer and verify:**
+
+```bash
+tar -czf offline-install.tar.gz -C /tmp offline-install
+sha256sum offline-install.tar.gz | tee offline-install.tar.gz.sha256
+
+# On the air-gapped host
+sha256sum -c offline-install.tar.gz.sha256
+tar -xzf offline-install.tar.gz -C /opt/
+cd /opt/offline-install
+sha256sum --check .install_manifest.sha256 | grep -v ': OK$' || echo "all files OK"
+```
+
+**Check the platform matches before installing anything:**
+
+```bash
+cat .bundle_platform
+# os_id=ubuntu  os_version=22.04  arch=amd64  built_on=...
+
+. /etc/os-release; echo "target: ${ID} ${VERSION_ID} $(dpkg --print-architecture)"
+# These must agree. If they do not, rebuild the bundle on a matching host.
+```
+
+**Install:**
+
+```bash
+# 1. System packages — dpkg resolves nothing, so install the whole set at once
+sudo dpkg -i deb/*.deb || sudo apt-get install -f --no-download -y
+
+# 2. Python packages — --no-index forbids any network fallback
+python3 -m venv /opt/ai-transit/venv
+source /opt/ai-transit/venv/bin/activate
+pip install --no-index --find-links=wheels \
+    openpyxl reportlab python-docx detect-secrets bandit \
+    pip-audit safety semgrep checkov scancode-toolkit
+
+# 3. Binaries
+sudo cp bin/* /usr/local/bin/ && sudo chmod +x /usr/local/bin/{betterleaks,trivy,hadolint}
+
+# 4. Pipeline
+sudo mkdir -p /opt/ai-transit
+sudo cp -r pipeline/* /opt/ai-transit/
+sudo chmod +x /opt/ai-transit/*.sh
+```
+
+`pip install --no-index` is deliberate: without it, pip silently falls back to
+PyPI and the install appears to succeed on a host that merely has *partial*
+network access, hiding the fact that the bundle was incomplete.
+
+---
+
+### 11.4 Verify the installation
+
+```bash
+cd /opt/ai-transit
+
+# 1. Which tools actually made it
+for t in betterleaks detect-secrets clamscan yara semgrep trivy \
+         bandit shellcheck cppcheck hadolint checkov scancode; do
+    command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
+done
+
+# 2. The suite needs no tools and no network — it should pass regardless
+./tests/run_tests.sh
+# Expected: ✔ 69/69 passed
+
+# 3. Record the bundle for the integrity check
+python3 selfcheck.py --write-manifest
+```
+
+Anything reported `MISSING` will WARN on every scan and never contribute
+findings. Resolve it now rather than discovering it in a report later — §10.8
+explains how the coverage block makes such gaps visible.
+
+### 11.5 Then stage the scan data
+
+Installing the tools is only half the job. The scanners still need their rules
+and databases, which is a **separate and perishable** bundle:
+
+```bash
+# On the connected host
+./prepare_offline_cache.sh /tmp/offline-cache
+```
+
+Follow §10.4–10.6, or the step-by-step procedure in **OFFLINE_RUNBOOK.md**.
+
+---
+
+## 12. Sample Scans — Testing the Pipeline {#samples}
+
+### 12.1 Quick smoke test (local directory)
 
 Create a small test repository to validate the pipeline end-to-end:
 
@@ -1502,7 +1682,7 @@ bash create_test_repo.sh
 
 ---
 
-### 11.2 FAIL test — embedded secret
+### 12.2 FAIL test — embedded secret
 
 ```bash
 mkdir -p /tmp/fail-secret
@@ -1522,7 +1702,7 @@ rm -rf /tmp/fail-secret
 
 ---
 
-### 11.3 FAIL test — SQL injection (OWASP A03)
+### 12.3 FAIL test — SQL injection (OWASP A03)
 
 ```bash
 mkdir -p /tmp/fail-sqli
@@ -1545,7 +1725,7 @@ rm -rf /tmp/fail-sqli
 
 ---
 
-### 11.4 FAIL test — vulnerable dependency (CVE)
+### 12.4 FAIL test — vulnerable dependency (CVE)
 
 ```bash
 mkdir -p /tmp/fail-cve
@@ -1563,7 +1743,7 @@ rm -rf /tmp/fail-cve
 
 ---
 
-### 11.5 WARN test — risky licence (GPL)
+### 12.5 WARN test — risky licence (GPL)
 
 ```bash
 mkdir -p /tmp/warn-licence
@@ -1586,7 +1766,7 @@ rm -rf /tmp/warn-licence
 
 ---
 
-### 11.6 FAIL test — Dockerfile misconfigurations
+### 12.6 FAIL test — Dockerfile misconfigurations
 
 ```bash
 mkdir -p /tmp/fail-docker
@@ -1606,7 +1786,7 @@ rm -rf /tmp/fail-docker
 
 ---
 
-### 11.7 Scan a real public GitHub repository
+### 12.7 Scan a real public GitHub repository
 
 ```bash
 # Scan a small, well-known public repo (adjust URL as needed)
@@ -1616,7 +1796,7 @@ rm -rf /tmp/fail-docker
 
 ---
 
-### 11.8 Run the self-check to verify the pipeline itself
+### 12.8 Run the self-check to verify the pipeline itself
 
 ```bash
 # PDF report (default)
@@ -1643,7 +1823,7 @@ python3 selfcheck.py --bundle-dir . --only 11.1,11.4,11.6
 
 ---
 
-### 11.9 CI mode — quiet verdict with severity filter
+### 12.9 CI mode — quiet verdict with severity filter
 
 ```bash
 # Only block on CRITICAL CVEs/findings; warnings and lower are ignored
@@ -1653,7 +1833,7 @@ echo "Exit code: $?"   # 0 = PASS, 1 = FAIL
 
 ---
 
-### 11.10 Diff mode — scan only changed files (PR workflow)
+### 12.10 Diff mode — scan only changed files (PR workflow)
 
 ```bash
 # Scan only files changed since the merge base commit
@@ -1663,7 +1843,7 @@ SINCE=$(git merge-base HEAD origin/main)
 
 ---
 
-### 11.11 Private repository scan
+### 12.11 Private repository scan
 
 ```bash
 # Generate a fine-grained PAT with "Contents: read" on github.com
@@ -1673,7 +1853,7 @@ export GITHUB_TOKEN="ghp_your_token_here"
 
 ---
 
-### 11.12 Report-only mode (audit without blocking)
+### 12.12 Report-only mode (audit without blocking)
 
 ```bash
 # Scan and generate reports but always exit 0 — useful for first-pass auditing
@@ -1683,7 +1863,7 @@ export GITHUB_TOKEN="ghp_your_token_here"
 
 ---
 
-### 11.13 Air-gapped scan
+### 12.13 Air-gapped scan
 
 ```bash
 # On a connected host: build the cache and transfer it
@@ -1704,7 +1884,7 @@ grep -o 'OFFLINE:[^|]*' "$WORK_DIR"/reports/report_*.json
 
 ---
 
-## 12. Self-Scan: Verifying the Installation is Safe {#self-scan}
+## 13. Self-Scan: Verifying the Installation is Safe {#self-scan}
 
 Before deploying in a production environment, run the full self-check:
 
@@ -1714,7 +1894,7 @@ python3 selfcheck.py --bundle-dir . --output selfcheck_report.pdf
 
 This executes all §11 checks (meta-scan, binary checksums, GPG/cosign, Python CVE scan, host OS CVE, bundle integrity, AIDE) and produces a colour-coded PDF report. See `selfcheck.py --help` for all options.
 
-### 12.1 Output formats and selective checks
+### 13.1 Output formats and selective checks
 
 ```bash
 python3 selfcheck.py --format json --output selfcheck_report   # machine-readable
@@ -1725,7 +1905,7 @@ python3 selfcheck.py --only 11.1,11.4,11.6                     # subset, faster
 The JSON report carries a top-level `verdict` field (`PASS` / `WARN` / `FAIL`),
 which is what a CI job should key on.
 
-### 12.2 The bundle manifest — generate it at install time
+### 13.2 The bundle manifest — generate it at install time
 
 Check §11.6 (bundle file integrity) compares every bundle file against
 `.bundle_manifest.sha256`. That manifest is **deliberately not tracked in version
@@ -1754,7 +1934,7 @@ bundle directory (selfcheck.py does this automatically).
 
 ---
 
-## 13. Security Hardening Recommendations {#hardening}
+## 14. Security Hardening Recommendations {#hardening}
 
 ### Dedicated service account
 ```bash
@@ -1802,7 +1982,7 @@ pip install --upgrade betterleaks detect-secrets semgrep bandit \
 
 ---
 
-## 14. Troubleshooting {#troubleshooting}
+## 15. Troubleshooting {#troubleshooting}
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
@@ -1824,7 +2004,7 @@ pip install --upgrade betterleaks detect-secrets semgrep bandit \
 | Findings appear against the wrong file | Report written by a pre-P8 version | Upgrade; the JSON writer dropped empty records and shifted rows |
 | Allowlist entries have no effect | `.transit-allow.json` not at the repository root, or `rule`/`path` do not match | `path` is relative to the repo root; `rule` matches the finding's leading token, e.g. `CWE-89` |
 | Diff mode scans everything | `--since` commit unreachable in a shallow clone | The pipeline warns and falls back to a full scan; fetch more history or use a local path |
-| Docker build fails downloading trivy | Pinned version no longer published | Update `ARG TRIVY_VERSION` / `TRIVY_SHA256` (see §17.1); the `pins` CI job prints the correct digest |
+| Docker build fails downloading trivy | Pinned version no longer published | Update `ARG TRIVY_VERSION` / `TRIVY_SHA256` (see §18.1); the `pins` CI job prints the correct digest |
 | ZIP contains `tmp/…/fetch/repo_…` paths | Archive built by a pre-P8 version | Upgrade; archives are now rooted at the repository |
 | Scan hangs for minutes on an isolated host | Running without `--offline`; tools are blocking on network timeouts | Use `--offline` (see §10) |
 | Offline run passes suspiciously fast with few findings | Layers 2 and 3 had no staged data | Check for `OFFLINE:` warnings in the report; stage the cache (§10.4) |
@@ -1834,7 +2014,7 @@ pip install --upgrade betterleaks detect-secrets semgrep bandit \
 
 ---
 
-## 15. Running the Test Suite {#tests}
+## 16. Running the Test Suite {#tests}
 
 The suite verifies the pipeline itself: that rules fire on unsafe code, that they
 **do not** fire on safe code, that flags behave, and that the reports and archive
@@ -1862,7 +2042,7 @@ Expected output on a healthy installation:
   ✔  69/69 passed
 ```
 
-### 15.1 What each layer covers
+### 16.1 What each layer covers
 
 | Layer | Covers |
 |-------|--------|
@@ -1873,7 +2053,7 @@ Expected output on a healthy installation:
 | E — diff mode | `--since` scans exactly the changed files; `.git` excluded from local copies |
 | F — static | Parse checks, shellcheck, and lint rules for two bug classes that have already shipped |
 
-### 15.2 Fixtures
+### 16.2 Fixtures
 
 `tests/fixtures/` holds small repositories, each with one job:
 
@@ -1888,7 +2068,7 @@ Expected output on a healthy installation:
 `rules/safe_sql.py` is a regression guard: it contains correct parameterised
 queries that a previous version of the SQL rule wrongly flagged as injection.
 
-### 15.3 Adding a rule
+### 16.3 Adding a rule
 
 Add **both** a file that must trigger the rule and a similar-but-safe file that
 must not, then confirm the new assertion **fails before the rule exists**. A test
@@ -1898,7 +2078,7 @@ were wrong.
 
 ---
 
-## 16. Continuous Integration {#ci}
+## 17. Continuous Integration {#ci}
 
 `.github/workflows/ci.yml` runs on every push and pull request.
 
@@ -1920,13 +2100,13 @@ pin; update `ARG TRIVY_VERSION` / `ARG TRIVY_SHA256` accordingly.
 
 ---
 
-## 17. Docker Image — Build Arguments & Integrity {#docker-build}
+## 18. Docker Image — Build Arguments & Integrity {#docker-build}
 
 The image is a two-stage build: a `builder` stage compiles betterleaks with Go,
 and the runtime stage copies only the resulting binary, so the Go toolchain never
 reaches the final image. It runs as the non-root user `transit`.
 
-### 17.1 Build arguments
+### 18.1 Build arguments
 
 | Argument | Default | Purpose |
 |----------|---------|---------|
@@ -1942,7 +2122,7 @@ docker build -t ai-transit:latest \
   --build-arg TRIVY_SHA256=<digest> .
 ```
 
-### 17.2 Why the digests matter
+### 18.2 Why the digests matter
 
 Pinning a version defends against getting a *different release*. It does not
 defend against getting a *different binary* for that release — a compromised or
@@ -1956,7 +2136,7 @@ without a separate download. The `pins` CI job prints the same value.
 > resolved from the development environment. Fill it in from the first `pins` CI
 > run before treating the image as production-ready.
 
-### 17.3 Running through the wrapper
+### 18.3 Running through the wrapper
 
 `docker-run.sh` forwards pipeline flags into the container, so the Docker and
 native interfaces behave identically:

@@ -131,6 +131,12 @@ isolated host those calls block on timeouts and return nothing, so L2 and L3 qui
 contribute no findings while the report still shows them as having run — a PASS that
 means very little.
 
+Two separate bundles, with different lifetimes: `prepare_offline_install.sh` stages
+the **software** (apt packages, Python wheels, binaries, scripts — rebuild only when a
+tool version changes), and `prepare_offline_cache.sh` stages the **data** the scanners
+read (rules, CVE database, signatures — perishable, rebuild weekly). INSTALL.md §11
+covers disconnected installation; §10 covers disconnected scanning.
+
 `--offline` points each tool at staged data (`prepare_offline_cache.sh` builds it),
 passes update-suppressing flags, and records an explicit `OFFLINE:` warning for any
 layer that could not run. pip-audit, safety, npm audit and ScanCode's CVE lookup have
