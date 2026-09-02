@@ -1,6 +1,11 @@
 # AI Transit Pipeline — Complete Installation Guide
 
-**Version 3.1 | Scripts: fetch_repo.sh · scan_pipeline.sh · ai_transit.sh · generate_excel_report.py · selfcheck.py**
+**Version 3.2**
+
+Pipeline: `ai_transit.sh` · `fetch_repo.sh` · `scan_pipeline.sh`  
+Reporting: `generate_excel_report.py` · `selfcheck.py`  
+Air-gap: `prepare_offline_install.sh` · `prepare_offline_cache.sh` · `verify_offline_install.sh`  
+Container: `docker-run.sh` · `Dockerfile`
 
 ---
 

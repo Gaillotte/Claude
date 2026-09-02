@@ -1,494 +1,587 @@
 #!/usr/bin/env python3
-"""
-Converts INSTALL.md to a formatted PDF using ReportLab.
-Usage: python3 build_install_pdf.py [INSTALL.md] [output.pdf]
-"""
+"""Render a Markdown guide to an illustrated PDF.
 
+    python3 build_install_pdf.py [source.md] [output.pdf]
+
+Defaults to INSTALL.md -> AI_Transit_Pipeline_INSTALL.pdf.
+
+Fixes carried over from the previous builder, each verified against the
+rendered output rather than assumed:
+
+  * Box-drawing characters (┌ ─ │ ┘) and → ▶ ✔ rendered as solid black squares,
+    because the PDF base fonts cannot encode them. The §2 architecture diagram
+    was destroyed by this. DejaVu is now used for all document text.
+  * Every source line became its own Paragraph, so the PDF reproduced the
+    markdown's 80-column source wrapping instead of reflowing, and any **bold**
+    or `code` spanning a line break printed its literal markers. Consecutive
+    lines are now joined into one paragraph before inline markup is applied.
+  * {#anchor} suffixes were stripped from H2 only, so 15 leaked into the PDF.
+  * Long shell lines overflowed the frame. Each code block is now auto-fitted to
+    a size at which its longest line fits, leaving commands byte-identical.
+  * No page numbers in the contents, and no running header naming the section.
+"""
+import os
 import re
 import sys
-from pathlib import Path
+from datetime import datetime
 
-try:
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-        HRFlowable, KeepTogether, PageBreak, Preformatted
-    )
-    from reportlab.platypus.flowables import Flowable
-    from reportlab.lib.utils import simpleSplit
-except ImportError:
-    print("ERROR: pip install reportlab", file=sys.stderr)
-    sys.exit(1)
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib.colors import HexColor
+from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame, Paragraph,
+                                Spacer, Table, TableStyle, PageBreak,
+                                KeepTogether, Flowable,
+                                NextPageTemplate)
+from reportlab.platypus.tableofcontents import TableOfContents
 
-pt = 1
-
-# ── Palette ───────────────────────────────────────────────────────────────────
-C_NAVY      = colors.HexColor("#1F3864")
-C_DARK      = colors.HexColor("#2E4057")
-C_BLUE_LT   = colors.HexColor("#D9E1F2")
-C_CODE_BG   = colors.HexColor("#F4F4F4")
-C_CODE_BD   = colors.HexColor("#CCCCCC")
-C_QUOTE_BG  = colors.HexColor("#EEF3FB")
-C_QUOTE_BD  = colors.HexColor("#4472C4")
-C_HDR_TBL   = colors.HexColor("#1F3864")
-C_ROW_ALT   = colors.HexColor("#F2F5FC")
-C_TEXT      = colors.HexColor("#1A1A1A")
-C_SUBTEXT   = colors.HexColor("#444444")
-C_WHITE     = colors.white
-C_BORDER    = colors.HexColor("#BBBBBB")
-C_PASS      = colors.HexColor("#C6EFCE")
-C_FAIL      = colors.HexColor("#FFC7CE")
+import pdf_theme as T
 
 PAGE_W, PAGE_H = A4
-MARGIN = 2 * cm
+MARGIN = 2.0 * cm
 CONTENT_W = PAGE_W - 2 * MARGIN
 
-# ── Styles ────────────────────────────────────────────────────────────────────
-def make_styles():
-    base = dict(fontName="Helvetica", textColor=C_TEXT, leading=14)
-    mono = dict(fontName="Courier",   textColor=C_TEXT)
-    return {
-        "h1": ParagraphStyle("h1", fontSize=20, fontName="Helvetica-Bold",
-                              textColor=C_WHITE, alignment=TA_CENTER,
-                              spaceBefore=0, spaceAfter=6),
-        "h1sub": ParagraphStyle("h1sub", fontSize=10, fontName="Helvetica",
-                                 textColor=C_WHITE, alignment=TA_CENTER, spaceAfter=0),
-        "h2": ParagraphStyle("h2", fontSize=14, fontName="Helvetica-Bold",
-                              textColor=C_WHITE, spaceBefore=4, spaceAfter=4),
-        "h3": ParagraphStyle("h3", fontSize=11, fontName="Helvetica-Bold",
-                              textColor=C_NAVY, spaceBefore=8*pt, spaceAfter=3*pt),
-        "body": ParagraphStyle("body", fontSize=9, **base),
-        "bullet": ParagraphStyle("bullet", fontSize=9, leading=13,
-                                  leftIndent=14*pt, firstLineIndent=-10*pt,
-                                  fontName="Helvetica", textColor=C_TEXT),
-        "subbullet": ParagraphStyle("subbullet", fontSize=9, leading=13,
-                                     leftIndent=26*pt, firstLineIndent=-10*pt,
-                                     fontName="Helvetica", textColor=C_TEXT),
-        "code": ParagraphStyle("code", fontSize=7.5, leading=11,
-                                leftIndent=8*pt, rightIndent=4*pt,
-                                fontName="Courier", textColor=C_TEXT),
-        "quote": ParagraphStyle("quote", fontSize=8.5, leading=13,
-                                 leftIndent=12*pt, fontName="Helvetica-Oblique",
-                                 textColor=C_SUBTEXT),
-        "toc_h": ParagraphStyle("toc_h", fontSize=9, fontName="Helvetica-Bold",
-                                  textColor=C_NAVY, spaceBefore=2, spaceAfter=2),
-        "toc_i": ParagraphStyle("toc_i", fontSize=8.5, fontName="Helvetica",
-                                  textColor=C_SUBTEXT, leftIndent=10*pt,
-                                  spaceBefore=1, spaceAfter=1),
-        "footer": ParagraphStyle("footer", fontSize=7, fontName="Helvetica",
-                                  textColor=colors.HexColor("#888888"),
-                                  alignment=TA_CENTER),
-        "th": ParagraphStyle("th", fontSize=8.5, fontName="Helvetica-Bold",
-                               textColor=C_WHITE),
-        "td": ParagraphStyle("td", fontSize=8.5, fontName="Helvetica",
-                               textColor=C_TEXT, leading=12),
-        "tdmono": ParagraphStyle("tdmono", fontSize=7.8, fontName="Courier",
-                                  textColor=C_TEXT, leading=11),
-    }
+T.register_fonts()
+S = T.make_styles()
 
-S = make_styles()
+try:
+    import install_figures
+    FIGURES = install_figures.build_registry()
+except Exception as exc:                                  # figures are optional
+    FIGURES = {}
+    if os.environ.get("PDF_DEBUG"):
+        print(f"[warn] figures unavailable: {exc}", file=sys.stderr)
 
 
-# ── Inline markup ─────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# Inline markup
+# ═══════════════════════════════════════════════════════════════════════════════
+ANCHOR_RE = re.compile(r'\s*\{#[^}]+\}')
+
+
+def strip_anchor(title: str) -> str:
+    return ANCHOR_RE.sub('', title).strip()
+
+
 def inline(text: str) -> str:
-    """Convert inline Markdown (bold, inline code, escapes) to ReportLab XML."""
-    # Escape XML special chars first (except ones we'll add)
+    """Markdown inline -> ReportLab markup.
+
+    Code spans are lifted out before emphasis runs. Underscores are extremely
+    common inside them (GITHUB_TOKEN, MAX_SIZE_MB); leaving them in scope lets
+    the italic rule pair an underscore in one span with one in another and emit
+    overlapping tags, which ReportLab rejects outright.
+    """
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    # Pull `inline code` out before any emphasis runs. Underscores are
-    # extremely common inside code spans (GITHUB_TOKEN, GIT_ASKPASS,
-    # MAX_SIZE_MB); leaving them in scope lets the italic rule pair an
-    # underscore in one span with one in another and emit overlapping tags
-    # like GITHUB<i>TOKEN … GIT</i>ASKPASS, which ReportLab rejects outright.
-    code_spans: list[str] = []
+    spans = []
 
-    def _stash(m: "re.Match") -> str:
-        code_spans.append(m.group(1))
-        return f"\x00CODE{len(code_spans) - 1}\x00"
+    def _stash(m):
+        spans.append(m.group(1))
+        return f"\x00C{len(spans) - 1}\x00"
 
     text = re.sub(r'`([^`]+?)`', _stash, text)
 
-    # **bold** or __bold__
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-    text = re.sub(r'__(.+?)__',     r'<b>\1</b>', text)
-    # *italic*
-    text = re.sub(r'\*([^*]+?)\*',  r'<i>\1</i>', text)
-    # _italic_ — only at word boundaries, so snake_case identifiers outside
-    # code spans are still left alone.
-    text = re.sub(r'(?<![\w\\])_([^_]+?)_(?!\w)', r'<i>\1</i>', text)
-
-    # [text](url) — strip links, keep text
+    text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+    text = re.sub(r'(?<!\*)\*([^*\n]+?)\*(?!\*)', r'<i>\1</i>', text)
+    text = re.sub(r'(?<![\w\\])_([^_\n]+?)_(?!\w)', r'<i>\1</i>', text)
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
 
-    # Restore code spans as monospace runs.
-    def _restore(m: "re.Match") -> str:
-        return (f'<font face="Courier" size="8">'
-                f'{code_spans[int(m.group(1))]}</font>')
+    def _restore(m):
+        body = spans[int(m.group(1))]
+        return (f'<font face="{T.FONT_MONO}" size="8" color="#1D2430">'
+                f'{body}</font>')
 
-    text = re.sub(r'\x00CODE(\d+)\x00', _restore, text)
-    return text
+    return re.sub(r'\x00C(\d+)\x00', _restore, text)
 
 
-# ── Code block ────────────────────────────────────────────────────────────────
-def CodeBlock(lines: list[str], width: float = CONTENT_W) -> Table:
-    """One row per code line so ReportLab can split across pages."""
-    code_style = ParagraphStyle(
-        "cb", fontName="Courier", fontSize=7.5, leading=11,
-        textColor=C_TEXT,
-    )
-    rows = []
-    for line in lines:
-        safe = (line.replace("\t", "    ")
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;"))
-        rows.append([Paragraph(safe or " ", code_style)])
+# ═══════════════════════════════════════════════════════════════════════════════
+# Blocks
+# ═══════════════════════════════════════════════════════════════════════════════
+CODE_EM = 0.6          # DejaVuSansMono and Courier are both 0.6 em wide
+CODE_MAX, CODE_MIN = 8.0, 5.8
 
-    tbl = Table(rows, colWidths=[width - 4])
-    nrows = len(rows)
+
+def fit_code_size(lines, avail=CONTENT_W, pad=16.0) -> float:
+    longest = max((len(l) for l in lines), default=0)
+    if not longest:
+        return CODE_MAX
+    return max(CODE_MIN, min(CODE_MAX, (avail - pad) / (longest * CODE_EM)))
+
+
+def CodeBlock(lines, avail=CONTENT_W):
+    """Shell/code block, auto-fitted so no line overflows the frame."""
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return Spacer(1, 1)
+
+    size = fit_code_size(lines, avail)
+    style = T.ParagraphStyle(
+        "code", fontName=T.FONT_MONO, fontSize=size, leading=size * 1.42,
+        textColor=T.CODE_INK)
+
+    def esc(l):
+        return (l.replace("&", "&amp;").replace("<", "&lt;")
+                 .replace(">", "&gt;").replace(" ", "&nbsp;")) or "&nbsp;"
+
+    # One row per line so the block can break across a page boundary. A
+    # single-cell table cannot split, and some listings here are taller than a
+    # whole frame, which raises LayoutError and aborts the build.
+    rows = [[Paragraph(esc(l), style)] for l in lines]
+    tbl = Table(rows, colWidths=[avail], repeatRows=0)
     tbl.setStyle(TableStyle([
-        ("BACKGROUND",   (0,0), (-1,-1), C_CODE_BG),
-        ("BOX",          (0,0), (-1,-1), 0.5, C_CODE_BD),
-        ("LEFTPADDING",  (0,0), (-1,-1), 10),
-        ("RIGHTPADDING", (0,0), (-1,-1), 6),
-        ("TOPPADDING",   (0,0), (-1,-1), 1),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 1),
-        ("TOPPADDING",   (0,0), (0,0), 5),
-        ("BOTTOMPADDING",(0,nrows-1), (0,nrows-1), 5),
-        ("LINEBEFORE",   (0,0), (0,-1), 3, C_NAVY),
+        ("BACKGROUND", (0, 0), (-1, -1), T.CODE_BG),
+        ("BOX", (0, 0), (-1, -1), 0.6, T.CODE_BD),
+        ("LINEBEFORE", (0, 0), (0, -1), 2.2, T.NAVY),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 0.6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0.6),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
     return tbl
 
 
-# ── Quote block ───────────────────────────────────────────────────────────────
-def QuoteBlock(paragraphs: list[Paragraph], width: float = CONTENT_W) -> Table:
-    """Blockquote — one row per paragraph so the table can split."""
-    rows = [[p] for p in paragraphs]
-    tbl = Table(rows, colWidths=[width - 4])
+CALLOUT_RE = re.compile(
+    r'^\s*\*{0,2}(note|tip|warning|critical|important|caution)\b[:\*]*\s*',
+    re.I)
+
+
+def Callout(lines, avail=CONTENT_W):
+    """A blockquote, styled by its opening keyword when it has one."""
+    joined = " ".join(l.strip() for l in lines if l.strip())
+    kind, label = "note", None
+    m = CALLOUT_RE.match(joined)
+    if m:
+        word = m.group(1).lower()
+        kind = {"important": "warning", "caution": "warning"}.get(word, word)
+        if kind not in T.CALLOUT:
+            kind = "note"
+        label = T.CALLOUT[kind][2]
+        joined = joined[m.end():]
+
+    bg, accent, default_label = T.CALLOUT[kind]
+    inner = []
+    if label or kind != "note":
+        lbl = T.ParagraphStyle("cl", parent=S["callout_lbl"], textColor=accent)
+        inner.append(Paragraph((label or default_label).upper(), lbl))
+    inner.append(Paragraph(inline(joined), S["callout"]))
+
+    tbl = Table([[inner]], colWidths=[avail])
     tbl.setStyle(TableStyle([
-        ("BACKGROUND",   (0,0), (-1,-1), C_QUOTE_BG),
-        ("BOX",          (0,0), (-1,-1), 0.5, C_BORDER),
-        ("LINEBEFORE",   (0,0), (0,-1), 4, C_QUOTE_BD),
-        ("LEFTPADDING",  (0,0), (-1,-1), 12),
-        ("RIGHTPADDING", (0,0), (-1,-1), 8),
-        ("TOPPADDING",   (0,0), (-1,-1), 3),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 3),
+        ("BACKGROUND", (0, 0), (-1, -1), bg),
+        ("LINEBEFORE", (0, 0), (0, -1), 2.6, accent),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
     ]))
     return tbl
 
 
-# ── Section header banner ─────────────────────────────────────────────────────
-def section_banner(title: str) -> Table:
-    tbl = Table([[Paragraph(title, S["h2"])]], colWidths=[CONTENT_W])
+def SectionBanner(number: str, title: str, avail=CONTENT_W):
+    """Full-width H1 banner. The Paragraph inside carries style name 'H1',
+    which is what GuideDoc.afterFlowable keys the TOC and running header on."""
+    label = f"{number}. {title}" if number else title
+    p = Paragraph(inline(label), S["H1"])
+    tbl = Table([[p]], colWidths=[avail])
     tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), C_NAVY),
-        ("TOPPADDING", (0,0), (-1,-1), 7),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 7),
-        ("LEFTPADDING", (0,0), (-1,-1), 10),
-        ("RIGHTPADDING", (0,0), (-1,-1), 10),
-        ("BOX", (0,0), (-1,-1), 0, C_NAVY),
+        ("BACKGROUND", (0, 0), (-1, -1), T.NAVY),
+        ("LEFTPADDING", (0, 0), (-1, -1), 11),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 11),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     return tbl
 
 
-# ── Markdown table parser ─────────────────────────────────────────────────────
-def parse_md_table(lines: list[str]) -> Table | None:
-    """Parse a Markdown pipe table into a ReportLab Table."""
-    rows = []
-    for line in lines:
-        if re.match(r'^\s*\|?[-:| ]+\|?\s*$', line):
-            continue  # separator row
-        cells = [c.strip() for c in re.split(r'(?<!\\)\|', line.strip('| \t'))]
-        if not cells:
-            continue
-        rows.append(cells)
-
-    if len(rows) < 1:
+def parse_table(rows, avail=CONTENT_W):
+    """Render a GitHub-style markdown table."""
+    cells = [[c.strip() for c in r.strip().strip('|').split('|')] for r in rows]
+    if len(cells) < 2:
         return None
+    header, body = cells[0], cells[2:]          # cells[1] is the --- separator
+    ncol = len(header)
+    body = [r + [''] * (ncol - len(r)) if len(r) < ncol else r[:ncol]
+            for r in body]
 
-    # Determine column count and width distribution
-    ncols = max(len(r) for r in rows)
-    # Pad short rows
-    rows = [r + [""] * (ncols - len(r)) for r in rows]
-    col_w = CONTENT_W / ncols
+    # Weight columns by the longest cell so wide prose columns get the room.
+    widths = []
+    for i in range(ncol):
+        longest = max([len(header[i])] + [len(r[i]) for r in body] or [1])
+        widths.append(max(longest, 6))
+    total = sum(widths)
+    col_w = [max(38.0, avail * w / total) for w in widths]
+    scale = avail / sum(col_w)
+    col_w = [w * scale for w in col_w]
 
-    table_data = []
-    for ri, row in enumerate(rows):
-        style = S["th"] if ri == 0 else S["td"]
-        # Use mono style for cells that look like commands/paths
-        cells_out = []
-        for cell in row:
-            if re.search(r'[`/\\]', cell) and ri > 0:
-                p = Paragraph(inline(cell), S["tdmono"])
-            else:
-                p = Paragraph(inline(cell), style)
-            cells_out.append(p)
-        table_data.append(cells_out)
+    def cell(txt, style):
+        mono = txt.startswith('`') and txt.endswith('`') and len(txt) > 2
+        return Paragraph(inline(txt), S["td_mono"] if mono else style)
 
-    tbl = Table(table_data, colWidths=[col_w] * ncols, repeatRows=1)
-    ts = TableStyle([
-        ("BACKGROUND",   (0,0), (-1,0), C_HDR_TBL),
-        ("VALIGN",       (0,0), (-1,-1), "TOP"),
-        ("TOPPADDING",   (0,0), (-1,-1), 4),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 4),
-        ("LEFTPADDING",  (0,0), (-1,-1), 5),
-        ("RIGHTPADDING", (0,0), (-1,-1), 5),
-        ("BOX",          (0,0), (-1,-1), 0.5, C_BORDER),
-        ("INNERGRID",    (0,0), (-1,-1), 0.3, C_BORDER),
-    ])
-    for i in range(1, len(rows)):
+    data = [[Paragraph(inline(h), S["th"]) for h in header]]
+    data += [[cell(c, S["td"]) for c in r] for r in body]
+
+    tbl = Table(data, colWidths=col_w, repeatRows=1)
+    style = [
+        ("BACKGROUND", (0, 0), (-1, 0), T.TBL_HEAD),
+        ("GRID", (0, 0), (-1, -1), 0.4, T.TBL_GRID),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]
+    for i in range(1, len(data)):
         if i % 2 == 0:
-            ts.add("BACKGROUND", (0,i), (-1,i), C_ROW_ALT)
-    tbl.setStyle(ts)
+            style.append(("BACKGROUND", (0, i), (-1, i), T.TBL_ZEBRA))
+    tbl.setStyle(TableStyle(style))
     return tbl
 
 
-# ── Cover page ────────────────────────────────────────────────────────────────
-def cover_page(version: str = "2.0") -> list:
-    from datetime import datetime
-    now = datetime.now().strftime("%Y-%m-%d")
+class HRule(Flowable):
+    def __init__(self, width, colour=None, thickness=0.6):
+        super().__init__()
+        self.width, self.colour, self.thickness = width, colour or T.RULE, thickness
 
-    banner = Table(
-        [[Paragraph("AI Transit Pipeline", S["h1"])],
-         [Paragraph("Installation Guide", S["h1"])],
-         [Paragraph(f"Version {version}  ·  {now}", S["h1sub"])]],
-        colWidths=[CONTENT_W]
-    )
-    banner.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), C_DARK),
-        ("TOPPADDING", (0,0), (-1,-1), 18),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 18),
-        ("LEFTPADDING", (0,0), (-1,-1), 20),
-        ("RIGHTPADDING", (0,0), (-1,-1), 20),
-    ]))
+    def wrap(self, *_):
+        return self.width, 6
 
-    scope = Table([[Paragraph(
-        "Applicable to: <font face='Courier' size='8'>fetch_repo.sh  ·  scan_pipeline.sh  ·  "
-        "ai_transit.sh  ·  generate_excel_report.py  ·  selfcheck.py</font>",
-        ParagraphStyle("scope", fontSize=9, fontName="Helvetica",
-                       textColor=C_SUBTEXT, alignment=TA_CENTER)
-    )]], colWidths=[CONTENT_W])
-    scope.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), C_BLUE_LT),
-        ("TOPPADDING", (0,0), (-1,-1), 8),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
-        ("BOX", (0,0), (-1,-1), 0.5, C_BORDER),
-    ]))
-
-    return [banner, Spacer(1, 10*pt), scope, PageBreak()]
+    def draw(self):
+        self.canv.setStrokeColor(self.colour)
+        self.canv.setLineWidth(self.thickness)
+        self.canv.line(0, 3, self.width, 3)
 
 
-# ── Main parser ───────────────────────────────────────────────────────────────
-def md_to_story(md_text: str) -> list:
-    story = []
-    lines = md_text.splitlines()
-    i = 0
-    n = len(lines)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Document
+# ═══════════════════════════════════════════════════════════════════════════════
+class GuideDoc(BaseDocTemplate):
+    def __init__(self, filename, title, **kw):
+        super().__init__(filename, pagesize=A4, leftMargin=MARGIN,
+                         rightMargin=MARGIN, topMargin=2.4 * cm,
+                         bottomMargin=1.9 * cm,
+                         title=title, author="AI Transit Pipeline", **kw)
+        self.doc_title = title
+        self.section = ""
+        frame = Frame(MARGIN, MARGIN, CONTENT_W, PAGE_H - 4.3 * cm, id='body')
+        self.addPageTemplates([
+            PageTemplate(id='cover', frames=[frame]),
+            PageTemplate(id='main', frames=[frame], onPageEnd=self._furniture),
+        ])
 
-    # Skip leading YAML / title block (first H1 becomes the cover)
-    first_h1_done = False
+    def afterFlowable(self, flowable):
+        style = getattr(flowable, 'style', None)
+        name = getattr(style, 'name', '')
+        if name not in ('H1', 'H2'):
+            return
+        try:
+            text = flowable.getPlainText()
+        except Exception:
+            return
+        if not text.strip() or text.strip().lower() == 'contents':
+            return
+        if name == 'H1':
+            self.section = text
+            self.notify('TOCEntry', (0, text, self.page))
+        else:
+            self.notify('TOCEntry', (1, text, self.page))
 
-    while i < n:
-        line = lines[i]
-
-        # ── Skip pure horizontal rules at top level (we generate our own)
-        if re.match(r'^---+\s*$', line):
-            i += 1
-            continue
-
-        # ── H1
-        if line.startswith("# ") and not first_h1_done:
-            first_h1_done = True
-            story.extend(cover_page())
-            i += 1
-            continue
-
-        # ── Version subtitle under H1 (bold line)
-        if line.startswith("**Version"):
-            i += 1
-            continue
-
-        # ── Table of Contents header
-        if line.strip() in ("## Table of Contents", "## Table of contents"):
-            story.append(section_banner("Table of Contents"))
-            story.append(Spacer(1, 6*pt))
-            i += 1
-            # Collect TOC lines until next blank + heading
-            toc_items = []
-            while i < n and not lines[i].startswith("## ") and not re.match(r'^---', lines[i]):
-                tl = lines[i].strip()
-                if re.match(r'^\d+\.', tl):
-                    # top-level item
-                    label = re.sub(r'^\d+\.\s*\[(.+?)\]\(.*?\)', r'\1', tl)
-                    label = re.sub(r'^\d+\.\s*', '', label)
-                    toc_items.append(Paragraph(f"• {inline(label)}", S["toc_h"]))
-                elif tl.startswith("-"):
-                    label = re.sub(r'^-\s*\[(.+?)\]\(.*?\)', r'\1', tl)
-                    label = re.sub(r'^-\s*', '', label)
-                    toc_items.append(Paragraph(f"  – {inline(label)}", S["toc_i"]))
-                i += 1
-            if toc_items:
-                story.extend(toc_items)
-            story.append(Spacer(1, 10*pt))
-            continue
-
-        # ── H2
-        if line.startswith("## "):
-            title = line[3:].strip()
-            # Strip anchor suffixes like {#self-scan}
-            title = re.sub(r'\s*\{#[^}]+\}', '', title)
-            story.append(Spacer(1, 14*pt))
-            story.append(KeepTogether([section_banner(title), Spacer(1, 6*pt)]))
-            i += 1
-            continue
-
-        # ── H3
-        if line.startswith("### "):
-            title = line[4:].strip()
-            story.append(Spacer(1, 8*pt))
-            story.append(Paragraph(inline(title), S["h3"]))
-            story.append(Spacer(1, 2*pt))
-            i += 1
-            continue
-
-        # ── H4
-        if line.startswith("#### "):
-            title = line[5:].strip()
-            story.append(Paragraph(f"<b>{inline(title)}</b>", S["body"]))
-            i += 1
-            continue
-
-        # ── Fenced code block
-        if line.strip().startswith("```"):
-            i += 1
-            code_lines = []
-            while i < n and not lines[i].strip().startswith("```"):
-                code_lines.append(lines[i])
-                i += 1
-            i += 1  # closing ```
-            if code_lines:
-                story.append(Spacer(1, 4*pt))
-                story.append(CodeBlock(code_lines))
-                story.append(Spacer(1, 6*pt))
-            continue
-
-        # ── Markdown table
-        if "|" in line and i + 1 < n and re.match(r'^\s*\|?[-:| ]+\|?\s*$', lines[i+1]):
-            table_lines = []
-            while i < n and "|" in lines[i]:
-                table_lines.append(lines[i])
-                i += 1
-            tbl = parse_md_table(table_lines)
-            if tbl:
-                story.append(Spacer(1, 4*pt))
-                story.append(tbl)
-                story.append(Spacer(1, 6*pt))
-            continue
-
-        # ── Blockquote
-        if line.startswith("> "):
-            quote_lines = []
-            while i < n and lines[i].startswith("> "):
-                quote_lines.append(lines[i][2:])
-                i += 1
-            paras = []
-            for ql in quote_lines:
-                if ql.startswith("```"):
-                    continue  # skip nested code in quotes
-                if ql.strip():
-                    paras.append(Paragraph(inline(ql), S["quote"]))
-            if paras:
-                story.append(Spacer(1, 4*pt))
-                story.append(QuoteBlock(paras))
-                story.append(Spacer(1, 6*pt))
-            continue
-
-        # ── Bullet list
-        bullet_match = re.match(r'^(\s*)([-*])\s+(.*)', line)
-        if bullet_match:
-            indent_len = len(bullet_match.group(1))
-            style = S["subbullet"] if indent_len >= 2 else S["bullet"]
-            story.append(Paragraph(f"• {inline(bullet_match.group(3))}", style))
-            i += 1
-            continue
-
-        # ── Numbered list
-        num_match = re.match(r'^(\s*)\d+\.\s+(.*)', line)
-        if num_match:
-            indent_len = len(num_match.group(1))
-            style = S["subbullet"] if indent_len >= 2 else S["bullet"]
-            story.append(Paragraph(f"{inline(num_match.group(2))}", style))
-            i += 1
-            continue
-
-        # ── Blank line → small spacer
-        if not line.strip():
-            story.append(Spacer(1, 5*pt))
-            i += 1
-            continue
-
-        # ── Regular paragraph
-        story.append(Paragraph(inline(line.strip()), S["body"]))
-        i += 1
-
-    return story
-
-
-# ── Page template ─────────────────────────────────────────────────────────────
-class DocTemplate(SimpleDocTemplate):
-    def __init__(self, filename, **kw):
-        super().__init__(filename, **kw)
-        self._page_num = 0
-
-    def handle_pageBegin(self):
-        super().handle_pageBegin()
-        self._page_num += 1
-
-    def afterPage(self):
-        canvas = self.canv
+    def _furniture(self, canvas, doc):
+        # onPageEnd, not onPage: onPage fires before this page's flowables are
+        # laid out, so the header would name the previous section.
         canvas.saveState()
-        # Footer bar
-        canvas.setFillColor(C_DARK)
-        canvas.rect(MARGIN, 1.0*cm, PAGE_W - 2*MARGIN, 0.5*cm, fill=1, stroke=0)
-        canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(C_WHITE)
-        canvas.drawString(MARGIN + 4, 1.15*cm,
-                          "AI Transit Pipeline — Installation Guide v2.0")
-        canvas.drawRightString(PAGE_W - MARGIN - 4, 1.15*cm,
-                               f"Page {self._page_num}")
+        y = PAGE_H - 1.45 * cm
+        canvas.setFont(T.FONT_BODY, 7.2)
+        canvas.setFillColor(T.MUTED)
+        canvas.drawString(MARGIN, y, self.section[:74])
+        canvas.drawRightString(PAGE_W - MARGIN, y, self.doc_title)
+        canvas.setStrokeColor(T.RULE)
+        canvas.setLineWidth(0.5)
+        canvas.line(MARGIN, y - 4.5, PAGE_W - MARGIN, y - 4.5)
+
+        canvas.setFillColor(T.NAVY)
+        canvas.rect(PAGE_W - MARGIN - 26, 1.15 * cm, 26, 12, stroke=0, fill=1)
+        canvas.setFillColor(HexColor("#FFFFFF"))
+        canvas.setFont(T.FONT_BOLD, 7.5)
+        canvas.drawCentredString(PAGE_W - MARGIN - 13, 1.15 * cm + 3.4,
+                                 str(doc.page))
         canvas.restoreState()
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+def cover(meta) -> list:
+    title, subtitle, version, groups = meta
+    band = Table([[Paragraph(title, S["cover_title"])],
+                  [Spacer(1, 6)],
+                  [Paragraph(subtitle, S["cover_sub"])]],
+                 colWidths=[CONTENT_W])
+    band.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), T.NAVY),
+        ("TOPPADDING", (0, 0), (-1, -1), 30),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 30),
+        ("LEFTPADDING", (0, 0), (-1, -1), 24),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 24),
+    ]))
+
+    story = [Spacer(1, 62), band, Spacer(1, 26)]
+
+    if groups:
+        rows = [[Paragraph(f"<b>{k}</b>", S["td"]),
+                 Paragraph(v, S["td_mono"])] for k, v in groups]
+        t = Table(rows, colWidths=[CONTENT_W * 0.22, CONTENT_W * 0.78])
+        t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("LINEBELOW", (0, 0), (-1, -2), 0.4, T.RULE),
+        ]))
+        story += [Paragraph("COMPONENTS", S["cover_kicker"]), Spacer(1, 8), t]
+
+    story += [
+        Spacer(1, 30), HRule(CONTENT_W),
+        Spacer(1, 10),
+        Paragraph(f"Version {version} &nbsp;·&nbsp; "
+                  f"{datetime.utcnow().strftime('%Y-%m-%d')}", S["cover_meta"]),
+        Paragraph("6-layer security gateway for AI-generated repositories",
+                  S["cover_meta"]),
+        NextPageTemplate('main'),      # furniture starts on the page after this
+        PageBreak(),
+    ]
+    return story
+
+
+def read_meta(md: str):
+    """Title, subtitle, version and the component list from the file header."""
+    lines = md.split('\n')
+    title = lines[0].lstrip('# ').strip() if lines else "Guide"
+    subtitle, version, groups = "", "1.0", []
+    for l in lines[1:24]:
+        m = re.match(r'\*\*Version\s+([0-9.]+)\*\*', l.strip())
+        if m:
+            version = m.group(1)
+            continue
+        m = re.match(r'^(\w[\w\- ]*):\s+(.+)$', l.strip())
+        if m and '`' in m.group(2):
+            groups.append((m.group(1),
+                           m.group(2).replace('`', '').replace(' · ', '  ·  ')))
+    if ' — ' in title:
+        title, subtitle = title.split(' — ', 1)
+    return title, subtitle, version, groups
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Parser
+# ═══════════════════════════════════════════════════════════════════════════════
+H_RE = re.compile(r'^(#{1,4})\s+(.*)$')
+NUM_RE = re.compile(r'^(\d+(?:\.\d+)?)\.\s+(.*)$')
+BULLET_RE = re.compile(r'^(\s*)[-*+]\s+(.*)$')
+OLIST_RE = re.compile(r'^\s*(\d+)\.\s+(.*)$')
+
+
+def md_to_story(md: str, toc) -> list:
+    lines = md.split('\n')
+    n = len(lines)
+    story, para_buf = [], []
+
+    # Skip the front matter: the title, version and component lines are already
+    # rendered on the cover, and repeating them as body text at the top of the
+    # first section reads like a mistake. Start at the first H2.
+    i = 0
+    for j, l in enumerate(lines):
+        if l.startswith('## '):
+            i = j
+            break
+    seen_first_h1 = True
+
+    def flush_para():
+        """Join buffered lines into ONE paragraph.
+
+        The previous builder emitted a Paragraph per source line, so the PDF
+        reproduced the markdown's source wrapping and any bold or code span
+        crossing a newline printed its literal markers.
+        """
+        if not para_buf:
+            return
+        text = " ".join(x.strip() for x in para_buf).strip()
+        para_buf.clear()
+        if text:
+            story.append(Paragraph(inline(text), S["body"]))
+
+    guard = 0
+    while i < n:
+        # A branch that forgets to advance i turns the parser into an infinite
+        # loop that looks like a hang rather than an error. Fail loudly instead.
+        guard += 1
+        if guard > 10 * n + 1000:
+            raise RuntimeError(
+                f"parser made no progress near line {i}: {lines[i][:80]!r}")
+        line = lines[i]
+        stripped = line.strip()
+
+        # Headings ────────────────────────────────────────────────────────────
+        m = H_RE.match(line)
+        if m:
+            flush_para()
+            level, raw = len(m.group(1)), strip_anchor(m.group(2))
+            if level == 1:
+                if not seen_first_h1:       # document title, already on cover
+                    seen_first_h1 = True
+                    i += 1
+                    continue
+                story.append(Paragraph(inline(raw), S["H2"]))
+            elif level == 2:
+                if raw.lower().startswith('table of contents'):
+                    # Replaced by the generated TOC; skip the hand-written list.
+                    i += 1
+                    while i < n and not H_RE.match(lines[i]):
+                        i += 1
+                    continue
+                nm = NUM_RE.match(raw)
+                number, title = (nm.group(1), nm.group(2)) if nm else ("", raw)
+                story.append(Spacer(1, 12))
+                story.append(KeepTogether([SectionBanner(number, title),
+                                           Spacer(1, 8)]))
+                for fn, cap in FIGURES.get(strip_anchor(raw), []):
+                    story.extend(figure_flowables(fn, cap))
+            elif level == 3:
+                story.append(Paragraph(inline(raw), S["H2"]))
+                for fn, cap in FIGURES.get(strip_anchor(raw), []):
+                    story.extend(figure_flowables(fn, cap))
+            else:
+                story.append(Paragraph(inline(raw), S["H3"]))
+            i += 1
+            continue
+
+        # Fenced code ─────────────────────────────────────────────────────────
+        if stripped.startswith('```'):
+            flush_para()
+            i += 1
+            buf = []
+            while i < n and not lines[i].strip().startswith('```'):
+                buf.append(lines[i])
+                i += 1
+            i += 1
+            if buf:
+                story.append(Spacer(1, 3))
+                story.append(CodeBlock(buf))
+                story.append(Spacer(1, 7))
+            continue
+
+        # Blockquote ──────────────────────────────────────────────────────────
+        if stripped.startswith('>'):
+            flush_para()
+            buf = []
+            while i < n and lines[i].strip().startswith('>'):
+                buf.append(lines[i].strip().lstrip('>').strip())
+                i += 1
+            story.append(Spacer(1, 3))
+            story.append(Callout(buf))
+            story.append(Spacer(1, 8))
+            continue
+
+        # Table ───────────────────────────────────────────────────────────────
+        if stripped.startswith('|') and i + 1 < n and \
+                re.match(r'^\s*\|[\s:|-]+\|\s*$', lines[i + 1]):
+            flush_para()
+            buf = []
+            while i < n and lines[i].strip().startswith('|'):
+                buf.append(lines[i])
+                i += 1
+            tbl = parse_table(buf)
+            if tbl is not None:
+                story.append(Spacer(1, 4))
+                story.append(tbl)
+                story.append(Spacer(1, 9))
+            continue
+
+        # Horizontal rule ─────────────────────────────────────────────────────
+        if re.match(r'^\s*(-{3,}|\*{3,}|_{3,})\s*$', line):
+            flush_para()
+            story.append(Spacer(1, 5))
+            i += 1                 # without this the first --- loops forever
+            continue
+
+        # Lists ───────────────────────────────────────────────────────────────
+        bm = BULLET_RE.match(line)
+        if bm:
+            flush_para()
+            depth = len(bm.group(1)) // 2
+            st = T.ParagraphStyle(f"b{depth}", parent=S["bullet"],
+                                  leftIndent=14 + depth * 12,
+                                  bulletIndent=4 + depth * 12)
+            story.append(Paragraph(inline(bm.group(2)), st, bulletText="•"))
+            i += 1
+            continue
+
+        om = OLIST_RE.match(line)
+        if om and not H_RE.match(line):
+            flush_para()
+            story.append(Paragraph(inline(om.group(2)), S["bullet"],
+                                   bulletText=f"{om.group(1)}."))
+            i += 1
+            continue
+
+        # Blank line ends a paragraph ─────────────────────────────────────────
+        if not stripped:
+            flush_para()
+            i += 1
+            continue
+
+        para_buf.append(line)
+        i += 1
+
+    flush_para()
+    return story
+
+
+def figure_flowables(fn, caption):
+    """Render one figure, skipping it if it raises rather than losing the build."""
+    try:
+        flow = fn(CONTENT_W)
+    except Exception as exc:
+        if os.environ.get("PDF_DEBUG"):
+            print(f"[warn] figure failed: {exc}", file=sys.stderr)
+        return []
+    out = [Spacer(1, 6), flow]
+    if caption:
+        out.append(Paragraph(caption, S["caption"]))
+    else:
+        out.append(Spacer(1, 8))
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 def main():
-    md_path  = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("INSTALL.md")
-    pdf_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("AI_Transit_Pipeline_INSTALL.pdf")
+    src = sys.argv[1] if len(sys.argv) > 1 else "INSTALL.md"
+    out = sys.argv[2] if len(sys.argv) > 2 else "AI_Transit_Pipeline_INSTALL.pdf"
 
-    if not md_path.exists():
-        print(f"[ERROR] {md_path} not found", file=sys.stderr)
-        sys.exit(1)
+    md = open(src, encoding="utf-8").read()
+    meta = read_meta(md)
+    title, subtitle, version, _ = meta
+    doc_title = f"{title} — {subtitle}" if subtitle else title
 
-    print(f"Parsing {md_path} …")
-    text = md_path.read_text(encoding="utf-8")
+    print(f"Parsing {src} …")
+    doc = GuideDoc(out, doc_title)
 
-    story = md_to_story(text)
+    toc = TableOfContents()
+    toc.levelStyles = [S["toc0"], S["toc1"]]
 
-    print(f"Building PDF …")
-    doc = DocTemplate(
-        str(pdf_path),
-        pagesize=A4,
-        leftMargin=MARGIN, rightMargin=MARGIN,
-        topMargin=2.0*cm, bottomMargin=2.0*cm,
-        title="AI Transit Pipeline — Installation Guide",
-        author="AI Transit Pipeline",
-    )
-    doc.build(story)
-    size_kb = pdf_path.stat().st_size // 1024
-    print(f"[OK] {pdf_path}  ({size_kb} KB)")
+    story = cover(meta)
+    story += [Paragraph("Contents", S["H2"]), Spacer(1, 6), HRule(CONTENT_W),
+              Spacer(1, 8), toc, PageBreak()]
+    story += md_to_story(md, toc)
+
+    print(f"Building PDF … ({len(FIGURES)} figure slot(s), "
+          f"fonts: {'DejaVu' if T.HAS_DEJAVU else 'base'})")
+    # multiBuild runs the passes needed to resolve TOC page numbers.
+    doc.multiBuild(story)
+
+    kb = os.path.getsize(out) // 1024
+    print(f"[OK] {out}  ({kb} KB)")
 
 
 if __name__ == "__main__":
