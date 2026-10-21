@@ -230,6 +230,26 @@ for p,i in d.get('file_results',{}).items():
         assert_not_contains "$(line_for benign_doc.pdf)" "stream_filter_not_decoded" \
             "does NOT report an undecoded filter for an ordinary document"
 
+        # ── Makefiles ────────────────────────────────────────────────────────
+        # A Makefile recipe is shell, and $(shell ...) runs when make merely
+        # READS the file — before any target is invoked — so a malicious one
+        # does not need to be built to do damage.
+        assert_contains "$(line_for evil.mk)" "CWE-78:make_curl_pipe_shell" \
+            "Makefile piping a download into a shell is flagged"
+        assert_contains "$(line_for evil.mk)" "CWE-798:make_hardcoded_credential" \
+            "unquoted credential in a Makefile variable is flagged"
+        assert_contains "$(line_for evil.mk)" "CWE-494:make_download_without_cert" \
+            "Makefile disabling TLS verification is flagged"
+        assert_contains "$(line_for evil.mk)" "make_reverse_shell" \
+            "Makefile reverse shell is flagged"
+        assert_contains "$(line_for evil.mk)" "CWE-912:make_persistence" \
+            "Makefile installing cron/authorized_keys persistence is flagged"
+
+        # A file called Makefile has no extension, so it reaches scan_makefile
+        # only via the basename branch of classify_file.
+        assert_contains "$(line_for Makefile)" "CWE-798:make_hardcoded_credential" \
+            "extensionless Makefile is routed by basename, not extension"
+
         # ── False-positive guards: these must NOT be flagged ─────────────────
         # Regression guard for the P8 fix: the parameterised query form is the
         # correct, safe pattern and must never be reported as an injection.
@@ -245,6 +265,15 @@ for p,i in d.get('file_results',{}).items():
         # font, so it carries /AAAAAA+DejaVuSans tags; an unanchored /AA rule
         # reads those as an AdditionalActions key and would block this project's
         # own installation guide.
+        # An ordinary Makefile must stay clean. `rm -rf $(BUILD)` in a clean
+        # target and a bare `$(shell git rev-parse)` are the most common
+        # constructs there are; a rule broad enough to flag them is unusable.
+        SAFE_MK=$(echo "$F" | grep 'safe.mk' || true)
+        assert_not_contains "$SAFE_MK" "CWE-78" \
+            "does NOT flag rm -rf \$(BUILD) or a non-fetching \$(shell ...)"
+        assert_not_contains "$SAFE_MK" "CWE-798" \
+            "does NOT flag a Makefile credential sourced from the environment"
+
         SAFE_PDF=$(echo "$F" | grep 'benign_doc.pdf' || true)
         assert_not_contains "$SAFE_PDF" "PDF_auto_execute" \
             "does NOT read a /AAAAAA+ font subset tag as an /AA auto-action"

@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream inflation + anchored name rules) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -218,6 +218,53 @@ and confirm `PASS` with no findings.
 
 **Remaining gap:** an encrypted PDF (`/Encrypt`, or a `/Crypt` stream filter) is
 WARNed about but not decrypted, so its streams go uninspected.
+
+## Makefile scanning
+
+`scan_makefile()` handles `.mk`, `.mak`, `.make` by extension and
+`Makefile*` / `makefile*` / `GNUmakefile*` by basename — the basename branch is
+required because `Makefile` contains no dot, so `${f##*.}` yields the whole path
+and the extension branch cannot route it.
+
+Recipe lines are shell, so what `scan_shell` covers applies here too. Two things
+make a Makefile a worse problem than a shell script:
+
+- **`$(shell …)` runs at parse time**, before any target. `make -n`, or `make`
+  with a mistyped target, is enough to fire it — a hostile Makefile does not
+  need to be built to act. The rule names the fetching commands rather than
+  matching `$(shell …)` generally, because `$(shell git rev-parse)` is ordinary.
+- **Assignments are unquoted**, so `PASSWORD = hunter2` is invisible to the
+  universal CWE-798 rule, which requires a quote after the `=`. Hence the
+  credential rule repeated in `scan_makefile`, via `grep_check_i` because
+  Makefile variables are upper-case by convention.
+
+**FAIL:** download piped into a shell · parse-time fetch · base64-decoded
+payload executed · reverse shell · hardcoded credential · TLS verification
+disabled · setuid/setgid bit · cron/`authorized_keys` persistence · `rm -rf` of
+`/` or `$HOME`.
+**WARN:** `sudo` in a recipe · `chmod 777` · plaintext `http://` download ·
+clone-and-build from a remote.
+
+**False positives are the whole difficulty here** — the dangerous commands look
+almost identical to the ordinary ones. `rm -rf $(BUILD)` in a clean target and
+`curl -o file url` in a fetch target are the most common rules in any Makefile,
+so the destructive-delete rule matches only when the target is exactly `/`, `~`
+or `$HOME`, and the download rule requires the pipe into a shell.
+`tests/fixtures/rules/safe.mk` guards that distinction.
+
+**Validation:** 88 real Makefiles taken off a Debian host (dpkg, java, vim,
+postgresql build fragments) produce **zero findings of any kind**. Re-run that
+check after changing these rules:
+
+```bash
+find / \( -name 'Makefile' -o -name '*.mk' \) -type f 2>/dev/null \
+  | grep -v "$PWD" | while read -r p; do cp "$p" /tmp/realmk/$RANDOM.mk; done
+WORK_DIR=/tmp/mkcheck bash scan_pipeline.sh /tmp/realmk --quiet
+```
+
+There is deliberately **no rule for a bare `$(eval …)`**: it fired on 7 of those
+88 as ordinary metaprogramming, and the dangerous composition
+`$(eval $(shell curl …))` is already a FAIL under the parse-time fetch rule.
 
 ## Files with unknown extensions
 

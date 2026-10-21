@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 84/84 passed
+./tests/run_tests.sh          # Expected: ✔ 92/92 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 84/84 passed
+# Expected: ✔ 92/92 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1561,6 +1561,7 @@ tool; nothing to stage, no flags required.
 | YARA | L1 | Reads your own `.yar` files from `$WORK_DIR/yara-rules/` |
 | grep built-ins | L4 | CWE-798/22/918/327/338 patterns, entirely local |
 | PDF scanner (`scan_pdf`) | L5 | Built in; needs only `python3` and its standard library — no signatures, no rules to stage, no network at any point |
+| Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Bandit | L5 | Local Python AST analysis |
 | ShellCheck | L5 | Local |
 | cppcheck | L5 | Local |
@@ -1592,7 +1593,50 @@ emits an `OFFLINE:` warning so the gap is on the record.
 The single practical consequence: **trivy is the only dependency-CVE coverage
 you have offline.** If its database is not staged, Layer 3 contributes nothing.
 
-### 11.2.1 PDF scanning — no staging, and why that matters
+### 11.2.1 Build files — `Makefile`, `.mk`, `.mak`
+
+`scan_makefile` covers `.mk`, `.mak` and `.make` by extension, and `Makefile`,
+`makefile` and `GNUmakefile` by name. It is pure pattern matching, so it needs
+nothing staged and behaves identically offline.
+
+It exists because a Makefile is more dangerous than it looks. Recipe lines are
+shell, and `$(shell …)` is evaluated when make **reads** the file — before any
+target runs. `make -n`, or `make` with a mistyped target name, is enough to fire
+it, so a hostile Makefile does not need to be built to act. Separately, Makefile
+assignments carry no quotes, which means `PASSWORD = hunter2` slips past the
+universal credential rule (that one requires a quote after the `=`).
+
+**FAIL:** a download piped into a shell · a `$(shell …)` that fetches · a
+base64-decoded payload executed · a reverse shell · a hardcoded credential ·
+TLS verification disabled · a setuid/setgid bit · cron or `authorized_keys`
+persistence · `rm -rf` of `/` or `$HOME`.
+
+**WARN:** `sudo` in a recipe · `chmod 777` · a plaintext `http://` download ·
+clone-and-build from a remote repository.
+
+The rules are deliberately narrow, because in a Makefile the dangerous commands
+look almost exactly like the ordinary ones:
+
+| Ordinary — never reported | Reported |
+|---------------------------|----------|
+| `rm -rf $(BUILD)` in a clean target | `rm -rf /` |
+| `curl -fsSL url -o file` | `curl -fsSL url \| sh` |
+| `$(shell git rev-parse --short HEAD)` | `$(shell curl -s url)` |
+| `API_KEY ?=` / `TOKEN = $(CI_TOKEN)` | `PASSWORD = hunter2` |
+| `install -m 0755 prog /usr/bin` | `install -m 4755 prog /usr/bin` |
+
+Verify both directions:
+
+```bash
+WORK_DIR=/tmp/mkcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected: evil.mk FAIL (all ten rules), Makefile FAIL (credential only),
+#           safe.mk PASS with no findings at all.
+```
+
+As a false-positive check, 88 real Makefiles collected from a Debian host —
+dpkg, java, vim and postgresql build fragments — produce **zero findings**.
+
+### 11.2.2 PDF scanning — no staging, and why that matters
 
 `scan_pdf` is the one content-inspection layer with no perishable data behind
 it. It needs `python3` and its standard library and nothing else: no signature
@@ -1928,7 +1972,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 84/84 passed
+# Expected: ✔ 92/92 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2367,7 +2411,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  84/84 passed
+  ✔  92/92 passed
 ```
 
 ### 17.1 What each layer covers

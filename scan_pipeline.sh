@@ -240,6 +240,10 @@ record_fail() {
 
 # grep helper: returns 0 if pattern found, never fails the script
 grep_check() { grep -qE "$1" "$2" 2>/dev/null; }
+# Case-insensitive variant. Needed where a convention fixes the case of the
+# thing being matched rather than the rule: Makefile variables are upper-case by
+# convention, so a lower-case PASSWORD pattern would never fire on one.
+grep_check_i() { grep -qiE "$1" "$2" 2>/dev/null; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 1 — GLOBAL (malware, secrets, AV)
@@ -1244,6 +1248,113 @@ scan_archive() {
     fi
 }
 
+# ── Makefile ─────────────────────────────────────────────────────────────────
+# Recipe lines are shell, so the risks scan_shell covers apply here too. Two
+# things make a Makefile a worse problem than a shell script:
+#
+#   `$(shell ...)` is evaluated when make READS the file, before any target
+#   runs. `make -n`, or `make` with a mistyped target, is enough to fire it, so
+#   a hostile Makefile does not need to be built to act.
+#
+#   Assignments are unquoted, so `PASSWORD = hunter2` is invisible to the
+#   universal CWE-798 rule in scan_universal_patterns, which requires a quote
+#   after the `=`. Hence the credential rule repeated here.
+#
+# False positives are the real difficulty: the dangerous commands look almost
+# exactly like the ordinary ones. `rm -rf $(BUILD)` in a clean target and
+# `curl -o file url` in a fetch target are the most common rules in any
+# Makefile, and only `rm -rf /` and a download piped into a shell are findings.
+# tests/fixtures/rules/safe.mk is the guard for that distinction.
+scan_makefile() {
+    local f="$1"
+    local failed=false
+
+    # CWE-78 — download piped straight into a shell (the classic supply chain)
+    if grep_check '(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(ba|z|k)?sh\b' "$f"; then
+        record_fail "$f" "CWE-78:make_curl_pipe_shell_supply_chain"
+        failed=true
+    fi
+
+    # CWE-78 — a $(shell ...) that fetches. Runs at parse time, so it fires on
+    # any make invocation at all. A $(shell git rev-parse) does not fetch and
+    # must not be flagged, which is why this names the commands rather than
+    # matching $(shell ...) generally.
+    if grep_check '\$\(shell[^)]*\b(curl|wget|nc|ncat|ssh|scp)\b' "$f"; then
+        record_fail "$f" "CWE-78:make_shell_function_fetches_at_parse_time"
+        failed=true
+    fi
+
+    # CWE-78 — base64-decoded payload executed
+    if grep_check 'base64[[:space:]]+(-d|-D|--decode)[^|]*\|[[:space:]]*(ba)?sh\b' "$f"; then
+        record_fail "$f" "CWE-78:make_base64_decoded_payload_executed"
+        failed=true
+    fi
+
+    # CWE-78 — reverse shell. The leading word boundary matters: without it the
+    # "nc" alternative matches inside ordinary words such as `sync`.
+    if grep_check '(\b(nc|ncat|netcat)[[:space:]]+-[A-Za-z]*e[A-Za-z]*[[:space:]]|/dev/tcp/)' "$f"; then
+        record_fail "$f" "CWE-78:make_reverse_shell"
+        failed=true
+    fi
+
+    # CWE-798 — credential written into a variable. A value that is a variable
+    # reference ($(X), ${X}) or empty is the correct form and is excluded.
+    if grep_check_i \
+        '^[[:space:]]*(export[[:space:]]+)?[A-Za-z0-9_]*(password|passwd|secret|api_?key|token|credential)[A-Za-z0-9_]*[[:space:]]*[:+?!]?=[[:space:]]*[^[:space:]$]{6,}' \
+        "$f"; then
+        record_fail "$f" "CWE-798:make_hardcoded_credential"
+        failed=true
+    fi
+
+    # CWE-494 — download with certificate verification switched off
+    if grep_check '(curl[^|]*([[:space:]]-k\b|--insecure)|wget[^|]*--no-check-certificate)' "$f"; then
+        record_fail "$f" "CWE-494:make_download_without_certificate_verification"
+        failed=true
+    fi
+
+    # CWE-732 — setuid/setgid bit granted. `install -m 0755` is ordinary, so the
+    # mode must start with 2 or 4 to match.
+    if grep_check '(chmod[[:space:]]+[^;&|]*[ugo]*\+s|-m[[:space:]]*[24][0-7]{3})' "$f"; then
+        record_fail "$f" "CWE-732:make_setuid_or_setgid_bit"
+        failed=true
+    fi
+
+    # CWE-912 — persistence installed by a build step
+    if grep_check '(crontab|/etc/cron\.|authorized_keys|/etc/systemd/system)' "$f"; then
+        record_fail "$f" "CWE-912:make_persistence_cron_or_authorized_keys"
+        failed=true
+    fi
+
+    # Destructive delete of root or of the home directory. Deliberately narrow:
+    # the target must be exactly / or ~ or $HOME, so `rm -rf $(BUILD)` and
+    # `rm -rf dist` — the ordinary clean-target forms — are not matched.
+    if grep_check 'rm[[:space:]]+-[A-Za-z]*[rR][A-Za-z]*[[:space:]]+(/|~|\$\{?HOME\}?)([[:space:]]|/\*|$)' "$f"; then
+        record_fail "$f" "make:destructive_recursive_delete_of_root_or_home"
+        failed=true
+    fi
+
+    # ── Review-worthy, but ordinary enough not to block ──────────────────
+    if grep_check '(^[[:space:]]*sudo[[:space:]]|[[:space:]]sudo[[:space:]])' "$f"; then
+        record_warn "$f" "make:sudo_in_recipe_runs_as_root"
+    fi
+    if grep_check 'chmod[[:space:]]+(-[A-Za-z]+[[:space:]]+)*777' "$f"; then
+        record_warn "$f" "CWE-732:make_world_writable_chmod_777"
+    fi
+    if grep_check '(curl|wget)[^|]*http://' "$f"; then
+        record_warn "$f" "make:plaintext_http_download_no_transport_integrity"
+    fi
+    # No rule for a bare $(eval ...): it fired on 7 of 88 real Makefiles taken
+    # off this host — dpkg and java build fragments use it as ordinary
+    # metaprogramming — and it carries no security signal of its own, because
+    # the dangerous composition $(eval $(shell curl ...)) is already a FAIL
+    # under the parse-time fetch rule above.
+    if grep_check 'git[[:space:]]+clone[^;&|]*(http|git@)' "$f"; then
+        record_warn "$f" "make:clones_and_builds_from_a_remote_repository"
+    fi
+
+    $failed || record_pass "$f"
+}
+
 # ── PDF ───────────────────────────────────────────────────────────────────────
 # A PDF is a container, not a flat document: the format can auto-run JavaScript
 # the moment the file is opened, start an external program, and carry an embedded
@@ -1872,8 +1983,12 @@ classify_file() {
     # Run universal patterns on every file first
     scan_universal_patterns "$f"
 
+    # Basename dispatch, for build files that carry no extension. `Makefile`
+    # has no dot at all, so ${f##*.} yields the whole path and the extension
+    # branch below cannot route it.
     case "$base" in
-        Dockerfile*) scan_docker "$f"; return ;;
+        Dockerfile*)                          scan_docker   "$f"; return ;;
+        Makefile*|makefile*|GNUmakefile*)     scan_makefile "$f"; return ;;
     esac
 
     case ".$ext" in
@@ -1895,6 +2010,7 @@ classify_file() {
         .so|.dll|.dylib|.exe|.elf|.bin)  scan_binary     "$f" ;;
         .zip|.tar|.gz|.tgz|.bz2|.xz)    scan_archive    "$f" ;;
         .pdf)                             scan_pdf         "$f" ;;
+        .mk|.mak|.make)                 scan_makefile    "$f" ;;
         .sql)                             scan_sql         "$f" ;;
         .json)
             if grep_check \
@@ -2165,7 +2281,7 @@ report = {
     "repo_hash":    os.environ["REPORT_HASH"],
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
-                     "PDF-Active-Content"],
+                     "PDF-Active-Content", "Build-Script-Hardening"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},
