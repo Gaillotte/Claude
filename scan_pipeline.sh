@@ -1248,6 +1248,122 @@ scan_archive() {
     fi
 }
 
+# ── HTML ─────────────────────────────────────────────────────────────────────
+# Inline <script> is entirely ordinary, so the rules cannot target script
+# itself; they target the constructs that have no innocent explanation.
+#
+# Deciding which those are was done by measurement, not intuition: every rule
+# below was counted against 388 real HTML files taken off this host (Go tool
+# bundles, Playwright reports, gcloud and Python package documentation). The
+# figures in the comments are that count, and they are what separates a FAIL
+# from a WARN here. Two results in particular changed the design:
+#
+#   A bare unescape( appeared in real files as unescape(encodeURIComponent(x)),
+#   the standard UTF-8-to-byte-string idiom present in most bundled JS. So the
+#   rule requires a percent-encoded blob — unescape('%u9090…') — instead.
+#
+#   innerHTML appeared in 8 of 388. It is a genuine XSS sink but far too common
+#   to block on, so it warns.
+#
+# Generated HTML is the main false-positive risk, and most of it is already out
+# of scope: DEFAULT_EXCLUDE_DIRS prunes dist/, build/, coverage/ and
+# node_modules/ before any of this runs.
+scan_html() {
+    local f="$1"
+    local failed=false
+
+    # CWE-95 — dynamic code execution. 2 of 388, both the bundled Go trace
+    # viewer, which really does call eval; such a vendored file needs a
+    # .transit-allow.json entry rather than a weaker rule.
+    if grep_check_i '\beval[[:space:]]*\(' "$f"; then
+        record_fail "$f" "CWE-95:html_eval_dynamic_code_execution"
+        failed=true
+    fi
+
+    # CWE-95 — percent-encoded payload handed to unescape(). 0 of 388.
+    if grep_check_i 'unescape[[:space:]]*\([[:space:]]*["'"'"']?%' "$f"; then
+        record_fail "$f" "CWE-95:html_obfuscated_percent_encoded_payload"
+        failed=true
+    fi
+
+    # CWE-79 — document.write() fed from a decoder. 0 of 388.
+    if grep_check_i 'document\.write[[:space:]]*\([[:space:]]*(unescape|atob|String\.fromCharCode)' "$f"; then
+        record_fail "$f" "CWE-79:html_obfuscated_document_write"
+        failed=true
+    fi
+
+    # CWE-319 — script fetched over plaintext http://, so anyone on the path
+    # chooses what executes. 0 of 388. Protocol-relative //host only warns
+    # below, since on an https page it inherits https.
+    if grep_check_i '<script[^>]+src=["'"'"']?http://' "$f"; then
+        record_fail "$f" "CWE-319:html_remote_script_over_plaintext_http"
+        failed=true
+    fi
+
+    # CWE-1021 — an iframe with no visible size, the drive-by shape. 0 of 388;
+    # a bare display:none appeared in 8, hence the match is scoped to the tag.
+    if grep_check_i '<iframe[^>]*(display:[[:space:]]*none|visibility:[[:space:]]*hidden|width=["'"'"']?0["'"'"' ]|height=["'"'"']?0["'"'"' ])' "$f"; then
+        record_fail "$f" "CWE-1021:html_hidden_iframe"
+        failed=true
+    fi
+
+    # CWE-319 — <base href> over plaintext repoints every relative URL on the
+    # page, including scripts already loaded relatively. 0 of 388.
+    if grep_check_i '<base[^>]+href=["'"'"']?http://' "$f"; then
+        record_fail "$f" "CWE-319:html_base_href_plaintext_hijacks_relative_urls"
+        failed=true
+    fi
+
+    # CWE-319 — form posting credentials over plaintext. 0 of 388.
+    if grep_check_i '<form[^>]+action=["'"'"']?http://' "$f"; then
+        record_fail "$f" "CWE-319:html_form_posts_over_plaintext_http"
+        failed=true
+    fi
+
+    # CWE-798 — credential sitting in the markup. The universal rule cannot see
+    # these: it expects key = "value", whereas HTML splits the name and the
+    # value across two attributes. 0 of 388 for both forms.
+    if grep_check_i '(name|id)=["'"'"'][^"'"'"']*(api[_-]?key|password|passwd|secret|token)[^"'"'"']*["'"'"'][^>]*value=["'"'"'][^"'"'"']{6,}' "$f"; then
+        record_fail "$f" "CWE-798:html_hardcoded_credential_in_attribute"
+        failed=true
+    fi
+    if grep_check_i '<meta[^>]+(api[_-]?key|secret|token|password)[^>]+content=["'"'"'][^"'"'"']{6,}' "$f"; then
+        record_fail "$f" "CWE-798:html_hardcoded_credential_in_meta"
+        failed=true
+    fi
+
+    # CWE-200 — a cookie read wired to a network sink. Matched in both orders,
+    # because `new Image().src = '...' + document.cookie` puts the sink first,
+    # and bounded to a single statement by [^;], so an ordinary page that reads
+    # a cookie somewhere and calls fetch() elsewhere does not match. 0 of 388.
+    if grep_check_i '(document\.cookie[^;]{0,150}(fetch[[:space:]]*\(|XMLHttpRequest|sendBeacon|\.src[[:space:]]*=)|(fetch[[:space:]]*\(|XMLHttpRequest|sendBeacon|\.src[[:space:]]*=)[^;]{0,150}document\.cookie)' "$f"; then
+        record_fail "$f" "CWE-200:html_cookie_exfiltration_to_network_sink"
+        failed=true
+    fi
+
+    # ── Review-worthy, but too common to block ───────────────────────────
+    if grep_check_i '(innerHTML|outerHTML|insertAdjacentHTML)[[:space:]]*(=|\()' "$f"; then
+        record_warn "$f" "CWE-79:html_unsanitised_html_sink"      # 8 of 388
+    fi
+    if grep_check_i 'new[[:space:]]+Function[[:space:]]*\(' "$f"; then
+        record_warn "$f" "CWE-95:html_function_constructor"       # 2 of 388
+    fi
+    if grep_check_i '\batob[[:space:]]*\(' "$f"; then
+        record_warn "$f" "html:base64_decode_inspect_payload"     # 5 of 388
+    fi
+    if grep_check_i '<script[^>]+src=["'"'"']?//[a-z0-9]' "$f"; then
+        record_warn "$f" "html:protocol_relative_script_src"      # 1 of 388
+    fi
+    if grep_check_i '<meta[^>]+http-equiv=["'"'"']?refresh[^>]+url=[^"'"'"'>]*//' "$f"; then
+        record_warn "$f" "html:meta_refresh_external_redirect"    # 2 of 388
+    fi
+    if grep_check_i '(href|src)=["'"'"']?javascript:[^"'"'"'>;]' "$f"; then
+        record_warn "$f" "html:javascript_uri"                    # 0 of 388
+    fi
+
+    $failed || record_pass "$f"
+}
+
 # ── Makefile ─────────────────────────────────────────────────────────────────
 # Recipe lines are shell, so the risks scan_shell covers apply here too. Two
 # things make a Makefile a worse problem than a shell script:
@@ -2011,6 +2127,7 @@ classify_file() {
         .zip|.tar|.gz|.tgz|.bz2|.xz)    scan_archive    "$f" ;;
         .pdf)                             scan_pdf         "$f" ;;
         .mk|.mak|.make)                 scan_makefile    "$f" ;;
+        .html|.htm|.xhtml)              scan_html        "$f" ;;
         .sql)                             scan_sql         "$f" ;;
         .json)
             if grep_check \
@@ -2281,7 +2398,8 @@ report = {
     "repo_hash":    os.environ["REPORT_HASH"],
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
-                     "PDF-Active-Content", "Build-Script-Hardening"],
+                     "PDF-Active-Content", "Build-Script-Hardening",
+                     "HTML-Active-Content"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},

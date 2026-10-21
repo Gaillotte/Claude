@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("HTML scanner",      "L5", True,
+     "No active content, no credentials in markup",
+     "eval, http:// script, hidden iframe, cookie exfil → FAIL",
+     "innerHTML / atob / new Function → WARN"),
     ("Makefile scanner",  "L5", True,
      "No remote exec, no secrets",
      "curl|sh, reverse shell, credential, persistence → FAIL",
@@ -1720,7 +1724,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "92 assertions", [
+    ("Test suite", "102 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -219,6 +219,52 @@ and confirm `PASS` with no findings.
 **Remaining gap:** an encrypted PDF (`/Encrypt`, or a `/Crypt` stream filter) is
 WARNed about but not decrypted, so its streams go uninspected.
 
+## HTML scanning
+
+`scan_html()` handles `.html`, `.htm` and `.xhtml`. Inline `<script>` is
+entirely ordinary, so the rules cannot target script itself — they target
+constructs with no innocent explanation.
+
+**Which those are was decided by measurement, not intuition.** Every rule was
+counted against 388 real HTML files taken off this host (Go tool bundles,
+Playwright reports, gcloud and Python package docs), and the count appears in a
+comment beside each rule. Two results changed the design:
+
+- A bare `unescape(` appeared only as `unescape(encodeURIComponent(x))`, the
+  standard UTF-8-to-byte-string idiom in most bundled JS. The rule therefore
+  requires a percent-encoded blob — `unescape('%u9090…')`.
+- `innerHTML` appeared in 8 of 388. A genuine XSS sink, far too common to
+  block, so it warns.
+
+**FAIL** (each 0 of 388 unless noted): `eval(` *(2 of 388 — the bundled Go
+trace viewer genuinely calls eval; vendoring it needs a `.transit-allow.json`
+entry rather than a weaker rule)* · percent-encoded payload in `unescape()` ·
+`document.write()` fed from a decoder · `<script src="http://">` · hidden
+iframe (`display:none`, `visibility:hidden`, zero width/height) ·
+`<base href="http://">` · `<form action="http://">` · credential in a
+`name`/`value` attribute pair · credential in a `<meta content>` · cookie read
+wired to a network sink.
+
+**WARN:** `innerHTML`/`outerHTML`/`insertAdjacentHTML` · `new Function(` ·
+bare `atob(` · protocol-relative `<script src="//…">` · external meta refresh ·
+`javascript:` URI.
+
+Two rules need their shape explained:
+
+- **Credentials.** The universal CWE-798 rule expects `key = "value"`; HTML
+  splits the name and the value across two attributes, so
+  `<input name="api_key" value="sk_live_…">` is invisible to it. Hence the
+  attribute and `<meta>` rules here.
+- **Cookie exfiltration** is matched in *both* orders, because
+  `new Image().src = '…' + document.cookie` puts the sink first, and is bounded
+  to one statement by `[^;]` so a page that reads a cookie somewhere and calls
+  `fetch()` elsewhere does not match.
+
+Generated HTML is the main false-positive risk and most of it is already out of
+scope: `DEFAULT_EXCLUDE_DIRS` prunes `dist/`, `build/`, `coverage/` and
+`node_modules/` first. `tests/fixtures/rules/safe.html` is the negative guard
+and deliberately carries the near-miss of almost every rule above.
+
 ## Makefile scanning
 
 `scan_makefile()` handles `.mk`, `.mak`, `.make` by extension and
@@ -265,6 +311,31 @@ WORK_DIR=/tmp/mkcheck bash scan_pipeline.sh /tmp/realmk --quiet
 There is deliberately **no rule for a bare `$(eval …)`**: it fired on 7 of those
 88 as ordinary metaprogramming, and the dangerous composition
 `$(eval $(shell curl …))` is already a FAIL under the parse-time fetch rule.
+
+## Known false positives in the universal layer (L4)
+
+`scan_universal_patterns()` runs on **every** file, and two of its rules fire
+heavily on ordinary content. Measured against the two real-world corpora used to
+validate `scan_html` and `scan_makefile`:
+
+| Rule | Real Makefiles | Real HTML | What it actually matched |
+|------|---------------|-----------|--------------------------|
+| `CWE-22:path_traversal_pattern` | 27 of 88 (30%) | 254 of 388 (65%) | `-I../include`, `VPATH = ../src`, `href="../commands"` |
+| `CWE-321:hardcoded_crypto_key` | — | 3 of 388 | the words `CERTIFICATE` and `PRIVATE KEY` in prose |
+
+Both are **FAIL**, so they quarantine the repository. This matters more than the
+percentages suggest: a repo whose only HTML is ordinary generated documentation
+is blocked regardless of what `scan_html` concludes, which makes the per-type
+verdict largely moot for those file types.
+
+Neither is fixed yet, because both rules apply to every file type and narrowing
+them needs its own fixtures plus a check of what real traversal would stop being
+caught. The shape of the fix in each case:
+
+- `CWE-22` should require a traversal *context* — a path joined to input, or
+  `%2e%2e` encoding — rather than any literal `../`.
+- `CWE-321` should require a full PEM header (`-----BEGIN … KEY-----`) rather
+  than the bare words.
 
 ## Files with unknown extensions
 

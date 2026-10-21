@@ -250,6 +250,26 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for Makefile)" "CWE-798:make_hardcoded_credential" \
             "extensionless Makefile is routed by basename, not extension"
 
+        # ── HTML ─────────────────────────────────────────────────────────────
+        # Inline <script> is ordinary, so these rules target the constructs
+        # that are not: dynamic execution, a percent-encoded payload, a remote
+        # script over plaintext, a hidden iframe, credentials in the markup and
+        # a cookie read wired straight to a network sink.
+        assert_contains "$(line_for evil.html)" "CWE-95:html_eval" \
+            "HTML calling eval() is flagged"
+        assert_contains "$(line_for evil.html)" "CWE-319:html_remote_script" \
+            "HTML loading a remote script over http:// is flagged"
+        assert_contains "$(line_for evil.html)" "CWE-798:html_hardcoded_credential_in_attribute" \
+            "credential in an input value attribute is flagged"
+        assert_contains "$(line_for evil.html)" "CWE-200:html_cookie_exfiltration" \
+            "document.cookie wired to a network sink is flagged"
+        assert_contains "$(line_for evil.html)" "html_hidden_iframe" \
+            "zero-size or display:none iframe is flagged"
+
+        # .htm must route exactly as .html does.
+        assert_contains "$(line_for tracker.htm)" "html_hidden_iframe" \
+            ".htm is routed to the HTML scanner as well as .html"
+
         # ── False-positive guards: these must NOT be flagged ─────────────────
         # Regression guard for the P8 fix: the parameterised query form is the
         # correct, safe pattern and must never be reported as an injection.
@@ -273,6 +293,21 @@ for p,i in d.get('file_results',{}).items():
             "does NOT flag rm -rf \$(BUILD) or a non-fetching \$(shell ...)"
         assert_not_contains "$SAFE_MK" "CWE-798" \
             "does NOT flag a Makefile credential sourced from the environment"
+
+        # safe.html deliberately carries the near-miss of almost every rule
+        # above: unescape(encodeURIComponent(x)) — the standard UTF-8 idiom
+        # found in most bundled JS — an https script pinned with SRI, a
+        # visible iframe with real dimensions, a relative form action, and a
+        # cookie read in a different statement from its fetch().
+        SAFE_HTML=$(echo "$F" | grep 'safe.html' || true)
+        assert_not_contains "$SAFE_HTML" "CWE-95" \
+            "does NOT flag unescape(encodeURIComponent(x)) as a payload"
+        assert_not_contains "$SAFE_HTML" "CWE-319" \
+            "does NOT flag an https script or a relative form action"
+        assert_not_contains "$SAFE_HTML" "CWE-200" \
+            "does NOT flag a cookie read separate from its fetch()"
+        assert_not_contains "$SAFE_HTML" "html_hidden_iframe" \
+            "does NOT flag a visible iframe with real dimensions"
 
         SAFE_PDF=$(echo "$F" | grep 'benign_doc.pdf' || true)
         assert_not_contains "$SAFE_PDF" "PDF_auto_execute" \
