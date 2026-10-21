@@ -1,6 +1,83 @@
 #!/usr/bin/env bash
 # AI Transit Pipeline — multi-layer security scanner
 # Covers: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding · SCA/CVE · Licence
+set -euo pipefail
+
+# Require bash 4+ for associative arrays
+[[ ${BASH_VERSINFO[0]} -ge 4 ]] || { echo "[ERROR] bash 4+ required (on macOS: brew install bash)" >&2; exit 1; }
+
+WORK_DIR="${WORK_DIR:-/opt/ai-transit}"
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+VERBOSITY="${VERBOSITY:-normal}"    # quiet | normal | verbose
+MIN_SEVERITY="${MIN_SEVERITY:-high}" # low | medium | high | critical
+
+# Numeric severity threshold for record_fail — findings below this are WARNs
+declare -A _SEV_NUM=([low]=1 [medium]=2 [high]=3 [critical]=4)
+SEV_THRESHOLD="${_SEV_NUM[${MIN_SEVERITY,,}]:-3}"
+
+# ── Log functions ────────────────────────────────────────────────────────────
+# The Layer 5 progress indicator redraws one line on stderr with \r. Every log
+# helper clears that line first (\r + erase-to-end) so messages never get
+# printed on top of a partially-drawn progress line.
+_clr()   { [[ -t 2 ]] && printf "\r\033[K" >&2 || true; }
+log()    { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo "[$(date '+%H:%M:%S')] $*"; } || true; }
+info()   { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo -e "\033[34m[INFO]\033[0m  $*"; } || true; }
+warn()   { _clr; echo -e "\033[33m[WARN]\033[0m  $*" >&2; }
+ok()     { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo -e "\033[32m[OK]\033[0m    $*"; } || true; }
+fail()   { _clr; echo -e "\033[31m[FAIL]\033[0m  $*" >&2; exit 1; }
+fail_f() { _clr; echo -e "\033[31m[FAIL]\033[0m  $*" >&2; GLOBAL_VERDICT="FAIL"; }
+
+has_cmd() { command -v "$1" &>/dev/null; }
+
+# ── Layer coverage tracking ──────────────────────────────────────────────────
+# A verdict is only as meaningful as the layers that produced it. A layer can
+# fail to run for two unrelated reasons — the tool is not installed, or (offline)
+# its data was not staged — and both produce an empty result that is
+# indistinguishable from a clean one. Recording coverage explicitly lets a
+# consumer reject a PASS that rests on layers which never executed, instead of
+# grepping warning prose for the two cases separately.
+declare -A LAYER_COVERAGE
+record_layer() { LAYER_COVERAGE["$1"]="$2"; }   # "ran" | "skipped:<reason>"
+
+# ── Argument ─────────────────────────────────────────────────────────────────
+if [[ $# -lt 1 ]]; then
+    fail "Usage: $0 <directory_to_scan>  [VERBOSITY=quiet|normal|verbose]"
+fi
+
+SCAN_DIR="$1"
+[[ -d "$SCAN_DIR" ]] || fail "Directory not found: $SCAN_DIR"
+
+# ── Offline / air-gapped operation ───────────────────────────────────────────
+# Several scanners reach out to the network at SCAN time, not just install time:
+# semgrep fetches rulesets from its registry, trivy downloads a vulnerability
+# database, pip-audit/safety/npm audit query advisory services, and ScanCode's
+# --vulnerability option queries VulnerableCode.
+#
+# Without OFFLINE=true those calls are still attempted on an isolated host. They
+# do not crash the run (each is guarded), but they block on DNS and TCP timeouts
+# and then yield nothing — so Layer 2 and Layer 3 quietly contribute no findings
+# while the report still presents them as having run. A PASS produced that way
+# means very little, which is the dangerous part.
+#
+# OFFLINE=true instead: points each tool at locally staged data, passes the
+# flags that suppress update attempts and telemetry, and records an explicit
+# WARN naming any layer that genuinely cannot run without a network.
+OFFLINE="${OFFLINE:-false}"
+
+# Locations of pre-staged offline assets (see INSTALL.md §10).
+OFFLINE_CACHE="${OFFLINE_CACHE:-${WORK_DIR}/offline-cache}"
+SEMGREP_RULES_DIR="${SEMGREP_RULES_DIR:-${OFFLINE_CACHE}/semgrep-rules}"
+TRIVY_CACHE_DIR="${TRIVY_CACHE_DIR:-${OFFLINE_CACHE}/trivy-db}"
+CLAMAV_DB_DIR="${CLAMAV_DB_DIR:-${OFFLINE_CACHE}/clamav}"
+
+if [[ "$OFFLINE" == "true" ]]; then
+    info "Offline mode: no scanner will attempt a network call"
+    # Suppress telemetry that would otherwise block on a timeout.
+    export SEMGREP_SEND_METRICS=off
+    export DO_NOT_TRACK=1
+    export CHECKPOINT_DISABLE=1        # Terraform/checkov version check
+    export PIP_NO_INDEX=1
+fi
 
 # ── .transit-allow.json — exception allowlist ────────────────────────────────
 # Structure: [{"rule": "CWE-78", "path": "scripts/legacy.sh", "reason": "..."}]
@@ -32,38 +109,64 @@ for entry in entries:
     info "Allowlist: ${#ALLOW_MAP[@]} exception(s) loaded"
 fi
 
-# ── Utility Functions ─────────────────────────────────────────────────────────────────
-# The Layer 5 progress indicator redraws one line on stderr with \r. Every log
-# helper clears that line first (\r + erase-to-end) so messages never get
-# printed on top of a partially-drawn progress line.
-_clr()   { [[ -t 2 ]] && printf "\r\033[K" >&2 || true; }
-log()    { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo "[$(date '+%H:%M:%S')] $*"; } || true; }
-info()   { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo -e "\033[34m[INFO]\033[0m  $*"; } || true; }
-warn()   { _clr; echo -e "\033[33m[WARN]\033[0m  $*" >&2; }
-ok()     { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo -e "\033[32m[OK]\033[0m    $*"; } || true; }
-fail()   { _clr; echo -e "\033[31m[FAIL]\033[0m  $*" >&2; exit 1; }
-fail_f() { _clr; echo -e "\033[31m[FAIL]\033[0m  $*" >&2; GLOBAL_VERDICT="FAIL"; }
-has_cmd() { command -v "$1" &>/dev/null; }
+# ── Diff mode: restrict scan to changed files only ────────────────────────────
+# When SINCE_COMMIT was set, fetch_repo.sh writes a colon-separated file list.
+DIFF_FILES_ONLY=false
+declare -A DIFF_FILES_SET
+DIFF_FILES_PATH="${WORK_DIR}/.diff_files"
+if [[ -f "$DIFF_FILES_PATH" ]]; then
+    DIFF_FILES_ONLY=true
+    while IFS= read -r -d ':' f; do
+        [[ -f "$f" ]] && DIFF_FILES_SET["$f"]=1
+    done < "$DIFF_FILES_PATH"
+    info "Diff mode: ${#DIFF_FILES_SET[@]} file(s) will be scanned"
+fi
 
-# grep helper: returns 0 if pattern found, never fails the script
-grep_check() { grep -qE "$1" "$2" 2>/dev/null; }
+# ── Default excluded directories (always pruned from find) ───────────────────
+DEFAULT_EXCLUDE_DIRS=(
+    node_modules .git vendor .tox __pycache__ .venv venv
+    dist build .next .nuxt .cache target coverage
+)
 
-declare -A LAYER_COVERAGE
-declare -A LAYER_TOOL    # layer_id → tool name (e.g. "L1_secrets_entropy" → "detect-secrets")
-record_layer() { LAYER_COVERAGE["$1"]="$2"; }   # "ran" | "skipped:<reason>"
-record_layer_tool() { LAYER_TOOL["$1"]="$2"; }  # set tool name for a layer
+# ── .transitignore support ────────────────────────────────────────────────────
+# Read repo-level exclusion file (gitignore syntax: one path/pattern per line)
+TRANSITIGNORE="${SCAN_DIR}/.transitignore"
+EXTRA_EXCLUDE_DIRS=()
+if [[ -f "$TRANSITIGNORE" ]]; then
+    info ".transitignore found — loading exclusions"
+    while IFS= read -r pattern; do
+        [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+        EXTRA_EXCLUDE_DIRS+=("$pattern")
+    done < "$TRANSITIGNORE"
+fi
+
+# ── Build find prune arguments ────────────────────────────────────────────────
+FIND_PRUNE_ARGS=()
+for d in "${DEFAULT_EXCLUDE_DIRS[@]}" "${EXTRA_EXCLUDE_DIRS[@]}"; do
+    FIND_PRUNE_ARGS+=(-path "*/${d}" -prune -o -path "*/${d}/*" -prune -o)
+done
+
+# ── Semgrep / clamscan exclude flags from combined list ───────────────────────
+SEMGREP_EXCLUDES=()
+CLAMSCAN_EXCLUDES=()
+for d in "${DEFAULT_EXCLUDE_DIRS[@]}" "${EXTRA_EXCLUDE_DIRS[@]}"; do
+    SEMGREP_EXCLUDES+=(--exclude-dir "$d")
+    CLAMSCAN_EXCLUDES+=(--exclude-dir="$d")
+done
 
 GLOBAL_VERDICT="PASS"
-declare -A FINDINGS      # path → concatenated FAIL messages (kept for backward compat)
+declare -A FINDINGS      # path → concatenated FAIL messages
 declare -A FILE_STATUS   # path → PASS | FAIL | WARN
 declare -A FILE_MSG      # path → message
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
 
-# Structured finding records — JSON lines file created before scan starts
-FINDINGS_JL=""
+mkdir -p "${WORK_DIR}/reports" "${WORK_DIR}/quarantine" "${WORK_DIR}/approved"
+chmod 700 "${WORK_DIR}/quarantine"
 
+REPORT_JSON="${WORK_DIR}/reports/report_${TIMESTAMP}.json"
+REPORT_HTML="${WORK_DIR}/reports/report_${TIMESTAMP}.html"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 record_pass() {
@@ -73,27 +176,6 @@ record_pass() {
         FILE_STATUS["$file"]="PASS"
         FILE_MSG["$file"]=""
     fi
-}
-
-# Write a structured finding record as a JSON line to the findings file.
-# Args: tool category severity rule_id rule_name file line column message [references...]
-_write_finding() {
-    local tool="$1" category="$2" severity="$3" rule_id="$4" rule_name="$5"
-    local file="$6" line="$7" column="$8" message="$9"
-    shift 9
-    local refs="${*:-}"
-    # Use Python to produce a single valid JSON line (safe for any content)
-    python3 -c "
-import json, sys
-rec = dict(tool=sys.argv[1], category=sys.argv[2], severity=sys.argv[3],
-           rule_id=sys.argv[4], rule_name=sys.argv[5], file=sys.argv[6],
-           line=int(sys.argv[7]) if sys.argv[7] else None,
-           column=int(sys.argv[8]) if sys.argv[8] else None,
-           message=sys.argv[9],
-           references=sys.argv[10].split(',') if sys.argv[10] else [])
-print(json.dumps(rec, ensure_ascii=False))
-" "$tool" "$category" "$severity" "$rule_id" "$rule_name" "$file" \
-      "${line:-}" "${column:-}" "$message" "$refs" >> "$FINDINGS_JL" 2>/dev/null || true
 }
 
 record_warn() {
@@ -115,99 +197,6 @@ record_fail() {
     local file="$1"; shift
     local msg="$*"
     local rel_path="${file#"$SCAN_DIR/"}"
-
-    # ── Emit structured finding record ──────────────────────────────────
-    # Parse the message to extract tool, rule_id, severity, etc.
-    # Format varies: "tool:rule:detail", "CWE-NNN:description", "semgrep[rs]:rule:lineN:sev:msg"
-    local _tool="" _rule_id="" _rule_name="" _severity="HIGH" _category="security"
-    local _line="" _column="" _refs=""
-
-    # Detect tool from message prefix
-    if [[ "$msg" == semgrep\[* ]]; then
-        _tool="semgrep"
-        _rule_id="${msg#*:]}"  # everything after first colon
-        _rule_id="${_rule_id%%:*}"  # up to next colon
-        # Extract severity if embedded as :WORD:
-        if [[ "$msg" == *":HIGH:"* ]]; then _severity="HIGH"
-        elif [[ "$msg" == *":CRITICAL:"* ]]; then _severity="CRITICAL"
-        elif [[ "$msg" == *":MEDIUM:"* ]]; then _severity="MEDIUM"
-        elif [[ "$msg" == *":LOW:"* ]]; then _severity="LOW"
-        elif [[ "$msg" == *":INFO:"* ]]; then _severity="INFO"
-        fi
-        # Extract line number if present as lineN
-        if [[ "$msg" =~ line([0-9]+) ]]; then _line="${BASH_REMATCH[1]}"; fi
-        _category="sast"
-    elif [[ "$msg" == detect-secrets:* ]]; then
-        _tool="detect-secrets"
-        _rule_id="high_entropy_string"
-        _rule_name="High Entropy String"
-        _severity="HIGH"
-        _category="secret"
-        _refs="CWE-798"
-    elif [[ "$msg" == clamav:* ]]; then
-        _tool="clamav"
-        _rule_id="${msg#clamav:}"
-        _rule_name="Malware Detected"
-        _severity="CRITICAL"
-        _category="malware"
-    elif [[ "$msg" == gitleaks:* ]]; then
-        _tool="gitleaks"
-        _rule_id="${msg#gitleaks:}"
-        _rule_name="Secret Detected"
-        _severity="CRITICAL"
-        _category="secret"
-    elif [[ "$msg" == yara:* ]]; then
-        _tool="yara"
-        _rule_id="${msg#yara:}"
-        _rule_name="IOC Match"
-        _severity="HIGH"
-        _category="ioc"
-    elif [[ "$msg" == bandit:* ]]; then
-        _tool="bandit"
-        _rule_id="${msg#bandit:*:}"  # bandit:SEVERITY:B123
-        _rule_name="Bandit Finding"
-        if [[ "$msg" == *":HIGH:"* ]]; then _severity="HIGH"
-        elif [[ "$msg" == *":MEDIUM:"* ]]; then _severity="MEDIUM"
-        fi
-        _category="sast"
-    elif [[ "$msg" == cppcheck:* ]]; then
-        _tool="cppcheck"
-        _rule_id="${msg#cppcheck:}"
-        _rule_name="Cppcheck Finding"
-        _severity="MEDIUM"
-        _category="sast"
-    elif [[ "$msg" == CWE-*:* ]]; then
-        _tool="grep-pattern"
-        _rule_id="${msg%%:*}"
-        _rule_name="${msg#*:}"
-        _severity="HIGH"
-        _category="cwe"
-        _refs="${msg%%:*}"
-    elif [[ "$msg" == OWASP-*:* ]]; then
-        _tool="grep-pattern"
-        _rule_id="${msg%%:*}"
-        _rule_name="${msg#*:}"
-        _severity="MEDIUM"
-        _category="owasp"
-    elif [[ "$msg" == classify_file*:* ]]; then
-        _tool="File scanner detection"
-        _rule_id="${msg%%:*}"
-        _rule_name="${msg#*:}"
-        _severity="HIGH"
-        _category="classification"
-    fi
-
-    # Fallback: use raw message as rule_name if not parsed
-    [[ -z "$_rule_name" ]] && _rule_name="$msg"
-    [[ -z "$_tool" ]] && _tool="unknown"
-
-    # Derive relative file path for the finding
-    local _rel_file="${file#"$SCAN_DIR/"}"
-    [[ "$_rel_file" == "$file" ]] && _rel_file="$file"
-
-    _write_finding "$_tool" "$_category" "$_severity" "$_rule_id" "$_rule_name" \
-                   "$_rel_file" "$_line" "$_column" "$_msg" "$_refs"
-    # ── End structured finding record ───────────────────────────────────
 
     # Allowlist: try every prefix of the message up to the first three colons as
     # the rule token, so both "CWE-78" and "semgrep[p/owasp]:CWE-78:…" match an
@@ -249,289 +238,33 @@ record_fail() {
     fail_f "[$file] $msg"
 }
 
-generate_report_json() {
-    # Data is written to temp files so Python reads it safely — no bash variable
-    # expansion inside the Python source avoids code injection via filenames or
-    # finding messages that contain triple-quote sequences.
-    local _tmp
-    _tmp=$(mktemp -d)
-    trap "rm -rf '$_tmp'" RETURN
-
-    # NUL-delimited streams for file status
-    local _status_k="${_tmp}/sk"  _status_s="${_tmp}/ss" _status_m="${_tmp}/sm"
-    for path in "${!FILE_STATUS[@]}"; do
-        printf '%s\x00' "$path"                        >> "$_status_k"
-        printf '%s\x00' "${FILE_STATUS[$path]}"        >> "$_status_s"
-        printf '%s\x00' "${FILE_MSG[$path]:-}"         >> "$_status_m"
-    done
-
-    # NUL-delimited streams for coverage
-    local _cov_k="${_tmp}/ck" _cov_v="${_tmp}/cv" _cov_t="${_tmp}/ct"
-    local layer
-    for layer in "${!LAYER_COVERAGE[@]}"; do
-        printf '%s\x00' "$layer"                       >> "$_cov_k"
-        printf '%s\x00' "${LAYER_COVERAGE[$layer]}"    >> "$_cov_v"
-        printf '%s\x00' "${LAYER_TOOL[$layer]:-}"      >> "$_cov_t"
-    done
-
-    local repo_hash
-    repo_hash=$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')
-
-    # All dynamic values are passed as env vars or temp-file paths — never
-    # interpolated into the Python source.
-    decision="REJECTED"
-    status_color="#B02A37"
-    status_background="#F8D7DA"
-
-    if [[ "$GLOBAL_VERDICT" == "PASS" ]]; then
-        decision="APPROVED"
-        status_color="#198754"
-        status_background="#D1E7DD"
-        
-        
-    fi
-
-    REPORT_VERDICT="$GLOBAL_VERDICT" \
-    REPORT_DECISION="$decision" \
-    REPORT_STATUS_COLOR="$status_color" \
-    REPORT_STATUS_BG="$status_background" \
-    REPORT_TS="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-    REPORT_SCAN_DIR="$SCAN_DIR" \
-    REPORT_SCANNING_NAME="${SCANNING_NAME}"\
-    REPORT_HASH="$repo_hash" \
-    REPORT_PASS="$PASS_COUNT" \
-    REPORT_WARN="$WARN_COUNT" \
-    REPORT_FAIL="$FAIL_COUNT" \
-    REPORT_OUT="$REPORT_JSON" \
-    REPORT_FINDINGS_JL="$FINDINGS_JL" \
-    python3 - "$_status_k" "$_status_s" "$_status_m" \
-             "$_cov_k" "$_cov_v" "$_cov_t" <<'PYEOF'
-import json, os, sys
-
-def _read_nul(path):
-    """Read a stream of NUL-terminated records, preserving empty ones."""
-    if not os.path.exists(path):
-        return []
-    with open(path, "rb") as fh:
-        raw = fh.read()
-    if not raw:
-        return []
-    parts = raw.split(b"\x00")
-    if parts and parts[-1] == b"":
-        parts.pop()
-    return [p.decode("utf-8", errors="replace") for p in parts]
-
-
-# ── Read structured findings (JSON lines) ────────────────────────────────
-findings = []
-_fjl = os.environ.get("REPORT_FINDINGS_JL", "")
-if _fjl and os.path.exists(_fjl):
-    with open(_fjl, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                try:
-                    findings.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-
-# ── Read file status ─────────────────────────────────────────────────────
-sk = _read_nul(sys.argv[1]); ss = _read_nul(sys.argv[2]); sm = _read_nul(sys.argv[3])
-ck = _read_nul(sys.argv[4]); cv = _read_nul(sys.argv[5]); ct = _read_nul(sys.argv[6])
-while len(sm) < len(sk):
-    sm.append("")
-
-file_results = {
-    k: {"status": s, "message": m.rstrip(" | ")}
-    for k, s, m in zip(sk, ss, sm)
-}
-
-# ── Build coverage structure ─────────────────────────────────────────────
-# Map layer IDs to human-friendly tool names when available.
-_layer_tool_map = {
-    "L1_secrets_entropy": "detect-secrets",
-    "L1_ioc_yara": "yara",
-    "L1_malware": "clamav",
-    "L2_owasp_cwe": "semgrep",
-    "L4_patterns": "grep-patterns",
-    "L5_per_language_sast": "sast",
-    "L1_secrets_gitleaks": "gitleaks",
-    
-}
-
-checks = []
-gaps = []
-for k, v, t in zip(ck, cv, ct):
-    check = {"id": k}
-    # Prefer the tool name passed from bash, then the static map
-    _tool = t or _layer_tool_map.get(k, "")
-    if _tool:
-        check["tool"] = _tool
-
-    if v == "ran":
-        check["status"] = "ran"
-    elif v.startswith("skipped:"):
-        check["status"] = "skipped"
-        check["reason"] = v.split(":", 1)[1]
-        gaps.append(k)
-    elif v.startswith("partial:"):
-        check["status"] = "partial"
-        check["reason"] = v.split(":", 1)[1]
-        gaps.append(k)
-    else:
-        check["status"] = v
-        gaps.append(k)
-
-    checks.append(check)
-
-gaps.sort()
-
-report = {
-    "scan_name":    os.environ["REPORT_SCANNING_NAME"],
-    "timestamp":    os.environ["REPORT_TS"],
-    "source": {
-        "directory": os.environ["REPORT_SCAN_DIR"],
-        "sha256":    os.environ["REPORT_HASH"],
-    },
-    "coverage": {
-        "complete": len(gaps) == 0,
-        "checks":   checks,
-        "gaps":     gaps,
-    },
-    "summary": {
-        "total_findings":    len(findings),
-        "blocking_findings": sum(
-            1 for f in findings if f.get("severity", "").upper() in ("HIGH", "CRITICAL")
-        ),
-    },
-    "findings": findings,
-    "verdict":  os.environ["REPORT_VERDICT"],
-    "decision":  os.environ["REPORT_DECISION"],
-    "status_background":  os.environ["REPORT_STATUS_BG"],
-    "status_color":  os.environ["REPORT_STATUS_COLOR"],
-}
-
-with open(os.environ["REPORT_OUT"], "w", encoding="utf-8") as fh:
-    json.dump(report, fh, ensure_ascii=False, indent=2)
-    fh.write("\n")
-PYEOF
-}
-
-generate_report_html() {
-    local color
-    [[ "$GLOBAL_VERDICT" == "PASS" ]] && color="#2ecc71" || color="#e74c3c"
-    {
-        echo "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        echo "<title>AI Transit Report — ${TIMESTAMP}</title>"
-        echo "<style>
-body{background:#0d1b2a;color:#eee;font-family:monospace;padding:2rem;max-width:1400px;margin:0 auto}
-h1{color:${color}} h2{color:#00a8ff}
-table{border-collapse:collapse;width:100%;margin-top:1rem}
-th{background:#1f3864;padding:.6rem;text-align:left}
-td{border:1px solid #334;padding:.5rem;vertical-align:top}
-tr:nth-child(even){background:#16213e}
-.pass{color:#2ecc71;font-weight:bold} .fail{color:#e74c3c;font-weight:bold} .warn{color:#f39c12;font-weight:bold}
-.tag{background:#1f3864;border-radius:4px;padding:2px 6px;font-size:.85em;margin:1px;display:inline-block}
-.owasp{background:#c0392b} .cwe{background:#2980b9} .cert{background:#27ae60}
-</style></head><body>"
-        echo "<h1>Verdict: ${GLOBAL_VERDICT}</h1>"
-        echo "<p>Directory: <code>${SCAN_DIR}</code> | Date: ${TIMESTAMP}</p>"
-        echo "<p>Standards: <span class='tag owasp'>OWASP Top 10 2021</span>
-              <span class='tag cwe'>CWE Top 25</span>
-              <span class='tag cert'>CERT Secure Coding</span>
-              <span class='tag'>SCA/CVE</span></p>"
-        echo "<p>PASS: <span class='pass'>${PASS_COUNT}</span> |
-              WARN: <span class='warn'>${WARN_COUNT}</span> |
-              FAIL: <span class='fail'>${FAIL_COUNT}</span></p>"
-        echo "<h2>Results by file</h2>"
-        echo "<table><tr><th>File</th><th>Status</th><th>Finding</th></tr>"
-        for path in "${!FILE_STATUS[@]}"; do
-            local status="${FILE_STATUS[$path]}"
-            local msg="${FILE_MSG[$path]:-}"
-            local cls
-            case "$status" in PASS) cls="pass";; FAIL) cls="fail";; *) cls="warn";; esac
-            echo "<tr><td><code>${path}</code></td><td class='${cls}'>${status}</td><td>${msg}</td></tr>"
-        done
-        echo "</table></body></html>"
-    } > "$REPORT_HTML"
-}
-
-
-# ── Default excluded directories (always pruned from find) ───────────────────
-DEFAULT_EXCLUDE_DIRS=(
-    node_modules .git vendor .tox __pycache__ .venv venv
-    dist build .next .nuxt .cache target coverage
-)
-
-# ── Semgrep / clamscan exclude flags from combined list ───────────────────────
-SEMGREP_EXCLUDES=()
-CLAMSCAN_EXCLUDES=()
-for d in "${DEFAULT_EXCLUDE_DIRS[@]}"; do
-    SEMGREP_EXCLUDES+=(--exclude-dir "$d")
-    CLAMSCAN_EXCLUDES+=(--exclude-dir="$d")
-done
-
-# ── Argument ─────────────────────────────────────────────────────────────────
-if [[ $# -lt 3 ]]; then
-    fail "Usage: $0 <directory_to_scan> <directory_for_report> <scanning_name> [VERBOSITY=quiet|normal|verbose]"
-fi
-
-OFFLINE="${OFFLINE:-true}"
-
-SCAN_DIR="$1"
-[[ -d "$SCAN_DIR" ]] || fail "Directory not found: $SCAN_DIR"
-
-REPORT_DIR="$2"
-[[ -d "$REPORT_DIR" ]] || fail "Directory not found: $REPORT_DIR"
-
-SCANNING_NAME="$3"
-
-# ── Working variables ────────────────────────────────────────────────────────────
-TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
-WORK_DIR="${WORK_DIR:-/home/jenkins/agent}"
-
-CLAMAV_DB_DIR="${CLAMAV_DB_DIR:-${WORK_DIR}/clamav-rules}"
-SEMGREP_RULES_DIR="${SEMGREP_RULES_DIR:-${WORK_DIR}/semgrep-rules}"
-
-mkdir -p "${WORK_DIR}/reports" "${WORK_DIR}/quarantine" "${WORK_DIR}/approved"
-chmod 700 "${WORK_DIR}/quarantine"
-
-REPORT_JSON="${REPORT_DIR}/report_scan_${SCANNING_NAME}.json"
-REPORT_HTML="${REPORT_DIR}/report_scan_${SCANNING_NAME}.html"
-
-# Initialize structured findings file (JSON lines)
-FINDINGS_JL=$(mktemp "${WORK_DIR}/findings_XXXXXX.jsonl")
-
-# update the path to add python virtual env
-# should be remove for production
-# PATH="python_venv_test/.venv/bin:$PATH"
-
+# grep helper: returns 0 if pattern found, never fails the script
+grep_check() { grep -qE "$1" "$2" 2>/dev/null; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 1 — GLOBAL (malware, secrets, AV)
 # ═══════════════════════════════════════════════════════════════════════════════
 scan_global() {
     info "=== Layer 1: Global (AV, secrets, IOC) ==="
-    
-    if has_cmd gitleaks; then
-        info "gitleaks"
-        #if ! gitleaks dir "$SCAN_DIR" -v 2>/dev/null; then
-        if ! gitleaks detect --no-git --source "$SCAN_DIR" -v; then
-            record_fail "$SCAN_DIR" "gitleaks:secrets_detected"
+
+    if has_cmd betterleaks; then
+        info "betterleaks…"
+        if ! betterleaks dir "$SCAN_DIR" -v 2>/dev/null; then
+            record_fail "$SCAN_DIR" "betterleaks:secrets_detected"
         else
             record_pass "$SCAN_DIR"
-            ok "gitleaks: no secrets"
+            ok "betterleaks: no secrets"
         fi
-        record_layer L1_secrets_gitleaks "ran"
+        record_layer L1_secrets_betterleaks "ran"
     else
-        record_warn "__global__" "gitleaks missing — secret scan skipped"
-        record_layer L1_secrets_gitleaks "skipped:gitleaks not installed"
+        record_warn "__global__" "betterleaks missing — secret scan skipped"
+        record_layer L1_secrets_betterleaks "skipped:betterleaks not installed"
     fi
-    # ══════════════════════════════════════════════════════════════════════════════
+
     if has_cmd detect-secrets; then
         info "detect-secrets…"
         local dsec_out
-        dsec_out=$(detect-secrets scan --all-files "$SCAN_DIR" 2>/dev/null || true)
+        dsec_out=$(detect-secrets scan "$SCAN_DIR" 2>/dev/null || true)
         local dsec_hits
         dsec_hits=$(echo "$dsec_out" | python3 -c \
             "import json,sys; d=json.load(sys.stdin); print(sum(len(v) for v in d.get('results',{}).values()))" \
@@ -547,7 +280,35 @@ scan_global() {
         record_warn "__global__" "detect-secrets missing"
         record_layer L1_secrets_entropy "skipped:detect-secrets not installed"
     fi
-    # ══════════════════════════════════════════════════════════════════════════════
+
+    if has_cmd clamscan; then
+        info "clamscan…"
+        # clamscan reads a local signature DB, so it works offline — but only if
+        # signatures were staged. An empty DB detects nothing while still
+        # exiting 0, which would read as "clean".
+        local -a clam_opts=()
+        if [[ "$OFFLINE" == "true" ]]; then
+            if compgen -G "${CLAMAV_DB_DIR}/*.c[vl]d" >/dev/null 2>&1; then
+                clam_opts+=(--database="$CLAMAV_DB_DIR")
+            elif ! compgen -G "/var/lib/clamav/*.c[vl]d" >/dev/null 2>&1; then
+                record_warn "__global__" \
+                    "OFFLINE:ClamAV signature database is empty — malware scan detected nothing because it has no signatures, not because the code is clean; stage a DB in ${CLAMAV_DB_DIR}"
+                record_layer L1_malware "skipped:no ClamAV signatures available"
+            fi
+        fi
+        if ! clamscan -r --quiet ${clam_opts[@]+"${clam_opts[@]}"} \
+                "${CLAMSCAN_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null; then
+            record_fail "$SCAN_DIR" "clamav:malware_detected"
+        else
+            record_pass "$SCAN_DIR"
+            ok "ClamAV: clean"
+        fi
+        [[ -z "${LAYER_COVERAGE[L1_malware]:-}" ]] && record_layer L1_malware "ran"
+    else
+        record_warn "__global__" "clamscan missing"
+        record_layer L1_malware "skipped:clamav not installed"
+    fi
+
     if has_cmd yara && [[ -d "${WORK_DIR}/yara-rules" ]]; then
         local yara_files=( "${WORK_DIR}/yara-rules/"*.yar )
         if [[ -f "${yara_files[0]:-}" ]]; then
@@ -563,37 +324,7 @@ scan_global() {
         record_warn "__global__" "yara or rules directory missing"
         record_layer L1_ioc_yara "skipped:yara or rules directory missing"
     fi
-    
-    # ══════════════════════════════════════════════════════════════════════════════
-    if has_cmd clamscan; then
-        info "clamscan…"
-        # clamscan reads a local signature DB, so it works offline — but only if
-        # signatures were staged. An empty DB detects nothing while still
-        # exiting 0, which would read as "clean".
-        local -a clam_opts=()
-        
-        if compgen -G "${CLAMAV_DB_DIR}/*.c[vl]d" >/dev/null 2>&1; then
-            clam_opts+=(--database="$CLAMAV_DB_DIR")
-        elif ! compgen -G "/var/lib/clamav/*.c[vl]d" >/dev/null 2>&1; then
-            record_warn "__global__" \
-                "OFFLINE:ClamAV signature database is empty — malware scan detected nothing because it has no signatures, not because the code is clean; stage a DB in ${CLAMAV_DB_DIR}"
-            record_layer L1_malware "skipped:no ClamAV signatures available"
-        fi
-
-        if ! clamscan -r ${clam_opts[@]+"${clam_opts[@]}"} \
-                "${CLAMSCAN_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null; then
-            record_fail "$SCAN_DIR" "clamav:malware_detected"
-        else
-            record_pass "$SCAN_DIR"
-            ok "ClamAV: clean"
-        fi
-        [[ -z "${LAYER_COVERAGE[L1_malware]:-}" ]] && record_layer L1_malware "ran"
-    else
-        record_warn "__global__" "clamscan missing"
-        record_layer L1_malware "skipped:clamav not installed"
-    fi
 }
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 2 — OWASP Top 10 2021 + CWE Top 25 via Semgrep
@@ -651,7 +382,7 @@ scan_owasp_cwe() {
         info "  semgrep ${ruleset}…"
         # Single run — parse JSON output once to avoid double execution (10-20 min saved)
         local out
-        out=$(semgrep --config="${ruleset}"  --json --no-autofix \
+        out=$(semgrep --config="${ruleset}" --quiet --json --no-autofix \
               ${semgrep_extra[@]+"${semgrep_extra[@]}"} \
               "${SEMGREP_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null || true)
 
@@ -689,10 +420,130 @@ print('\n'.join(rows))
     [[ -z "${LAYER_COVERAGE[L2_owasp_cwe]:-}" ]] && record_layer L2_owasp_cwe "ran"
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 3 — Software Composition Analysis (SCA) — vulnerable dependencies
+# Ref: OWASP A06:2021 Vulnerable and Outdated Components
+# ═══════════════════════════════════════════════════════════════════════════════
+scan_dependencies() {
+    info "=== Layer 3: SCA — Vulnerable dependencies (OWASP A06) ==="
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# LAYER 5 — Per-type SAST scanners
-# ═══════════════════════════════════════════════════════════════════════════════
+    # trivy: universal SCA (Python, JS, Go, Ruby, Java, etc.)
+    if has_cmd trivy; then
+        info "trivy fs…"
+        # Offline: forbid every update attempt and read the staged database.
+        # --offline-scan additionally stops trivy from resolving dependencies
+        # that would require a network round-trip (e.g. Java GAV lookups).
+        local -a trivy_extra=()
+        if [[ "$OFFLINE" == "true" ]]; then
+            if [[ -d "$TRIVY_CACHE_DIR" ]] && compgen -G "${TRIVY_CACHE_DIR}/db/*" >/dev/null 2>&1; then
+                trivy_extra+=(--skip-db-update --skip-java-db-update --offline-scan
+                              --cache-dir "$TRIVY_CACHE_DIR")
+            else
+                record_warn "__global__" \
+                    "OFFLINE:trivy database not staged in ${TRIVY_CACHE_DIR} — dependency CVE scan did NOT run; populate it with 'trivy fs --download-db-only --cache-dir <dir>' on a connected host"
+                record_layer L3_dependency_cve "skipped:trivy database not staged for offline use"
+                trivy_extra=()
+            fi
+        fi
+        local trivy_out=""
+        if [[ "$OFFLINE" != "true" || ${#trivy_extra[@]} -gt 0 ]]; then
+            trivy_out=$(trivy fs --quiet --exit-code 0 --format json \
+                        ${trivy_extra[@]+"${trivy_extra[@]}"} "$SCAN_DIR" 2>/dev/null || true)
+            record_layer L3_dependency_cve "ran"
+        fi
+        local vuln_count
+        vuln_count=$(echo "$trivy_out" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+total = sum(len(r.get('Vulnerabilities') or [])
+            for res in data.get('Results', [])
+            for r in [res])
+print(total)
+" 2>/dev/null || echo "0")
+        if [[ "$vuln_count" -gt 0 ]]; then
+            record_fail "$SCAN_DIR" "trivy:${vuln_count}_vulnerable_dependencies"
+        else
+            record_pass "$SCAN_DIR"
+            ok "trivy: no known CVEs"
+        fi
+    else
+        record_warn "__global__" "trivy missing — dependency CVE scan skipped"
+        record_layer L3_dependency_cve "skipped:trivy not installed"
+    fi
+
+    # pip-audit: Python requirements
+    local req_files
+    req_files=$(find "$SCAN_DIR" -name "requirements*.txt" -o -name "Pipfile.lock" \
+                -o -name "pyproject.toml" 2>/dev/null | head -5)
+    if [[ -n "$req_files" && "$OFFLINE" == "true" ]]; then
+        # pip-audit and safety both resolve advisories from a remote service and
+        # have no offline database. Say so explicitly: a silent skip here would
+        # leave Python dependency CVEs unreported with nothing in the record.
+        record_warn "__global__" \
+            "OFFLINE:Python dependency CVE scan unavailable (pip-audit and safety both require a network advisory service) — rely on the staged trivy database for Python CVEs"
+    elif [[ -n "$req_files" ]]; then
+        if has_cmd pip-audit; then
+            info "pip-audit…"
+            # Use process substitution (not pipe) to keep record_fail in the parent shell
+            while read -r req; do
+                [[ -z "$req" ]] && continue
+                local out
+                out=$(pip-audit -r "$req" --format json 2>/dev/null || true)
+                local count
+                count=$(echo "$out" | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+print(len([v for dep in d.get('dependencies',[]) for v in dep.get('vulns',[])]))
+" 2>/dev/null || echo "0")
+                if [[ "$count" -gt 0 ]]; then
+                    record_fail "$req" "pip-audit:${count}_CVEs_in_dependencies"
+                fi
+            done < <(echo "$req_files")
+        elif has_cmd safety; then
+            info "safety check…"
+            while read -r req; do
+                [[ -z "$req" ]] && continue
+                if ! safety check -r "$req" --quiet 2>/dev/null; then
+                    record_fail "$req" "safety:vulnerable_python_dependency"
+                fi
+            done < <(echo "$req_files")
+        else
+            record_warn "__global__" "pip-audit/safety missing — Python dep CVE scan skipped"
+        fi
+    fi
+
+    # npm audit: JavaScript package.json
+    local pkg_files
+    pkg_files=$(find "$SCAN_DIR" -name "package-lock.json" -o -name "yarn.lock" 2>/dev/null | head -3)
+    if [[ -n "$pkg_files" && "$OFFLINE" == "true" ]]; then
+        # npm audit always queries the registry advisory endpoint; there is no
+        # offline equivalent.
+        record_warn "__global__" \
+            "OFFLINE:JavaScript dependency CVE scan unavailable (npm audit requires the registry) — rely on the staged trivy database for JS CVEs"
+    elif [[ -n "$pkg_files" ]]; then
+        if has_cmd npm; then
+            info "npm audit…"
+            # Use process substitution (not pipe) to keep record_fail in the parent shell
+            while read -r pkg; do
+                [[ -z "$pkg" ]] && continue
+                local pkg_dir
+                pkg_dir=$(dirname "$pkg")
+                local out
+                out=$(npm audit --json --prefix "$pkg_dir" 2>/dev/null || true)
+                local count
+                count=$(echo "$out" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+print(d.get('metadata',{}).get('vulnerabilities',{}).get('total', 0))
+" 2>/dev/null || echo "0")
+                if [[ "$count" -gt 0 ]]; then
+                    record_fail "$pkg" "npm-audit:${count}_vulnerable_packages"
+                fi
+            done < <(echo "$pkg_files")
+        else
+            record_warn "__global__" "npm missing — JS dependency CVE scan skipped"
+        fi
+    fi
+}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 4 — Universal security patterns (all file types)
@@ -765,6 +616,10 @@ scan_universal_patterns() {
     $triggered || true  # do not set PASS here — handled by per-type scanner
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# LAYER 5 — Per-type SAST scanners
+# ═══════════════════════════════════════════════════════════════════════════════
+
 # ── Python ───────────────────────────────────────────────────────────────────
 # OWASP: A03 Injection · A02 Crypto · A08 Software Integrity
 # CWE: 78, 89, 327, 502, 601, 703
@@ -820,6 +675,72 @@ scan_python() {
     # CWE-703 — assert used for security checks (stripped in optimized builds)
     if grep_check '^\s*assert\s+(is_admin|is_authenticated|has_perm|user\.is)' "$f"; then
         record_fail "$f" "CWE-703:assert_used_for_security_check"
+        failed=true
+    fi
+
+    $failed || record_pass "$f"
+}
+
+# ── JavaScript / TypeScript ──────────────────────────────────────────────────
+# OWASP: A03 Injection · A05 Misconfiguration · A07 Auth
+# CWE: 79, 78, 89, 611, 915, 1321
+scan_javascript() {
+    local f="$1"
+    local failed=false
+
+    if has_cmd semgrep; then
+        local out
+        out=$(semgrep --config=p/javascript --quiet --json --no-autofix "$f" 2>/dev/null || true)
+        local cnt
+        cnt=$(echo "$out" | python3 -c "
+import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))
+" 2>/dev/null || echo "0")
+        if [[ "$cnt" -gt 0 ]]; then
+            record_fail "$f" "semgrep:js:${cnt}_findings"
+            failed=true
+        fi
+    else
+        record_warn "$f" "semgrep missing"
+    fi
+
+    # CWE-79 — XSS via innerHTML/document.write/outerHTML
+    if grep_check '(innerHTML|outerHTML|document\.write|insertAdjacentHTML)\s*[+]?=' "$f"; then
+        record_fail "$f" "CWE-79:XSS_innerHTML_document_write"
+        failed=true
+    fi
+
+    # CWE-78 — OS command injection
+    if grep_check '\b(child_process|exec\s*\(|execSync\s*\(|spawn\s*\()' "$f"; then
+        record_fail "$f" "CWE-78:OS_command_injection_child_process"
+        failed=true
+    fi
+
+    # CWE-95 — eval / Function() constructor
+    if grep_check '\beval\s*\(|new\s+Function\s*\(' "$f"; then
+        record_fail "$f" "CWE-95:dynamic_code_execution_eval"
+        failed=true
+    fi
+
+    # CWE-611 — XXE via DOMParser/libxmljs without entity disabling
+    if grep_check '(DOMParser|parseXML|libxmljs\.parseXml)' "$f"; then
+        record_warn "$f" "CWE-611:potential_XXE_XML_parsing"
+    fi
+
+    # CWE-1321 — Prototype pollution
+    if grep_check '(__proto__|constructor\[.prototype.\]|Object\.assign\s*\(\s*\{\})' "$f"; then
+        record_fail "$f" "CWE-1321:prototype_pollution"
+        failed=true
+    fi
+
+    # CWE-915 — Mass assignment / loose object merge
+    if grep_check '(Object\.assign|_\.merge|deepmerge)\s*\(\s*\w+\s*,\s*req\.' "$f"; then
+        record_fail "$f" "CWE-915:mass_assignment_req_merge"
+        failed=true
+    fi
+
+    # CWE-89 — SQL injection in JS ORM
+    if grep_check '(query|raw|knex\.raw|sequelize\.query)\s*\(`[^`]*(SELECT|INSERT|UPDATE|DELETE)' "$f"; then
+        record_fail "$f" "CWE-89:SQL_injection_template_literal"
         failed=true
     fi
 
@@ -933,119 +854,6 @@ scan_shell() {
     $failed || record_pass "$f"
 }
 
-# ── PowerShell ───────────────────────────────────────────────────────────────
-scan_powershell() {
-    local f="$1"
-    local failed=false
-    # CWE-78: Invoke-Expression / cmd.exe exec
-    if grep_check '(Invoke-Expression|iex\s*\(|Start-Process|cmd\.exe\s*/c)' "$f"; then
-        record_fail "$f" "CWE-78:PowerShell_command_execution"; failed=true
-    fi
-    # CWE-798: hardcoded credential
-    if grep_check '(\$password|\$secret|\$apikey|\$token)\s*=\s*["'"'"'][^"'"'"'$]{4,}' "$f"; then
-        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
-    fi
-    # Encoded/obfuscated commands (common malware technique)
-    if grep_check '-EncodedCommand\s' "$f"; then
-        record_fail "$f" "CWE-78:PowerShell_EncodedCommand_obfuscation"; failed=true
-    fi
-    $failed || record_pass "$f"
-}
-
-scan_rust() {
-    local f="$1"
-    local failed=false
-    # unsafe block — mandatory manual review
-    if grep_check '\bunsafe\s*\{' "$f"; then
-        record_fail "$f" "CWE-119:unsafe_block_requires_review"; failed=true
-    fi
-    # Command execution via std::process::Command
-    if grep_check 'std::process::Command' "$f"; then
-        record_fail "$f" "CWE-78:process_Command_exec"; failed=true
-    fi
-    # Hardcoded credentials
-    if grep_check '(password|secret|api_key|token)\s*=\s*"[^"]{4,}"' "$f"; then
-        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
-    fi
-    # Semgrep per-file if available
-    # Semgrep coverage for this language is already provided by the L2 full-directory
-    # scan (scan_owasp_cwe). Running it again per-file would duplicate findings and
-    # add seconds of startup overhead per file.
-    $failed || record_pass "$f"
-}
-
-# ── C# ────────────────────────────────────────────────────────────────────────
-scan_csharp() {
-    local f="$1"
-    local failed=false
-    if grep_check 'Process\.Start\s*\(' "$f"; then
-        record_fail "$f" "CWE-78:Process_Start_command_injection"; failed=true
-    fi
-    if grep_check '(password|secret|apiKey|api_key|token)\s*=\s*"[^"]{4,}"' "$f"; then
-        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
-    fi
-    if grep_check 'new\s+MD5CryptoServiceProvider\s*\(\)' "$f"; then
-        record_fail "$f" "CWE-327:MD5_weak_hash_algorithm"; failed=true
-    fi
-    # SQL string concatenation
-    if grep_check '"SELECT.*"\s*\+' "$f"; then
-        record_fail "$f" "CWE-89:SQL_string_concatenation"; failed=true
-    fi
-    # Semgrep coverage for this language is already provided by the L2 full-directory
-    # scan (scan_owasp_cwe). Running it again per-file would duplicate findings and
-    # add seconds of startup overhead per file.
-    $failed || record_pass "$f"
-}
-
-
-# ── Terraform / HCL ─────────────────────────────────────────────────────────
-# OWASP A05 Misconfiguration · A02 Crypto
-scan_terraform() {
-    local f="$1"
-    local failed=false
-
-    if has_cmd checkov; then
-        local out
-        # --skip-download prevents checkov fetching remote provider schemas.
-        local -a ck_opts=()
-        [[ "$OFFLINE" == "true" ]] && ck_opts+=(--skip-download)
-        out=$(checkov -f "$f" --quiet ${ck_opts[@]+"${ck_opts[@]}"} 2>/dev/null || true)
-        if echo "$out" | grep -q 'FAILED'; then
-            local count
-            count=$(echo "$out" | grep -c 'FAILED' || true)
-            record_fail "$f" "checkov:${count}_CIS_IaC_findings"
-            failed=true
-        fi
-    else
-        record_warn "$f" "checkov missing"
-    fi
-
-    # CWE-798 — hardcoded secrets
-    if grep_check '(password|secret|token)\s*=\s*"[^"]+"' "$f"; then
-        record_fail "$f" "CWE-798:hardcoded_secret_in_terraform"
-        failed=true
-    fi
-
-    # S3 public ACL
-    if grep_check 'acl\s*=\s*"public-read' "$f"; then
-        record_fail "$f" "OWASP-A05:S3_public_read_ACL"
-        failed=true
-    fi
-
-    # Unrestricted security group
-    if grep_check 'cidr_blocks\s*=\s*\["0\.0\.0\.0/0"\]' "$f"; then
-        record_warn "$f" "OWASP-A05:unrestricted_CIDR_0_0_0_0"
-    fi
-
-    # Encryption disabled
-    if grep_check 'encrypted\s*=\s*false' "$f"; then
-        record_fail "$f" "OWASP-A02:encryption_disabled"
-        failed=true
-    fi
-
-    $failed || record_pass "$f"
-}
-
 # ── Java ─────────────────────────────────────────────────────────────────────
 # CWE: 78, 89, 79, 502, 295, 611
 scan_java() {
@@ -1095,6 +903,77 @@ scan_java() {
     $failed || record_pass "$f"
 }
 
+# ── PHP ───────────────────────────────────────────────────────────────────────
+# CWE: 78, 89, 79, 22, 502
+scan_php() {
+    local f="$1"
+    local failed=false
+
+    # CWE-78 — command injection
+    if grep_check '\b(shell_exec|exec|system|passthru|popen|proc_open)\s*\(' "$f"; then
+        record_fail "$f" "CWE-78:OS_command_injection_shell_exec"
+        failed=true
+    fi
+
+    # CWE-89 — SQL injection
+    if grep_check '(mysql_query|mysqli_query|pg_query)\s*\(.*\.\s*\$' "$f"; then
+        record_fail "$f" "CWE-89:SQL_injection_string_concat"
+        failed=true
+    fi
+
+    # CWE-79 — XSS via echo without htmlspecialchars
+    if grep_check 'echo\s+\$_(GET|POST|REQUEST|COOKIE|SERVER)' "$f"; then
+        record_fail "$f" "CWE-79:XSS_echo_unsanitized_superglobal"
+        failed=true
+    fi
+
+    # CWE-22 — Path traversal via include/require
+    if grep_check '\b(include|require|include_once|require_once)\s*\(\s*\$' "$f"; then
+        record_fail "$f" "CWE-22:path_traversal_dynamic_include"
+        failed=true
+    fi
+
+    # CWE-502 — unsafe deserialization
+    if grep_check '\bunserialize\s*\(\s*\$_(GET|POST|COOKIE|REQUEST)' "$f"; then
+        record_fail "$f" "CWE-502:insecure_deserialization_unserialize"
+        failed=true
+    fi
+
+    $failed || record_pass "$f"
+}
+
+# ── Ruby ──────────────────────────────────────────────────────────────────────
+# CWE: 78, 89, 79, 22
+scan_ruby() {
+    local f="$1"
+    local failed=false
+
+    # CWE-78
+    if grep_check '\b(system|exec|Kernel\.exec|%x\{|`[^`]+`)' "$f"; then
+        record_fail "$f" "CWE-78:OS_command_injection"
+        failed=true
+    fi
+
+    # CWE-95
+    if grep_check '\beval\s*[({]' "$f"; then
+        record_fail "$f" "CWE-95:dynamic_code_execution_eval"
+        failed=true
+    fi
+
+    # CWE-89
+    if grep_check '(where|find_by_sql|execute)\s*\(\s*"[^"]*#\{' "$f"; then
+        record_fail "$f" "CWE-89:SQL_injection_ActiveRecord_interpolation"
+        failed=true
+    fi
+
+    # CWE-22 — path traversal
+    if grep_check '(File\.read|File\.open|IO\.read)\s*\(\s*params\[' "$f"; then
+        record_fail "$f" "CWE-22:path_traversal_params_in_file_read"
+        failed=true
+    fi
+
+    $failed || record_pass "$f"
+}
 
 # ── Go ────────────────────────────────────────────────────────────────────────
 # CWE: 78, 89, 22, 338
@@ -1197,6 +1076,53 @@ scan_yaml() {
     $failed || record_pass "$f"
 }
 
+# ── Terraform / HCL ─────────────────────────────────────────────────────────
+# OWASP A05 Misconfiguration · A02 Crypto
+scan_terraform() {
+    local f="$1"
+    local failed=false
+
+    if has_cmd checkov; then
+        local out
+        # --skip-download prevents checkov fetching remote provider schemas.
+        local -a ck_opts=()
+        [[ "$OFFLINE" == "true" ]] && ck_opts+=(--skip-download)
+        out=$(checkov -f "$f" --quiet ${ck_opts[@]+"${ck_opts[@]}"} 2>/dev/null || true)
+        if echo "$out" | grep -q 'FAILED'; then
+            local count
+            count=$(echo "$out" | grep -c 'FAILED' || true)
+            record_fail "$f" "checkov:${count}_CIS_IaC_findings"
+            failed=true
+        fi
+    else
+        record_warn "$f" "checkov missing"
+    fi
+
+    # CWE-798 — hardcoded secrets
+    if grep_check '(password|secret|token)\s*=\s*"[^"]+"' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_secret_in_terraform"
+        failed=true
+    fi
+
+    # S3 public ACL
+    if grep_check 'acl\s*=\s*"public-read' "$f"; then
+        record_fail "$f" "OWASP-A05:S3_public_read_ACL"
+        failed=true
+    fi
+
+    # Unrestricted security group
+    if grep_check 'cidr_blocks\s*=\s*\["0\.0\.0\.0/0"\]' "$f"; then
+        record_warn "$f" "OWASP-A05:unrestricted_CIDR_0_0_0_0"
+    fi
+
+    # Encryption disabled
+    if grep_check 'encrypted\s*=\s*false' "$f"; then
+        record_fail "$f" "OWASP-A02:encryption_disabled"
+        failed=true
+    fi
+
+    $failed || record_pass "$f"
+}
 
 # ── Dockerfile ───────────────────────────────────────────────────────────────
 # OWASP A05 Misconfiguration · CWE-250
@@ -1257,6 +1183,40 @@ scan_docker() {
     $failed || record_pass "$f"
 }
 
+# ── SQL ───────────────────────────────────────────────────────────────────────
+# CWE-89, CWE-78
+scan_sql() {
+    local f="$1"
+    local failed=false
+
+    # CWE-78 — stored procedure for OS execution
+    if grep_check '(xp_cmdshell|sp_OACreate|OPENROWSET|BULK INSERT)' "$f"; then
+        record_fail "$f" "CWE-78:SQL_OS_execution_xp_cmdshell"
+        failed=true
+    fi
+
+    # Destructive DDL
+    if grep_check 'DROP\s+(TABLE|DATABASE|SCHEMA|VIEW|FUNCTION|PROCEDURE)' "$f"; then
+        record_fail "$f" "CWE-89:destructive_DDL_statement"
+        failed=true
+    fi
+
+    # CWE-89 — comment-based injection
+    if grep_check "(;\s*--|'--|\b(OR|AND)\s+['\"]?1['\"]?\s*=\s*['\"]?1)" "$f"; then
+        record_fail "$f" "CWE-89:SQL_injection_pattern"
+        failed=true
+    fi
+
+    # UNION-based injection payload
+    if grep_check '\bUNION\s+(ALL\s+)?SELECT\b' "$f"; then
+        record_fail "$f" "CWE-89:SQL_UNION_injection_payload"
+        failed=true
+    fi
+
+    $failed || record_pass "$f"
+}
+
+# ── Binaries ─────────────────────────────────────────────────────────────────
 scan_binary() {
     local f="$1"
     record_fail "$f" "binary:unexpected_binary_in_AI_repo"
@@ -1282,6 +1242,120 @@ scan_archive() {
             record_fail "$f" "CWE-22:zip_slip_path_traversal_in_archive"
         fi
     fi
+}
+
+# ── Unknown ───────────────────────────────────────────────────────────────────
+scan_unknown() {
+    local f="$1"
+
+    # Extensionless scripts are common (entrypoint, run, hooks). Route them to
+    # the right scanner by shebang instead of skipping per-type analysis.
+    local first_line
+    IFS= read -r first_line < "$f" 2>/dev/null || first_line=""
+    case "$first_line" in
+        '#!'*python*) scan_python     "$f"; return ;;
+        '#!'*/bash|'#!'*/sh|'#!'*env\ bash|'#!'*env\ sh|'#!'*/zsh|'#!'*/ksh)
+                      scan_shell      "$f"; return ;;
+        '#!'*ruby*)   scan_ruby       "$f"; return ;;
+        '#!'*node*)   scan_javascript "$f"; return ;;
+        '#!'*php*)    scan_php        "$f"; return ;;
+        '#!'*pwsh*)   scan_powershell "$f"; return ;;
+    esac
+
+    if has_cmd file; then
+        local mime
+        mime=$(file --mime-type -b "$f" 2>/dev/null || echo "unknown")
+        if echo "$mime" | grep -qE \
+            '^(application/x-executable|application/x-sharedlib|application/x-dosexec)'; then
+            record_fail "$f" "binary:unexpected_executable_mime:${mime}"
+            return
+        fi
+    fi
+    record_pass "$f"
+}
+
+# ── PowerShell ───────────────────────────────────────────────────────────────
+scan_powershell() {
+    local f="$1"
+    local failed=false
+    # CWE-78: Invoke-Expression / cmd.exe exec
+    if grep_check '(Invoke-Expression|iex\s*\(|Start-Process|cmd\.exe\s*/c)' "$f"; then
+        record_fail "$f" "CWE-78:PowerShell_command_execution"; failed=true
+    fi
+    # CWE-798: hardcoded credential
+    if grep_check '(\$password|\$secret|\$apikey|\$token)\s*=\s*["'"'"'][^"'"'"'$]{4,}' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
+    fi
+    # Encoded/obfuscated commands (common malware technique)
+    if grep_check '-EncodedCommand\s' "$f"; then
+        record_fail "$f" "CWE-78:PowerShell_EncodedCommand_obfuscation"; failed=true
+    fi
+    $failed || record_pass "$f"
+}
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+scan_rust() {
+    local f="$1"
+    local failed=false
+    # unsafe block — mandatory manual review
+    if grep_check '\bunsafe\s*\{' "$f"; then
+        record_fail "$f" "CWE-119:unsafe_block_requires_review"; failed=true
+    fi
+    # Command execution via std::process::Command
+    if grep_check 'std::process::Command' "$f"; then
+        record_fail "$f" "CWE-78:process_Command_exec"; failed=true
+    fi
+    # Hardcoded credentials
+    if grep_check '(password|secret|api_key|token)\s*=\s*"[^"]{4,}"' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
+    fi
+    # Semgrep per-file if available
+    # Semgrep coverage for this language is already provided by the L2 full-directory
+    # scan (scan_owasp_cwe). Running it again per-file would duplicate findings and
+    # add seconds of startup overhead per file.
+    $failed || record_pass "$f"
+}
+
+# ── Kotlin ────────────────────────────────────────────────────────────────────
+scan_kotlin() {
+    local f="$1"
+    local failed=false
+    if grep_check 'Runtime\.getRuntime\(\)\.exec\(' "$f"; then
+        record_fail "$f" "CWE-78:Runtime_exec_command_injection"; failed=true
+    fi
+    if grep_check '(password|secret|apiKey|api_key|token)\s*=\s*"[^"]{4,}"' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
+    fi
+    if grep_check 'MessageDigest\.getInstance\("(MD5|SHA-1)"' "$f"; then
+        record_fail "$f" "CWE-327:weak_hash_MD5_or_SHA1"; failed=true
+    fi
+    # Semgrep coverage for this language is already provided by the L2 full-directory
+    # scan (scan_owasp_cwe). Running it again per-file would duplicate findings and
+    # add seconds of startup overhead per file.
+    $failed || record_pass "$f"
+}
+
+# ── C# ────────────────────────────────────────────────────────────────────────
+scan_csharp() {
+    local f="$1"
+    local failed=false
+    if grep_check 'Process\.Start\s*\(' "$f"; then
+        record_fail "$f" "CWE-78:Process_Start_command_injection"; failed=true
+    fi
+    if grep_check '(password|secret|apiKey|api_key|token)\s*=\s*"[^"]{4,}"' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
+    fi
+    if grep_check 'new\s+MD5CryptoServiceProvider\s*\(\)' "$f"; then
+        record_fail "$f" "CWE-327:MD5_weak_hash_algorithm"; failed=true
+    fi
+    # SQL string concatenation
+    if grep_check '"SELECT.*"\s*\+' "$f"; then
+        record_fail "$f" "CWE-89:SQL_string_concatenation"; failed=true
+    fi
+    # Semgrep coverage for this language is already provided by the L2 full-directory
+    # scan (scan_owasp_cwe). Running it again per-file would duplicate findings and
+    # add seconds of startup overhead per file.
+    $failed || record_pass "$f"
 }
 
 # ── Classification ───────────────────────────────────────────────────────────
@@ -1333,11 +1407,7 @@ classify_file() {
                 record_pass "$f"
             fi
             ;;
-        # Hugo: add failed if files have no scanner
-        *) 
-            record_fail "$base.$ext" "classify_file:File have no scanner"
-            
-            
+        *) scan_unknown "$f" ;;
     esac
 }
 
@@ -1384,17 +1454,276 @@ scan_by_type() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# REPORTS
+# ═══════════════════════════════════════════════════════════════════════════════
+scan_scancode() {
+    info "=== Layer 6: ScanCode — licence, copyright & vulnerability ==="
+
+    if ! has_cmd scancode; then
+        record_warn "__global__" "scancode missing — licence/copyright layer skipped (pip install scancode-toolkit)"
+        record_layer L6_licence "skipped:scancode not installed"
+        return
+    fi
+
+    local sc_report="${WORK_DIR}/reports/scancode_${TIMESTAMP}.json"
+
+    info "Running scancode on ${SCAN_DIR} …"
+    # --license   : detect licences (SPDX ids)
+    # --copyright : detect copyright notices
+    # --vulnerability : detect known CVEs in detected packages
+    # --package   : detect package manifests
+    # --json-pp   : pretty-printed JSON output
+    # --quiet     : suppress progress bar
+    # --timeout   : per-file timeout in seconds
+    # --vulnerability resolves CVEs against the VulnerableCode service. Licence
+    # and copyright detection are fully local, so offline we keep those and drop
+    # only the part that needs a network.
+    local -a sc_opts=(--license --copyright --package)
+    if [[ "$OFFLINE" == "true" ]]; then
+        record_warn "__global__" \
+            "OFFLINE:scancode CVE lookup disabled (--vulnerability queries VulnerableCode) — licence and copyright detection still run"
+    else
+        sc_opts+=(--vulnerability)
+    fi
+
+    if ! scancode \
+            "${sc_opts[@]}" \
+            --json-pp "$sc_report" \
+            --quiet \
+            --timeout 120 \
+            "$SCAN_DIR" 2>/dev/null; then
+        record_warn "__global__" "scancode:scan_error — check ${sc_report}"
+        return
+    fi
+
+    [[ -f "$sc_report" ]] || { record_warn "__global__" "scancode:no_report_generated"; return; }
+
+    # ── Parse findings ────────────────────────────────────────────────────────
+    if ! has_cmd python3; then
+        record_warn "__global__" "scancode:python3_missing — cannot parse report"
+        return
+    fi
+
+    # ── Parse report and feed results into the pipeline ─────────────────────
+    # Output is captured in sc_out to avoid polluting stdout (which ai_transit.sh
+    # uses to extract the verdict and report path).
+    local sc_out
+    sc_out=$(python3 - "$sc_report" "$SCAN_DIR" <<'PYEOF2'
+import json, sys, os
+
+report_path = sys.argv[1]
+scan_dir    = sys.argv[2]
+
+with open(report_path) as fh:
+    data = json.load(fh)
+
+for file in data.get("files", []):
+    path = file.get("path", "")
+    rel  = os.path.relpath(path, scan_dir) if os.path.isabs(path) else path
+
+    for lic in file.get("license_detections", []):
+        for match in lic.get("matches", []):
+            spdx  = match.get("spdx_license_expression") or match.get("license_expression", "unknown")
+            score = match.get("score", 0)
+            risky = any(k in spdx.upper() for k in (
+                "GPL", "AGPL", "LGPL", "SSPL", "BUSL", "EUPL", "CDDL", "CC-BY-SA", "CC-BY-NC"
+            ))
+            if risky and score >= 70:
+                print(f"WARN|{rel}|licence:{spdx}")
+
+    for pkg in file.get("packages", []):
+        for vuln in pkg.get("vulnerabilities", []):
+            vid      = vuln.get("vulnerability_id", "?")
+            severity = vuln.get("max_severity", "").upper()
+            pkg_name = pkg.get("name", "?")
+            pkg_ver  = pkg.get("version", "?")
+            if severity in ("CRITICAL", "HIGH"):
+                print(f"FAIL|{rel}|scancode_vuln:{vid}[{severity}] in {pkg_name}=={pkg_ver}")
+            else:
+                print(f"WARN|{rel}|scancode_vuln:{vid}[{severity}] in {pkg_name}=={pkg_ver}")
+PYEOF2
+    ) 2>/dev/null
+
+    local warn_count=0 fail_count=0
+    while IFS='|' read -r level sc_rel msg; do
+        [[ -z "$level" ]] && continue
+        local abs_path="${SCAN_DIR}/${sc_rel}"
+        case "$level" in
+            FAIL) record_fail "$abs_path" "$msg"; (( fail_count++ )) || true ;;
+            WARN) record_warn "$abs_path" "$msg"; (( warn_count++ )) || true ;;
+        esac
+    done <<< "$sc_out"
+
+    if (( fail_count > 0 )); then
+        fail_f "scancode: ${fail_count} CRITICAL/HIGH vulnerability finding(s)"
+    elif (( warn_count > 0 )); then
+        warn "scancode: ${warn_count} licence/vulnerability warning(s) — review before enterprise use"
+    else
+        ok "scancode: no risky licences or vulnerabilities detected"
+    fi
+
+    record_layer L6_licence "ran"
+    ok "ScanCode report: ${sc_report}"
+}
+
+generate_report_json() {
+    # Data is written to temp files so Python reads it safely — no bash variable
+    # expansion inside the Python source avoids code injection via filenames or
+    # finding messages that contain triple-quote sequences.
+    local _tmp
+    _tmp=$(mktemp -d)
+    trap "rm -rf '$_tmp'" RETURN
+
+    # NUL-delimited streams: key\x00value\x00key\x00value…
+    local _findings_k="${_tmp}/fk" _findings_v="${_tmp}/fv"
+    local _status_k="${_tmp}/sk"  _status_s="${_tmp}/ss" _status_m="${_tmp}/sm"
+    for path in "${!FINDINGS[@]}"; do
+        printf '%s\x00' "$path"                        >> "$_findings_k"
+        printf '%s\x00' "${FINDINGS[$path]%' | '}"     >> "$_findings_v"
+    done
+    for path in "${!FILE_STATUS[@]}"; do
+        printf '%s\x00' "$path"                        >> "$_status_k"
+        printf '%s\x00' "${FILE_STATUS[$path]}"        >> "$_status_s"
+        printf '%s\x00' "${FILE_MSG[$path]:-}"         >> "$_status_m"
+    done
+
+    local _cov_k="${_tmp}/ck" _cov_v="${_tmp}/cv"
+    local layer
+    for layer in "${!LAYER_COVERAGE[@]}"; do
+        printf '%s\x00' "$layer"                       >> "$_cov_k"
+        printf '%s\x00' "${LAYER_COVERAGE[$layer]}"    >> "$_cov_v"
+    done
+
+    local repo_hash
+    repo_hash=$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')
+
+    # All dynamic values are passed as env vars or temp-file paths — never
+    # interpolated into the Python source.
+    REPORT_VERDICT="$GLOBAL_VERDICT" \
+    REPORT_TS="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    REPORT_REPO_INPUT="${REPO_INPUT:-}" \
+    REPORT_SCAN_DIR="$SCAN_DIR" \
+    REPORT_HASH="$repo_hash" \
+    REPORT_PASS="$PASS_COUNT" \
+    REPORT_WARN="$WARN_COUNT" \
+    REPORT_FAIL="$FAIL_COUNT" \
+    REPORT_OUT="$REPORT_JSON" \
+    python3 - "$_findings_k" "$_findings_v" "$_status_k" "$_status_s" "$_status_m" \
+             "$_cov_k" "$_cov_v" <<'PYEOF'
+import json, os, sys
+
+def _read_nul(path):
+    """Read a stream of NUL-terminated records, preserving empty ones.
+
+    Every record is written with a trailing NUL, so splitting yields one
+    trailing empty element that must be dropped -- but ONLY that one.
+    Filtering all empties (`if p`) would silently drop files whose message is
+    empty and shift every later element, attributing findings to the wrong
+    file in the report.
+    """
+    if not os.path.exists(path):
+        return []
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    if not raw:
+        return []
+    parts = raw.split(b"\x00")
+    if parts and parts[-1] == b"":
+        parts.pop()
+    return [p.decode("utf-8", errors="replace") for p in parts]
+
+fk = _read_nul(sys.argv[1]); fv = _read_nul(sys.argv[2])
+sk = _read_nul(sys.argv[3]); ss = _read_nul(sys.argv[4]); sm = _read_nul(sys.argv[5])
+ck = _read_nul(sys.argv[6]); cv = _read_nul(sys.argv[7])
+while len(sm) < len(sk):
+    sm.append("")
+
+findings     = dict(zip(fk, fv))
+file_results = {
+    k: {"status": s, "message": m.rstrip(" | ")}
+    for k, s, m in zip(sk, ss, sm)
+}
+
+coverage = dict(zip(ck, cv))
+# A layer is "covered" when it ran in full. "partial" and "skipped" both mean
+# the verdict rests on less analysis than it appears to.
+incomplete = sorted(k for k, v in coverage.items() if not v.startswith("ran"))
+
+report = {
+    "verdict":      os.environ["REPORT_VERDICT"],
+    "coverage":           coverage,
+    "coverage_complete":  not incomplete,
+    "coverage_gaps":      incomplete,
+    "timestamp":    os.environ["REPORT_TS"],
+    "repo_input":   os.environ["REPORT_REPO_INPUT"],
+    "directory":    os.environ["REPORT_SCAN_DIR"],
+    "repo_hash":    os.environ["REPORT_HASH"],
+    "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
+                     "SCA-CVE", "ScanCode-Licence-Copyright"],
+    "summary":      {"pass": int(os.environ["REPORT_PASS"]),
+                     "warn": int(os.environ["REPORT_WARN"]),
+                     "fail": int(os.environ["REPORT_FAIL"])},
+    "findings":     findings,
+    "file_results": file_results,
+}
+
+with open(os.environ["REPORT_OUT"], "w", encoding="utf-8") as fh:
+    json.dump(report, fh, ensure_ascii=False, indent=2)
+PYEOF
+}
+
+generate_report_html() {
+    local color
+    [[ "$GLOBAL_VERDICT" == "PASS" ]] && color="#2ecc71" || color="#e74c3c"
+    {
+        echo "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        echo "<title>AI Transit Report — ${TIMESTAMP}</title>"
+        echo "<style>
+body{background:#0d1b2a;color:#eee;font-family:monospace;padding:2rem;max-width:1400px;margin:0 auto}
+h1{color:${color}} h2{color:#00a8ff}
+table{border-collapse:collapse;width:100%;margin-top:1rem}
+th{background:#1f3864;padding:.6rem;text-align:left}
+td{border:1px solid #334;padding:.5rem;vertical-align:top}
+tr:nth-child(even){background:#16213e}
+.pass{color:#2ecc71;font-weight:bold} .fail{color:#e74c3c;font-weight:bold} .warn{color:#f39c12;font-weight:bold}
+.tag{background:#1f3864;border-radius:4px;padding:2px 6px;font-size:.85em;margin:1px;display:inline-block}
+.owasp{background:#c0392b} .cwe{background:#2980b9} .cert{background:#27ae60}
+</style></head><body>"
+        echo "<h1>Verdict: ${GLOBAL_VERDICT}</h1>"
+        echo "<p>Directory: <code>${SCAN_DIR}</code> | Date: ${TIMESTAMP}</p>"
+        echo "<p>Standards: <span class='tag owasp'>OWASP Top 10 2021</span>
+              <span class='tag cwe'>CWE Top 25</span>
+              <span class='tag cert'>CERT Secure Coding</span>
+              <span class='tag'>SCA/CVE</span></p>"
+        echo "<p>PASS: <span class='pass'>${PASS_COUNT}</span> |
+              WARN: <span class='warn'>${WARN_COUNT}</span> |
+              FAIL: <span class='fail'>${FAIL_COUNT}</span></p>"
+        echo "<h2>Results by file</h2>"
+        echo "<table><tr><th>File</th><th>Status</th><th>Finding</th></tr>"
+        for path in "${!FILE_STATUS[@]}"; do
+            local status="${FILE_STATUS[$path]}"
+            local msg="${FILE_MSG[$path]:-}"
+            local cls
+            case "$status" in PASS) cls="pass";; FAIL) cls="fail";; *) cls="warn";; esac
+            echo "<tr><td><code>${path}</code></td><td class='${cls}'>${status}</td><td>${msg}</td></tr>"
+        done
+        echo "</table></body></html>"
+    } > "$REPORT_HTML"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
+REPO_INPUT="${REPO_INPUT:-}"
 info "Starting scan: $SCAN_DIR"
 info "Standards: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding · SCA"
 
 scan_global             # Layer 1: AV + secrets + IOC
 scan_owasp_cwe          # Layer 2: Semgrep OWASP/CWE rulesets
-# scan_dependencies       # Layer 3: SCA — vulnerable dependency CVEs
+scan_dependencies       # Layer 3: SCA — vulnerable dependency CVEs
                         # Layer 4: universal patterns run inside classify_file()
 scan_by_type            # Layer 5: per-language SAST
-# scan_scancode           # Layer 6: licence, copyright & vulnerability (ScanCode)
+scan_scancode           # Layer 6: licence, copyright & vulnerability (ScanCode)
 
 generate_report_json
 generate_report_html
@@ -1406,7 +1735,3 @@ info "HTML report : $REPORT_HTML"
 echo "$GLOBAL_VERDICT" > "${WORK_DIR}/.scan_verdict"
 echo "$REPORT_JSON"    > "${WORK_DIR}/.scan_report_json"
 echo "$GLOBAL_VERDICT"
-
-if [[ "$GLOBAL_VERDICT" != "PASS" ]]; then
-    fail 
-fi
