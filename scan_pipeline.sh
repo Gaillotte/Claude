@@ -1244,6 +1244,245 @@ scan_archive() {
     fi
 }
 
+# ── PDF ───────────────────────────────────────────────────────────────────────
+# A PDF is a container, not a flat document: the format can auto-run JavaScript
+# the moment the file is opened, start an external program, and carry an embedded
+# executable. Before this existed, .pdf had no entry in classify_file() and fell
+# through to scan_unknown, where application/pdf is not one of the dangerous
+# MIME types — so a PDF wiring /OpenAction to /JavaScript and embedding an MZ
+# payload was recorded PASS with no findings, while a .zip was failed outright
+# for merely needing a rescan.
+#
+# Two properties of the format make a pattern rule harder than it looks.
+#
+#   Compression. From PDF 1.5 an object dictionary may live inside a FlateDecode
+#   /ObjStm, so none of the names below need appear in the file's plaintext at
+#   all. Greping raw bytes finds nothing in a PDF built that way, which is what
+#   tests/fixtures/rules/pdf_compressed_js.pdf pins down. _pdf_searchable()
+#   inflates every stream it can and searches that too.
+#
+#   Name escaping. /JavaScript and /J#61vaScript are the same name to a reader,
+#   so escapes are decoded before matching.
+#
+# Anchoring matters as much as the patterns. TrueType subsetting produces font
+# tags such as /AAAAAA+DejaVuSans, and an unanchored /AA rule reads those as an
+# AdditionalActions key — a false positive that flags this project's own
+# installation guide. Every short name below is therefore matched only where the
+# next byte cannot continue a PDF name.
+_pdf_has() { grep -qaE "$2" "$1" 2>/dev/null; }    # _pdf_has <file> <pattern>
+
+# Emit a searchable rendering of a PDF on stdout: the raw bytes with hex-escaped
+# name characters decoded, then every FlateDecode stream that inflates.
+_pdf_searchable() {
+    python3 - "$1" <<'PYEOF' 2>/dev/null
+import re, sys, zlib
+
+MAX_INFLATE = 64 * 1024 * 1024       # decompression-bomb ceiling
+MAX_READ    = 512 * 1024 * 1024      # repository size limit is 500 MB
+
+_HEX    = re.compile(rb"#([0-9A-Fa-f]{2})")
+_NAME   = re.compile(rb"/([A-Za-z0-9#]{1,64})")
+_STREAM = re.compile(rb"(?<!end)stream\r?\n?")
+
+# A bare "MZ" says nothing here — compressed PDF bytes contain it by chance in
+# every real document. An embedded executable starts with MZ *and* carries the
+# PE signature a little further in, which arbitrary data does not.
+def looks_like_pe(buf):
+    return buf[:2] == b"MZ" and b"PE\x00\x00" in buf[:4096]
+
+# Escaping is only evidence of evasion when it hides one of these. A #xx
+# sequence on its own is not: inside a compressed stream it is ordinary binary
+# noise, and matching it flagged two of this project's own PDFs, where
+# "/#A57Sg" decodes to "\xa57Sg" and means nothing at all.
+_DANGEROUS_NAMES = frozenset((
+    b"JavaScript", b"JS", b"OpenAction", b"AA", b"Launch", b"EmbeddedFile",
+    b"RichMedia", b"Flash", b"SubmitForm", b"ImportData", b"XFA",
+    b"GoToR", b"GoToE", b"ObjStm", b"Encrypt",
+))
+
+obfuscated = False
+
+
+def decode_names(data):
+    """Decode #xx escapes, but only inside name tokens."""
+    global obfuscated
+
+    def repl(m):
+        global obfuscated
+        name = m.group(1)
+        if b"#" not in name:
+            return m.group(0)
+        try:
+            dec = _HEX.sub(lambda h: bytes([int(h.group(1), 16)]), name)
+        except Exception:
+            return m.group(0)
+        if dec != name and dec in _DANGEROUS_NAMES:
+            obfuscated = True
+        return b"/" + dec
+    return _NAME.sub(repl, data)
+
+try:
+    with open(sys.argv[1], "rb") as fh:
+        raw = fh.read(MAX_READ)
+except Exception:
+    raise SystemExit(0)
+
+out = sys.stdout.buffer
+out.write(decode_names(raw))
+
+# A PE signature cannot be expressed as a grep pattern from bash, because a
+# bash string cannot hold the NUL bytes it contains. Detect it here and leave
+# a plain-text marker for the shell rules to match instead.
+pe = looks_like_pe(raw)
+
+budget = MAX_INFLATE
+for m in _STREAM.finditer(raw):
+    if budget <= 0:
+        break
+    end = raw.find(b"endstream", m.end())
+    if end == -1:
+        continue
+    body = raw[m.end():end]
+    if not body:
+        continue
+    try:
+        inflated = zlib.decompressobj().decompress(body, budget)
+    except Exception:
+        continue          # not a flate stream, or truncated — nothing to add
+    if inflated:
+        budget -= len(inflated)
+        pe = pe or looks_like_pe(inflated)
+        out.write(b"\n")
+        out.write(decode_names(inflated))
+
+if pe:
+    out.write(b"\nAITRANSIT-MARKER-EMBEDDED-PE\n")
+if obfuscated:
+    out.write(b"\nAITRANSIT-MARKER-NAME-OBFUSCATION\n")
+out.write(b"\n")
+PYEOF
+}
+
+scan_pdf() {
+    local f="$1"
+    local failed=false
+
+    # A .pdf that is not a PDF at all is worth saying out loud.
+    if ! head -c 1024 "$f" 2>/dev/null | grep -qa '%PDF-'; then
+        record_warn "$f" "pdf:no_PDF_header_extension_may_be_misleading"
+    fi
+
+    # Search the inflated, name-decoded rendering where one can be built, and
+    # say so where it cannot: a PDF whose objects are all compressed and could
+    # not be inflated has not been inspected, and that must not read as clean.
+    local searchable="$f" tmp=""
+    if has_cmd python3; then
+        tmp=$(mktemp "${TMPDIR:-/tmp}/aitransit_pdf_XXXXXX" 2>/dev/null) || tmp=""
+    fi
+    if [[ -n "$tmp" ]]; then
+        # Cleaned up explicitly at the single exit point below rather than with
+        # a RETURN trap: such a trap is not scoped to the function that sets it,
+        # so it goes on firing as later functions return, and a trap body that
+        # defers expansion ('...$tmp...') then dies on set -u once $tmp is out
+        # of scope. scan_pdf has no early return, so one rm is enough.
+        _pdf_searchable "$f" > "$tmp" 2>/dev/null || true
+        [[ -s "$tmp" ]] && searchable="$tmp"
+    fi
+    if [[ "$searchable" == "$f" ]] && _pdf_has "$f" '/ObjStm'; then
+        record_warn "$f" \
+            "pdf:compressed_object_streams_not_inspected(install python3 so scan_pdf can inflate them)"
+    fi
+
+    # ── Active content ───────────────────────────────────────────────────
+    # CWE-94 — an embedded script at all. Held in a variable because the
+    # shellcode and known-exploit rules below are only meaningful alongside it:
+    # a PDF that merely *documents* unescape() is not an attack.
+    local has_js=false
+    if _pdf_has "$searchable" '/(JavaScript|JS)[^A-Za-z0-9#]'; then
+        record_fail "$f" "CWE-94:PDF_javascript_embedded"
+        has_js=true
+        failed=true
+    fi
+
+    # /OpenAction and /AA run without the reader clicking anything
+    if _pdf_has "$searchable" '/(OpenAction|AA)[^A-Za-z0-9#]'; then
+        record_fail "$f" "CWE-94:PDF_auto_execute_action_on_open"
+        failed=true
+    fi
+
+    # CWE-78 — /Launch starts an external program
+    if _pdf_has "$searchable" '/Launch[^A-Za-z0-9#]'; then
+        record_fail "$f" "CWE-78:PDF_launch_action_starts_external_program"
+        failed=true
+    fi
+
+    # CWE-506 — embedded payload
+    if _pdf_has "$searchable" '/EmbeddedFile'; then
+        record_fail "$f" "CWE-506:PDF_embedded_file_payload"
+        failed=true
+    fi
+    if _pdf_has "$searchable" 'AITRANSIT-MARKER-EMBEDDED-PE|This program cannot be run in DOS mode'; then
+        record_fail "$f" "CWE-506:PDF_embedded_windows_executable"
+        failed=true
+    fi
+
+    # Writing /OpenAction as /OpenAc#74ion reads identically to a PDF viewer and
+    # defeats a plain-text rule. The marker is only emitted where an escape
+    # actually decodes to one of the names above, so ordinary escaping — and the
+    # binary noise that superficially resembles it — does not reach here.
+    if _pdf_has "$searchable" 'AITRANSIT-MARKER-NAME-OBFUSCATION'; then
+        record_fail "$f" "CWE-94:PDF_name_hex_obfuscation_hides_active_content"
+        failed=true
+    fi
+
+    # Rich media players carry their own exploit history
+    if _pdf_has "$searchable" '/(RichMedia|Flash)[^A-Za-z0-9#]'; then
+        record_fail "$f" "CWE-94:PDF_rich_media_active_content"
+        failed=true
+    fi
+
+    # CWE-200 — a form that posts elsewhere, or pulls data in
+    if _pdf_has "$searchable" '/(SubmitForm|ImportData)[^A-Za-z0-9#]'; then
+        record_fail "$f" "CWE-200:PDF_form_submits_or_imports_data"
+        failed=true
+    fi
+
+    if [[ "$has_js" == true ]]; then
+        # Acrobat JavaScript entry points with a public exploit history
+        if _pdf_has "$searchable" \
+            '(util\.printf|collab\.getIcon|media\.newPlayer|spell\.customDictionaryOpen|this\.exportDataObject|app\.launchURL|getAnnots)[[:space:]]*\('; then
+            record_fail "$f" "CWE-94:PDF_javascript_known_exploit_api"
+            failed=true
+        fi
+        # Heap-spray and shellcode shapes
+        if _pdf_has "$searchable" \
+            '(unescape[[:space:]]*\(|%u[0-9A-Fa-f]{4}%u[0-9A-Fa-f]{4}|String\.fromCharCode[[:space:]]*\()'; then
+            record_fail "$f" "CWE-94:PDF_javascript_shellcode_pattern"
+            failed=true
+        fi
+    fi
+
+    # ── Opaque or review-worthy, but not active content on its own ───────
+    if _pdf_has "$searchable" '/Encrypt[^A-Za-z0-9#]'; then
+        record_warn "$f" "pdf:encrypted_content_could_not_be_inspected"
+    fi
+    if _pdf_has "$searchable" '/XFA[^A-Za-z0-9#]'; then
+        record_warn "$f" "pdf:XFA_form_attack_surface"
+    fi
+    if _pdf_has "$searchable" '/(GoToR|GoToE)[^A-Za-z0-9#]'; then
+        record_warn "$f" "pdf:remote_or_embedded_destination"
+    fi
+    # Incremental updates: what a reader shows need not be the only revision.
+    # -o then wc -l, because grep -c counts matching *lines* and a PDF may hold
+    # several revisions with barely a newline between them.
+    if (( $(grep -ao '%%EOF' "$f" 2>/dev/null | wc -l) > 1 )); then
+        record_warn "$f" "pdf:incremental_updates_multiple_revisions"
+    fi
+
+    [[ -n "$tmp" ]] && rm -f "$tmp"
+    $failed || record_pass "$f"
+}
+
 # ── Unknown ───────────────────────────────────────────────────────────────────
 scan_unknown() {
     local f="$1"
@@ -1390,6 +1629,7 @@ classify_file() {
         .tf|.tfvars|.hcl)               scan_terraform   "$f" ;;
         .so|.dll|.dylib|.exe|.elf|.bin)  scan_binary     "$f" ;;
         .zip|.tar|.gz|.tgz|.bz2|.xz)    scan_archive    "$f" ;;
+        .pdf)                             scan_pdf         "$f" ;;
         .sql)                             scan_sql         "$f" ;;
         .json)
             if grep_check \
@@ -1659,7 +1899,8 @@ report = {
     "directory":    os.environ["REPORT_SCAN_DIR"],
     "repo_hash":    os.environ["REPORT_HASH"],
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
-                     "SCA-CVE", "ScanCode-Licence-Copyright"],
+                     "SCA-CVE", "ScanCode-Licence-Copyright",
+                     "PDF-Active-Content"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},

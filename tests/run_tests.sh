@@ -185,6 +185,33 @@ for p,i in d.get('file_results',{}).items():
             fail_test "no file is PASS while carrying a [FAIL] message" "$MISMATCH"
         fi
 
+        # ── PDF active content ───────────────────────────────────────────────
+        # A PDF is a container: it can auto-run JavaScript, launch a program and
+        # carry an embedded executable. Before scan_pdf() existed, .pdf had no
+        # handler and fell through to scan_unknown, where application/pdf is not
+        # one of the dangerous MIME types — so a weaponised PDF was recorded
+        # PASS with no findings.
+        assert_contains "$(line_for pdf_openaction_js.pdf)" "CWE-94:PDF_javascript" \
+            "PDF with an embedded /JavaScript action is flagged"
+        assert_contains "$(line_for pdf_openaction_js.pdf)" "PDF_auto_execute" \
+            "PDF that auto-runs an action on open is flagged"
+        assert_contains "$(line_for pdf_openaction_js.pdf)" "CWE-78:PDF_launch_action" \
+            "PDF /Launch action is flagged"
+
+        # The payload in this fixture exists ONLY inside a FlateDecode /ObjStm:
+        # the strings "JavaScript" and "OpenAction" appear nowhere in the file's
+        # plaintext. A rule that greps raw bytes passes it; only inflating the
+        # streams finds it.
+        assert_contains "$(line_for pdf_compressed_js.pdf)" "CWE-94:PDF_javascript" \
+            "PDF hiding JavaScript in a compressed object stream is flagged"
+
+        # /OpenAc#74ion and /J#61vaScript read identically to a viewer. The
+        # strings "/OpenAction" and "/JavaScript" are absent from this file.
+        assert_contains "$(line_for pdf_obfuscated_js.pdf)" "PDF_name_hex_obfuscation" \
+            "PDF hex-escaping /JavaScript to evade a text rule is flagged"
+        assert_contains "$(line_for pdf_obfuscated_js.pdf)" "CWE-94:PDF_javascript" \
+            "hex-escaped names are decoded before the rules run"
+
         # ── False-positive guards: these must NOT be flagged ─────────────────
         # Regression guard for the P8 fix: the parameterised query form is the
         # correct, safe pattern and must never be reported as an injection.
@@ -195,6 +222,16 @@ for p,i in d.get('file_results',{}).items():
         SAFE_SH=$(echo "$F" | grep 'safe_shell.sh' || true)
         assert_not_contains "$SAFE_SH" "CWE-78" \
             "does NOT flag quoted shell variable expansion"
+
+        # An ordinary document must stay clean. benign_doc.pdf embeds a subset
+        # font, so it carries /AAAAAA+DejaVuSans tags; an unanchored /AA rule
+        # reads those as an AdditionalActions key and would block this project's
+        # own installation guide.
+        SAFE_PDF=$(echo "$F" | grep 'benign_doc.pdf' || true)
+        assert_not_contains "$SAFE_PDF" "PDF_auto_execute" \
+            "does NOT read a /AAAAAA+ font subset tag as an /AA auto-action"
+        assert_not_contains "$SAFE_PDF" "CWE-94" \
+            "does NOT flag an ordinary PDF as carrying active content"
     fi
 fi
 
@@ -550,6 +587,24 @@ if ! _skipping; then
             ok_test "${f} has no multi-character IFS"
         else
             fail_test "${f} has no multi-character IFS" "$BAD"
+        fi
+    done
+
+    # A RETURN trap is not scoped to the function that installs it: it keeps
+    # firing as later functions return. If its body defers expansion — single
+    # quotes around '$tmp' rather than double — then by the time it runs in some
+    # other function the variable is out of scope and set -u aborts the whole
+    # scan. That is how the first cut of scan_pdf() killed every run after the
+    # first PDF. A RETURN trap must bake its paths in at install time, so a
+    # single-quoted body referencing a variable is a defect.
+    for f in ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh; do
+        BAD=$(grep -nE "trap[[:space:]]+'[^']*\\\$[^']*'[[:space:]]+RETURN" \
+              "${ROOT_DIR}/${f}" \
+              | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+        if [[ -z "$BAD" ]]; then
+            ok_test "${f} has no RETURN trap that defers variable expansion"
+        else
+            fail_test "${f} has no RETURN trap that defers variable expansion" "$BAD"
         fi
     done
 

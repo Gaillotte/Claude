@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream inflation + anchored name rules) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -157,6 +157,37 @@ the verdict.
 
 - **FAIL** → pipeline blocks; repo quarantined; no ZIP produced.
 - **WARN** → logged, pipeline continues; ZIP produced; findings appear in reports. WARNs are degraded-mode signals (missing optional tool, risky licence, severity below threshold, allowlisted finding).
+
+## PDF scanning
+
+A PDF is a container, not a flat document: the format can auto-run JavaScript on
+open (`/OpenAction`, `/AA`), start an external program (`/Launch`), and carry an
+embedded executable (`/EmbeddedFile`). `scan_pdf()` treats it accordingly —
+**FAIL** on active content, **WARN** on content it cannot inspect, PASS on an
+ordinary document. Two format properties make this harder than a grep:
+
+- **Compression.** From PDF 1.5 an object dictionary may live inside a
+  FlateDecode `/ObjStm`, so none of those names need appear in the plaintext.
+  `_pdf_searchable()` inflates every stream it can (zlib, stdlib only, with a
+  64 MB decompression-bomb ceiling) and searches that too. A PDF whose objects
+  could not be inflated gets an explicit WARN — "not inspected" must never read
+  as "clean".
+- **Name escaping.** `/J#61vaScript` and `/JavaScript` are the same name to a
+  reader, so escapes are decoded before matching. An escape is reported as
+  obfuscation only where it decodes to a dangerous name; a bare `#xx` inside a
+  compressed stream is binary noise, and matching it flagged this project's own
+  PDFs.
+
+**Anchoring is load-bearing.** TrueType subsetting produces font tags like
+`/AAAAAA+DejaVuSans`, which an unanchored `/AA` rule reads as an
+AdditionalActions key — that false positive blocks this project's own INSTALL
+guide. Every short name is matched only where the next byte cannot continue a
+PDF name. `tests/fixtures/rules/benign_doc.pdf` embeds a subset font to guard
+this; regenerate fixtures with `python3 tests/fixtures/make_pdf_fixtures.py`.
+
+**Known gap:** only Flate streams are inflated. A dictionary behind
+`/ASCIIHexDecode`, `/ASCII85Decode` or `/LZWDecode` is not decoded, so active
+content hidden there is missed and is not currently WARNed about either.
 
 ## Files with unknown extensions
 
