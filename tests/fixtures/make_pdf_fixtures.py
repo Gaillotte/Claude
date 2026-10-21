@@ -34,6 +34,7 @@ valid; the payloads are inert strings, not working exploits.
 """
 from __future__ import annotations
 
+import base64
 import pathlib
 import struct
 import zlib
@@ -241,6 +242,174 @@ def write_obfuscated_fixture(path: pathlib.Path) -> None:
                 "that scan_pdf() decodes hex-escaped names")
 
 
+def write_paren_swallow_fixture(path: pathlib.Path) -> None:
+    """An unbalanced "(" in binary stream data, ahead of a plaintext catalogue.
+
+    String literals have to be blanked before the key rules run, or the prose
+    "Python/JavaScript" in a paragraph reads as a /JavaScript key. But naive
+    blanking is itself exploitable: a lone 0x28 inside an image stream opens a
+    string that never closes, and everything after it — including the
+    /OpenAction in the catalogue below — gets blanked away and goes unseen.
+
+    The payload here is an ordinary /OpenAction -> /JavaScript pair in plain
+    sight. The only trick is the stray parenthesis placed before it.
+    """
+    content = b"BT /F1 12 Tf 40 120 Td (AI Transit PDF fixture) Tj ET\n"
+    # Binary-looking stream data holding one unmatched "(" and no ")".
+    noise = bytes([0x89, 0x50, 0x4E, 0x47, 0x28, 0xFF, 0x00, 0x13, 0x37]) * 24
+
+    objs: dict[int, bytes] = {
+        # The decoy stream comes first, so its stray "(" precedes everything.
+        1: b"<< /Length " + str(len(noise)).encode() + b" /Filter /DCTDecode >>\n"
+           b"stream\n" + noise + b"\nendstream",
+        2: b"<< /Type /Catalog /Pages 3 0 R /OpenAction 6 0 R >>",
+        3: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+        4: b"<< /Type /Page /Parent 3 0 R /MediaBox [0 0 300 200] "
+           b"/Resources << /Font << /F1 7 0 R >> >> /Contents 5 0 R >>",
+        5: b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n"
+           + content + b"endstream",
+        6: b"<< /Type /Action /S /JavaScript /JS ("
+           + _pdf_string(JS_PAYLOAD) + b") >>",
+        7: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+
+    buf = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets: dict[int, int] = {}
+    for num in sorted(objs):
+        offsets[num] = len(buf)
+        buf += f"{num} 0 obj\n".encode() + objs[num] + b"\nendobj\n"
+
+    xref_num = max(objs) + 1
+    entries: list[tuple[int, int, int]] = [(0, 0, 65535)]
+    for num in range(1, xref_num):
+        entries.append((1, offsets[num], 0))
+    xref_off = len(buf)
+    entries.append((1, xref_off, 0))
+
+    head, data = _xref_stream_obj(xref_num, entries, root=2, size=xref_num + 1)
+    buf += head + data + b"\nendstream\nendobj\n"
+    buf += f"startxref\n{xref_off}\n%%EOF\n".encode()
+
+    path.write_bytes(bytes(buf))
+
+    raw = path.read_bytes()
+    if raw.index(b"(") > raw.index(b"/OpenAction"):
+        raise SystemExit(
+            f"{path.name}: the stray '(' must come before /OpenAction, "
+            "or the fixture does not test paren swallowing at all")
+
+
+def _lzw_encode(data: bytes, early: int = 1) -> bytes:
+    """PDF-variant LZW encoder — exists only to build the LZW fixture."""
+    table = {bytes([i]): i for i in range(256)}
+    nxt, nbits, bits = 258, 9, []
+
+    def emit(code: int, width: int) -> None:
+        for k in range(width - 1, -1, -1):
+            bits.append((code >> k) & 1)
+
+    emit(256, nbits)
+    cur = b""
+    for byte in data:
+        nc = cur + bytes([byte])
+        if nc in table:
+            cur = nc
+            continue
+        emit(table[cur], nbits)
+        table[nc] = nxt
+        nxt += 1
+        if nxt + early > (1 << nbits) and nbits < 12:
+            nbits += 1
+        cur = bytes([byte])
+    if cur:
+        emit(table[cur], nbits)
+    emit(257, nbits)
+    while len(bits) % 8:
+        bits.append(0)
+    return bytes(int("".join(map(str, bits[i:i + 8])), 2)
+                 for i in range(0, len(bits), 8))
+
+
+def write_filtered_fixture(path: pathlib.Path, filter_name: str) -> None:
+    """The compressed attack again, behind a filter other than Flate.
+
+    Flate was the only filter scan_pdf() originally inflated, so a /JavaScript
+    action behind ASCII85 or LZW was as invisible to it as one behind Flate was
+    to a plain grep. One fixture per filter, each hiding the catalogue and the
+    action inside an /ObjStm encoded with that filter alone.
+    """
+    content = b"BT /F1 12 Tf 40 120 Td (AI Transit PDF fixture) Tj ET\n"
+
+    packed_objs: dict[int, bytes] = {
+        1: b"<< /Type /Catalog /Pages 2 0 R /OpenAction 5 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] "
+           b"/Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>",
+        5: b"<< /Type /Action /S /JavaScript /JS (" + _pdf_string(JS_PAYLOAD) + b") >>",
+        7: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+
+    pairs, bodies, cursor = [], [], 0
+    for num in sorted(packed_objs):
+        pairs.append(f"{num} {cursor}")
+        body = packed_objs[num] + b"\n"
+        bodies.append(body)
+        cursor += len(body)
+    header = (" ".join(pairs) + "\n").encode("latin-1")
+    plain = header + b"".join(bodies)
+
+    if filter_name == "ASCII85Decode":
+        encoded = base64.a85encode(plain) + b"~>"
+    elif filter_name == "ASCIIHexDecode":
+        encoded = plain.hex().encode("ascii") + b">"
+    elif filter_name == "LZWDecode":
+        encoded = _lzw_encode(plain)
+    else:
+        raise ValueError(f"unsupported fixture filter {filter_name}")
+
+    objstm_num, content_num, xref_num = 8, 4, 9
+
+    buf = bytearray(b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n")
+    offsets: dict[int, int] = {}
+
+    offsets[content_num] = len(buf)
+    buf += (f"{content_num} 0 obj\n".encode()
+            + b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n"
+            + content + b"endstream\nendobj\n")
+
+    offsets[objstm_num] = len(buf)
+    buf += (f"{objstm_num} 0 obj\n".encode()
+            + f"<< /Type /ObjStm /N {len(packed_objs)} /First {len(header)} "
+              f"/Filter /{filter_name} /Length {len(encoded)} >>\nstream\n".encode()
+            + encoded + b"\nendstream\nendobj\n")
+
+    size = xref_num + 1
+    entries: list[tuple[int, int, int]] = [(0, 0, 65535)]
+    stm_index = {num: i for i, num in enumerate(sorted(packed_objs))}
+    for num in range(1, size - 1):
+        if num in stm_index:
+            entries.append((2, objstm_num, stm_index[num]))
+        elif num in offsets:
+            entries.append((1, offsets[num], 0))
+        else:
+            entries.append((0, 0, 65535))
+    xref_off = len(buf)
+    entries.append((1, xref_off, 0))
+
+    head, data = _xref_stream_obj(xref_num, entries, root=1, size=size)
+    buf += head + data + b"\nendstream\nendobj\n"
+    buf += f"startxref\n{xref_off}\n%%EOF\n".encode()
+
+    path.write_bytes(bytes(buf))
+
+    raw = path.read_bytes()
+    for leak in (b"JavaScript", b"OpenAction"):
+        if leak in raw:
+            raise SystemExit(
+                f"{path.name} leaks {leak!r} into plaintext — it would no "
+                f"longer prove that scan_pdf() decodes {filter_name}")
+
+
 def write_benign_fixture(path: pathlib.Path) -> None:
     """A real document, built the way the project builds its own PDFs.
 
@@ -294,6 +463,9 @@ def main() -> None:
     write_plaintext_fixture(RULES / "pdf_openaction_js.pdf")
     write_compressed_fixture(RULES / "pdf_compressed_js.pdf")
     write_obfuscated_fixture(RULES / "pdf_obfuscated_js.pdf")
+    write_filtered_fixture(RULES / "pdf_ascii85_js.pdf", "ASCII85Decode")
+    write_filtered_fixture(RULES / "pdf_lzw_js.pdf", "LZWDecode")
+    write_paren_swallow_fixture(RULES / "pdf_paren_swallow_js.pdf")
 
     # Only the benign fixture needs ReportLab, and it is committed, so a host
     # without ReportLab can still regenerate the two that matter most.
@@ -309,7 +481,9 @@ def main() -> None:
                 "Install it with:  python3 -m pip install reportlab")
 
     for name in ("pdf_openaction_js.pdf", "pdf_compressed_js.pdf",
-                 "pdf_obfuscated_js.pdf", "benign_doc.pdf"):
+                 "pdf_obfuscated_js.pdf", "pdf_ascii85_js.pdf",
+                 "pdf_lzw_js.pdf", "pdf_paren_swallow_js.pdf",
+                 "benign_doc.pdf"):
         p = RULES / name
         if p.exists():
             print(f"  {name:<26} {p.stat().st_size:>7} bytes")

@@ -166,28 +166,58 @@ embedded executable (`/EmbeddedFile`). `scan_pdf()` treats it accordingly —
 **FAIL** on active content, **WARN** on content it cannot inspect, PASS on an
 ordinary document. Two format properties make this harder than a grep:
 
-- **Compression.** From PDF 1.5 an object dictionary may live inside a
-  FlateDecode `/ObjStm`, so none of those names need appear in the plaintext.
-  `_pdf_searchable()` inflates every stream it can (zlib, stdlib only, with a
-  64 MB decompression-bomb ceiling) and searches that too. A PDF whose objects
-  could not be inflated gets an explicit WARN — "not inspected" must never read
-  as "clean".
+- **Encoding.** From PDF 1.5 an object dictionary may live inside an `/ObjStm`,
+  so none of those names need appear in the plaintext. `_pdf_searchable()`
+  decodes the declared filter chain of every stream — `FlateDecode`,
+  `LZWDecode`, `ASCIIHexDecode`, `ASCII85Decode`, `RunLengthDecode`, all
+  stdlib-only, with a 64 MB decompression-bomb ceiling. Chains are real:
+  ReportLab writes `/Filter [ /ASCII85Decode /FlateDecode ]`. A stream behind a
+  filter it cannot decode is WARNed about **by name** — "not inspected" must
+  never read as "clean". Image filters (`DCTDecode`, `JPXDecode`,
+  `CCITTFaxDecode`, `JBIG2Decode`) are excluded: they carry pixels, never
+  dictionaries, so warning about them would fire on every PDF with a photo.
 - **Name escaping.** `/J#61vaScript` and `/JavaScript` are the same name to a
   reader, so escapes are decoded before matching. An escape is reported as
   obfuscation only where it decodes to a dangerous name; a bare `#xx` inside a
   compressed stream is binary noise, and matching it flagged this project's own
   PDFs.
 
-**Anchoring is load-bearing.** TrueType subsetting produces font tags like
+### Two views, and why both are needed
+
+`_pdf_searchable()` emits **two** renderings, and each rule reads exactly one:
+
+| View | Contents | Rules |
+|------|----------|-------|
+| `$names` | string literals blanked | key rules (`/JavaScript`, `/OpenAction`, …) |
+| `$searchable` | everything, plus markers | payload rules (shellcode, exploit APIs, embedded PE) |
+
+The split is not cosmetic. This guide contains the prose "Python/JavaScript
+dependency CVE", which a content stream renders as
+`(Python/JavaScript dependency CVE) Tj` — so a key rule reading the full view
+fails the guide against its own scanner. Anchoring cannot fix it: requiring a
+non-name byte before the slash would also reject `/S/JavaScript`, which is valid
+PDF because names self-delimit. Only string context distinguishes them. The
+payload rules need the opposite view, since the script lives inside `/JS ( … )`.
+
+Blanking string literals is itself attackable, so it is bounded: a `(` that does
+not close within `MAX_STRING` is treated as data, and raw stream bodies are
+blanked before string tracking. Otherwise one stray `0x28` in an image stream
+opens a string that never closes and swallows every dictionary after it.
+`pdf_paren_swallow_js.pdf` pins this down.
+
+**Anchoring is still load-bearing.** TrueType subsetting produces font tags like
 `/AAAAAA+DejaVuSans`, which an unanchored `/AA` rule reads as an
 AdditionalActions key — that false positive blocks this project's own INSTALL
 guide. Every short name is matched only where the next byte cannot continue a
 PDF name. `tests/fixtures/rules/benign_doc.pdf` embeds a subset font to guard
 this; regenerate fixtures with `python3 tests/fixtures/make_pdf_fixtures.py`.
 
-**Known gap:** only Flate streams are inflated. A dictionary behind
-`/ASCIIHexDecode`, `/ASCII85Decode` or `/LZWDecode` is not decoded, so active
-content hidden there is missed and is not currently WARNed about either.
+**Acceptance test:** this project ships four PDFs, and they are the realistic
+negative set. After any change to `scan_pdf()`, scan a directory containing them
+and confirm `PASS` with no findings.
+
+**Remaining gap:** an encrypted PDF (`/Encrypt`, or a `/Crypt` stream filter) is
+WARNed about but not decrypted, so its streams go uninspected.
 
 ## Files with unknown extensions
 

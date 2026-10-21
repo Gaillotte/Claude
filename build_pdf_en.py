@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("PDF scanner",       "L5", True,
+     "No active content",
+     "JavaScript / auto-action / Launch / embedded exe → FAIL",
+     "Encrypted or undecodable stream → WARN"),
     ("ScanCode",          "L6", True,
      "No risky licence, no CVE",
      "CRITICAL/HIGH CVE in pkg → FAIL",
@@ -1712,7 +1716,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "78 assertions", [
+    ("Test suite", "84 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

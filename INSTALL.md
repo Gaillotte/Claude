@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 78/78 passed
+./tests/run_tests.sh          # Expected: ✔ 84/84 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 78/78 passed
+# Expected: ✔ 84/84 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1560,6 +1560,7 @@ tool; nothing to stage, no flags required.
 | detect-secrets | L1 | Entropy and regex rules embedded |
 | YARA | L1 | Reads your own `.yar` files from `$WORK_DIR/yara-rules/` |
 | grep built-ins | L4 | CWE-798/22/918/327/338 patterns, entirely local |
+| PDF scanner (`scan_pdf`) | L5 | Built in; needs only `python3` and its standard library — no signatures, no rules to stage, no network at any point |
 | Bandit | L5 | Local Python AST analysis |
 | ShellCheck | L5 | Local |
 | cppcheck | L5 | Local |
@@ -1590,6 +1591,66 @@ emits an `OFFLINE:` warning so the gap is on the record.
 
 The single practical consequence: **trivy is the only dependency-CVE coverage
 you have offline.** If its database is not staged, Layer 3 contributes nothing.
+
+### 11.2.1 PDF scanning — no staging, and why that matters
+
+`scan_pdf` is the one content-inspection layer with no perishable data behind
+it. It needs `python3` and its standard library and nothing else: no signature
+database, no rule bundle, no registry lookup. On an air-gapped host it is
+exactly as capable as on a connected one, which is not true of Layers 2, 3 or 6.
+
+That is worth knowing because a PDF is a container, not a flat document. The
+format can run JavaScript the moment a file is opened (`/OpenAction`, `/AA`),
+start an external program (`/Launch`) and carry an embedded executable
+(`/EmbeddedFile`). Those are **FAIL** conditions. Things the scanner cannot see
+into — `/Encrypt`, `/XFA`, a stream behind a filter it cannot decode — are
+**WARN**, named individually, because an uninspected stream is not a clean one.
+
+Object dictionaries need not be in plain text: from PDF 1.5 they may live inside
+an `/ObjStm`, so the scanner decodes each stream's declared filter chain
+(`FlateDecode`, `LZWDecode`, `ASCIIHexDecode`, `ASCII85Decode`,
+`RunLengthDecode`) before any rule runs, with a 64 MB ceiling against
+decompression bombs. Chains are ordinary in practice — ReportLab, which builds
+this very guide, writes `/Filter [ /ASCII85Decode /FlateDecode ]`.
+
+Verify it the way the test suite does:
+
+```bash
+# Build the fixtures, then scan them
+python3 tests/fixtures/make_pdf_fixtures.py
+WORK_DIR=/tmp/pdfcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+
+# Expected: verdict FAIL.
+#   pdf_openaction_js.pdf     FAIL  CWE-94:PDF_javascript_embedded, PDF_auto_execute…
+#   pdf_compressed_js.pdf     FAIL  payload was only inside a FlateDecode /ObjStm
+#   pdf_obfuscated_js.pdf     FAIL  names were written /J#61vaScript
+#   pdf_ascii85_js.pdf        FAIL  payload behind ASCII85Decode
+#   pdf_lzw_js.pdf            FAIL  payload behind LZWDecode
+#   pdf_paren_swallow_js.pdf  FAIL  stray "(" did not hide the dictionary after it
+#   benign_doc.pdf            PASS  ordinary document — must not be flagged
+```
+
+The last two lines are the ones that matter on an upgrade. `benign_doc.pdf`
+embeds a subset font, so it carries `/AAAAAA+DejaVuSans` tags; an `/AA` rule
+without a right-hand anchor reads those as an AdditionalActions key and fails
+ordinary documentation — including this guide. And because this guide contains
+the words "Python/JavaScript dependency CVE", which a content stream renders as
+`(Python/JavaScript dependency CVE) Tj`, key rules read a view of the file with
+string literals blanked out. Anchoring alone cannot separate those cases:
+`/S/JavaScript` is valid PDF, because names self-delimit.
+
+**Acceptance test after any change to `scan_pdf`** — the four PDFs this project
+ships are the realistic negative set:
+
+```bash
+mkdir -p /tmp/ownpdfs && cp *.pdf /tmp/ownpdfs/
+WORK_DIR=/tmp/pdfcheck bash scan_pipeline.sh /tmp/ownpdfs --quiet
+# Expected: PASS, with no findings against any of the four.
+```
+
+**Not covered:** an encrypted PDF is reported but not decrypted, so its streams
+go uninspected. Treat a `pdf:encrypted_content_could_not_be_inspected` WARN as a
+file needing manual review, not a clean result.
 
 ### 11.3 Environment variables
 
@@ -1867,7 +1928,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 78/78 passed
+# Expected: ✔ 84/84 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2306,7 +2367,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  78/78 passed
+  ✔  84/84 passed
 ```
 
 ### 17.1 What each layer covers

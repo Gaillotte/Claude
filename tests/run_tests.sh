@@ -212,6 +212,24 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for pdf_obfuscated_js.pdf)" "CWE-94:PDF_javascript" \
             "hex-escaped names are decoded before the rules run"
 
+        # Flate was once the only filter scan_pdf() decoded, so an action behind
+        # ASCII85 or LZW was as invisible to it as a Flate one was to plain grep.
+        assert_contains "$(line_for pdf_ascii85_js.pdf)" "CWE-94:PDF_javascript" \
+            "PDF hiding JavaScript behind ASCII85Decode is flagged"
+        assert_contains "$(line_for pdf_lzw_js.pdf)" "CWE-94:PDF_javascript" \
+            "PDF hiding JavaScript behind LZWDecode is flagged"
+
+        # A stray "(" in binary stream data must not blank the dictionary that
+        # follows it and hide the /OpenAction there.
+        assert_contains "$(line_for pdf_paren_swallow_js.pdf)" "PDF_auto_execute" \
+            "an unbalanced ( in stream data does not swallow a later /OpenAction"
+
+        # An undecodable filter must be reported, not silently skipped: an
+        # uninspected stream is not a clean one. Image filters are excluded, so
+        # the ordinary document below must not pick this up.
+        assert_not_contains "$(line_for benign_doc.pdf)" "stream_filter_not_decoded" \
+            "does NOT report an undecoded filter for an ordinary document"
+
         # ── False-positive guards: these must NOT be flagged ─────────────────
         # Regression guard for the P8 fix: the parameterised query form is the
         # correct, safe pattern and must never be reported as an injection.
@@ -613,10 +631,14 @@ if ! _skipping; then
     # and a doc that misstates its own verification is a doc readers stop
     # trusting. Check them against the real total.
     #
-    # TOTAL is not final while the suite is still running, so derive the expected
-    # count by counting assertion calls in this file instead.
-    EXPECTED_N=$(grep -cE '^\s*(assert_eq|assert_contains|assert_not_contains|assert_file_exists|ok_test|fail_test) ' \
-                 "${TESTS_DIR}/run_tests.sh" 2>/dev/null || echo 0)
+    # Compared against PASS_N, the number of assertions that have actually run
+    # by this point; this group is last, so it is close to the final total.
+    #
+    # Counting assertion *call sites* in this file instead does not work: sites
+    # inside the per-script lint loops run four times each, and sites in
+    # branches that did not execute never run at all, so the figure lands well
+    # above the real total (95 against 84). An EXPECTED_N doing exactly that
+    # sat here unused, with a comment claiming it was the expectation.
     STALE=""
     while IFS= read -r hit; do
         [[ -z "$hit" ]] && continue
