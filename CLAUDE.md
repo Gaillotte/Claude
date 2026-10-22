@@ -582,11 +582,15 @@ it; Kotlin has no such keyword, so `ProcessBuilder("sh", …)` — the whole spe
 would have evaded the rule in every `.gradle.kts`. The fix cost nothing on the
 corpus and `gradle_kts/build.gradle.kts` pins it.
 
-**Result on 6413 real files:** 99.8% pass. The remaining FAILs are all accounted
-for: 8 `signing.password=<literal>` in Gradle's own publishing docs, 2
-`allowInsecureProtocol` in the documentation snippet whose comment reads *"you
-shouldn't"*, 2 genuine process spawns, and 2 Elasticsearch integration-test users
-caught by the pre-existing universal credential rule. A missing
+**Result on 6413 files** (6412 real, plus one fixture a research agent left in the tree):
+**99.6% pass.** The 26 real FAILs are all accounted for: 8 `signing.password=<literal>` in
+Gradle's own publishing docs, 2 `allowInsecureProtocol` in the documentation snippet whose
+comment reads *"you shouldn't"*, 2 genuine process spawns, and **14** caught by the universal
+credential rule — Gradle's own `credentials { password = "password" }` samples, Spring Boot's
+`"secret"`, `"some-complicated-password"`, and Elasticsearch's dev-run `"elastic-password"`.
+That last group was **2 before the bracket fix** (`[^…\s]` had hidden every value containing an
+"s") and is 14 now; none is a real secret, each is a literal credential in source, and
+`.transit-allow.json` is the mechanism for a documentation or test sample. A missing
 `distributionSha256Sum` is deliberately not reported: 20 of 26 real wrappers omit it.
 
 **Not covered:** `gradle-wrapper.jar` (a committed binary that `./gradlew` runs before

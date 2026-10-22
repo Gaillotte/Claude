@@ -1983,9 +1983,12 @@ WORK_DIR=/tmp/gradlecheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 # Expected PASS: gradle_safe/* (WARN: exec), gradle_kts_safe/*, gradle_wrapper_safe/*
 ```
 
-On 6413 real files 99.8% pass; every remaining FAIL is a true positive by form (eight
-`signing.password=<literal>` in Gradle's own docs, a documentation snippet whose
-comment reads *"you shouldn't"*, two genuine process spawns). The corpus is cloned
+On 6413 files (6412 real) 99.6% pass; every remaining FAIL is a literal by form: eight
+`signing.password=<literal>` in Gradle's own docs, a documentation snippet whose comment
+reads *"you shouldn't"*, two genuine process spawns, and fourteen credential samples caught
+by the universal rule (`credentials { password = "password" }` in Gradle's documentation,
+Spring Boot's `"secret"`, Elasticsearch's dev-run `"elastic-password"`) — two of those before
+the bracket-expression fix and fourteen after it, none a real secret. The corpus is cloned
 from gradle/gradle, spring-boot, kafka and elasticsearch, because the reference host
 has no `.gradle` file — so it measures what real projects write, not what an
 AI-generated one does.
