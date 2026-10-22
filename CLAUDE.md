@@ -778,6 +778,42 @@ headers push the body down.
 in the bundled Go trace viewer; the whole 88-file Makefile corpus, the 3362-file
 XML corpus and the 1116-file CMake corpus have no `CWE-321` finding at all.
 
+### The credential rule's bracket bug
+
+The universal rule (`password|passwd|pwd|secret|api_key|…` followed by `=` or `:` and a
+quoted value) wrote its value class as `[^${"'\s]{4,}`. That is not "not whitespace": it is
+the literal characters `$ { " ' \` **and the letter `s`**. Four sites had the slip — this
+rule, `scan_yaml`, the JSON branch and the document branch — and each is now `[:space:]`.
+
+What fixing it changed, measured on 100,052 real source, doc and test files:
+
+| Site | Buggy | Fixed | Why |
+|------|------:|------:|-----|
+| Universal rule | 66 files | 122 | **73 newly flagged** (values with an "s" were invisible) and **17 no longer** (see below) |
+| `scan_yaml` | 262 of 3328 | 235 | **fewer**: the class did not exclude whitespace, so `password:` followed by trailing spaces counted as a value |
+| JSON branch | 9 of 2252 | 12 | |
+
+The 17 it no longer flags are false positives: string *concatenation* such as
+`"password: " + providedPassword`, which the whitespace-permissive class read as a quoted
+value. The 73 it newly flags are overwhelmingly **test stand-ins** —
+`"password"`, `"keystorepassword"`, `"secret"`, `"somepassword"` — 51 of the 73 under a
+test directory and most of the rest documentation snippets and dev configs. The bug had
+been hiding placeholder false positives as well as real secrets, by accident, depending on
+whether the value happened to contain an "s". **No placeholder exclusion was added**, on
+purpose: a literal `password = "password"` is exactly the weak default credential that
+generated code ships, so excluding it would build a deliberate blind spot where there had
+been an accidental one. Values like `admin-password` were already failing, so the fix makes
+the rule consistent rather than stricter. Test fixtures are what `.transit-allow.json` is for.
+
+> **Still weak, and not part of this fix.** With the bracket repaired the rule still misses
+> the most common real spellings, because the keyword must be followed *directly* by `=` or
+> `:` and the match is case-sensitive: `DB_PASSWORD`, `API_KEY`, `SECRET_KEY`, `secret_key`,
+> `app.secret_key` and `db_pass` are all **not matched**. `app.secret_key = "…"` is probably
+> the most common hardcoded secret in generated Flask code. Widening this will move false
+> positives substantially and needs its own calibration; the known-format rule below is
+> unaffected and covers provider-issued tokens independently. Separately, the YAML rule's
+> bare `key:` still flags about 7% of real YAML files.
+
 ### Known credential formats
 
 Providers issue tokens with a fixed, distinctive shape: a literal prefix plus a
@@ -884,7 +920,7 @@ python3 selfcheck.py --write-manifest
 
 ### Bug classes that have already shipped — lint enforces each
 
-All five are the same kind of defect: a rule or a script that fails *silently*,
+All six are the same kind of defect: a rule or a script that fails *silently*,
 so nothing in a normal run shows it is broken.
 
 - **Multi-character `IFS`.** `IFS=':::'` is a character *set*, silently identical to
@@ -895,6 +931,13 @@ so nothing in a normal run shows it is broken.
   that sets it, so it keeps firing as later functions return and dies on `set -u`.
 - **`grep_check` without `-e`.** A pattern starting with a dash is parsed as options,
   grep exits 2, and `if` reads 2 as false: the rule never fires and never complains.
+- **A backslash class inside a bracket expression.** GNU grep reads `\s`, `\w` and `\d`
+  as shorthand classes only *outside* a bracket; inside one, `[^"\s]` is a negated set of
+  the literal characters `\` and `s`. The universal credential rule had it, so it
+  required four characters none of which was an "s" — it missed `password = "sup3rs3cret"`
+  while passing every test that used a value without one. Four sites. The lint skips
+  comments and heredoc bodies, because the manifest scanner embeds Python, where
+  `[\w.-]` is correct.
 - **`find … | head -N`.** Under `set -o pipefail`, `head` exits early, `find` dies of
   SIGPIPE once its output exceeds one 4 KB write, the pipeline returns 141, and
   `set -e` aborts the scan with no verdict and no report. Eight short paths never

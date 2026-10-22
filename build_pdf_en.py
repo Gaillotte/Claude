@@ -1756,7 +1756,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "247 assertions", [
+    ("Test suite", "257 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

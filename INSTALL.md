@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 247/247 passed
+./tests/run_tests.sh          # Expected: ✔ 257/257 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 247/247 passed
+# Expected: ✔ 257/257 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -2080,6 +2080,19 @@ WORK_DIR=/tmp/credcheck bash tests/run_tests.sh credential   # builds every toke
 If a vendored file legitimately contains a key (a public Google client key, say), use
 `.transit-allow.json` with rule `CWE-798` and the file's path.
 
+**The name-based credential rule.** Alongside the known formats, a rule matches a quoted
+value after `password`, `secret`, `api_key` and similar names, in every file type, with the
+same pattern in the YAML, JSON and document branches. It had a bug: inside a bracket
+expression GNU grep treats `\s` as the literal characters `\` and `s`, so it required four
+characters none of which was an "s" and missed `password = "sup3rs3cret"`. Fixing it moved
+the files flagged in 100,052 real source, doc and test files from 66 to 122: 73 newly flagged,
+almost all test stand-ins such as `"password"` and `"secret"`, and 17 no longer flagged, which were
+string concatenations such as `"password: " + providedPassword`; no placeholder exclusion was added, because
+`password = "password"` is exactly the weak default that generated code ships. For test
+fixtures, use `.transit-allow.json`. Still not matched, and a known limit: upper-case names
+(`DB_PASSWORD`, `API_KEY`, `SECRET_KEY`) and `secret_key`, because the keyword must be followed
+directly by `=` or `:` and the match is case-sensitive.
+
 ### 11.2.11 PowerShell — every extension
 
 Pure pattern matching; nothing to stage, identical offline. All PowerShell file types
@@ -2461,7 +2474,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 247/247 passed
+# Expected: ✔ 257/257 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2900,7 +2913,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  247/247 passed
+  ✔  257/257 passed
 ```
 
 ### 17.1 What each layer covers

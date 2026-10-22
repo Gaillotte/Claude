@@ -651,9 +651,17 @@ scan_universal_patterns() {
     local f="$1"
     local triggered=false
 
-    # CWE-798 / CWE-259 — Hardcoded credentials
+    # CWE-798 / CWE-259 — Hardcoded credentials.
+    #
+    # The value class is [:space:], NOT \s. GNU grep reads \s as a shorthand class
+    # only OUTSIDE a bracket expression; inside one, [^"\s] is a negated set of the
+    # literal characters \ and s. This rule therefore required four characters none
+    # of which was an "s" — it missed password = "sup3rs3cret" and every other
+    # secret with an s near the front, and, by accident, the placeholders "secret"
+    # and "password" too. The same slip was at three other sites below. A lint rule
+    # in tests/run_tests.sh now forbids a backslash class inside a bracket.
     if grep_check \
-        '(password|passwd|pwd|secret|api_key|apikey|auth_token|access_token)\s*[=:]\s*["'"'"'][^${"'"'"'\s]{4,}' \
+        '(password|passwd|pwd|secret|api_key|apikey|auth_token|access_token)\s*[=:]\s*["'"'"'][^${"'"'"'[:space:]]{4,}' \
         "$f"; then
         record_fail "$f" "CWE-798:hardcoded_credential"
         triggered=true
@@ -1326,7 +1334,10 @@ scan_yaml() {
     fi
 
     # Inline secrets in CI/CD config
-    if grep_check '(password|secret|token|key|api_key)\s*:\s*[^${\s][^{]' "$f"; then
+    # [:space:], not \s, inside the bracket. Here the slip ran the other way: the
+    # class did not exclude whitespace, so `password:` followed by trailing spaces
+    # counted as a value. Fixing it removed 27 false positives from 3328 real files.
+    if grep_check '(password|secret|token|key|api_key)\s*:\s*[^${[:space:]][^{]' "$f"; then
         record_fail "$f" "CWE-798:inline_credential_in_yaml"
         failed=true
     fi
@@ -3357,7 +3368,7 @@ classify_file() {
         .sql)                             scan_sql         "$f" ;;
         .json)
             if grep_check \
-                '(password|secret|token|api_key|private_key)\s*"?\s*:\s*"[^"${\s]{4,}' "$f"; then
+                '(password|secret|token|api_key|private_key)\s*"?\s*:\s*"[^"${[:space:]]{4,}' "$f"; then
                 record_fail "$f" "CWE-798:hardcoded_credential_in_JSON"
             else
                 record_pass "$f"
@@ -3365,7 +3376,7 @@ classify_file() {
             ;;
         .md|.txt|.rst)
             if grep_check \
-                '(password|secret|api_key)\s*[:=]\s*[^${\s][^\s]{4,}' "$f"; then
+                '(password|secret|api_key)\s*[:=]\s*[^${[:space:]][^[:space:]]{4,}' "$f"; then
                 record_fail "$f" "CWE-798:hardcoded_credential_in_doc"
             else
                 record_pass "$f"

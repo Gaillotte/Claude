@@ -352,6 +352,28 @@ for p,i in d.get('file_results',{}).items():
         assert_not_contains "$SAFE_PSMISC" "[FAIL]" \
             "does NOT fail a TcpClient port check, Read-Host, \$env: tokens or \$tokenEndpoint"
 
+        # ── The bracket-expression bug ───────────────────────────────────────
+        # GNU grep reads \s as a shorthand class only OUTSIDE a bracket expression.
+        # Inside one, [^"\s]{4,} is a negated set of the literal characters \ and s,
+        # so the universal credential rule required four characters none of which was
+        # an "s": it missed password = "sup3rs3cret" and every other secret with an
+        # "s" near the front. Four sites had it.
+        assert_contains "$(line_for cred_s_values.py)" "CWE-798:hardcoded_credential" \
+            "a secret with an s in its first four characters is flagged"
+        assert_contains "$(line_for cred_s.json)" "CWE-798:hardcoded_credential_in_JSON" \
+            "the same in a JSON file"
+        assert_contains "$(line_for cred_s.md)" "CWE-798:hardcoded_credential_in_doc" \
+            "the same in a document"
+        assert_contains "$(line_for cred_s.yaml)" "CWE-798:inline_credential_in_yaml" \
+            "the same in YAML"
+        # The YAML site's bug ran the other way: its class did not exclude
+        # whitespace, so `password:` followed by trailing spaces counted as a value.
+        # Fixing the bracket REMOVES this false positive (27 of 3328 real YAML files).
+        assert_not_contains "$(line_for cred_empty.yaml)" "CWE-798" \
+            "does NOT flag an empty YAML value followed by trailing spaces"
+        assert_not_contains "$(line_for cred_s_safe.py)" "CWE-798" \
+            "does NOT flag env lookups, empty strings, \${...} or {{ templates }}"
+
         # ── Windows batch (.bat / .cmd) ──────────────────────────────────────
         # 116 real batch files on this host were all recorded PASS: .bat and .cmd
         # had no handler. Three properties of the language shape the scanner, and
@@ -1210,6 +1232,30 @@ if ! _skipping; then
     else
         fail_test "grep_check helpers pass their pattern after -e" "$BAD"
     fi
+
+    # A backslash class inside a bracket expression. GNU grep treats \s, \w and \d
+    # as shorthand classes only OUTSIDE a bracket: inside one, [^"\s] is a negated
+    # set of the literal characters \ and s. The universal credential rule had it,
+    # and so required four characters none of which was an "s" — it missed
+    # password = "sup3rs3cret" while looking correct on every test using a value
+    # without one. Another instance of the silent-inert-rule family. Comments are
+    # skipped, and so are heredoc bodies: the manifest scanner embeds Python, where
+    # [\w.-] is correct.
+    for f in scan_pipeline.sh fetch_repo.sh ai_transit.sh docker-run.sh; do
+        BAD=$(awk '
+            inhd { if ($0 == term) inhd = 0; next }
+            { if (match($0, /<<-?[[:space:]]*\047?[A-Za-z_]+\047?/)) {
+                  t = substr($0, RSTART, RLENGTH); gsub(/<<-?[[:space:]]*|\047/, "", t)
+                  term = t; inhd = 1 }
+              print NR ": " $0 }' "${ROOT_DIR}/${f}" \
+              | grep -vE '^[0-9]+: [[:space:]]*#' \
+              | grep -E '\[\^?[^]]*\\[swdSWD][^]]*\]' || true)
+        if [[ -z "$BAD" ]]; then
+            ok_test "${f} has no backslash class inside a bracket expression"
+        else
+            fail_test "${f} has no backslash class inside a bracket expression" "$BAD"
+        fi
+    done
 
     # `find … | head -N` under `set -o pipefail`. head exits after N lines, find
     # is killed by SIGPIPE once its output no longer fits one write, the pipeline
