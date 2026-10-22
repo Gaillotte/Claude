@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 133/133 passed
+./tests/run_tests.sh          # Expected: ✔ 155/155 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 133/133 passed
+# Expected: ✔ 155/155 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1564,6 +1564,7 @@ tool; nothing to stage, no flags required.
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
+| Package manifests (`scan_package_json`, `scan_requirements`) | L5 | Built in; needs `python3` (standard library) to parse JSON, otherwise falls back to patterns with a WARN |
 | XML / Maven / Ant (`scan_xml`) | L5 | Built in; pattern matching, plus `python3` to strip comments — falls back to scanning the raw file without it |
 | Bandit | L5 | Local Python AST analysis |
 | ShellCheck | L5 | Local |
@@ -1902,6 +1903,44 @@ WORK_DIR=/tmp/xmlcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 
 Across **3362 real XML files** — 221 of them `pom.xml` — none fails.
 
+### 11.2.7 Package manifests — `package.json`, `composer.json`, `requirements.txt`
+
+These are routed by name. Before, `package.json` and `composer.json` received a
+single credential check and `requirements.txt` was scanned as a text document, so
+the part of a manifest that matters — code that runs when dependencies are
+installed — was never examined. Pure pattern matching plus `python3` (standard
+library only) to parse the JSON; nothing to stage, identical offline.
+
+| Manifest | Fails on | Warns on |
+|----------|----------|----------|
+| `package.json` | a `preinstall` / `install` / `postinstall` / `prepare` hook piping a download into a shell, or decoding base64 into one · a dependency on `http://`, `git://` or `git+http://` | an install-time hook being present · a script that fetches · a git or tarball dependency |
+| `composer.json` | the same hooks over `post-install-cmd` and friends · `secure-http: false` · an `http://` repository | a script that fetches |
+| `requirements*.txt` | an index or requirement over `http://` or `git://` · credentials embedded in a URL | `--trusted-host` · `--extra-index-url` · a VCS requirement not pinned to a commit |
+
+`--extra-index-url` warns because pip takes the highest version from **any**
+configured index, so a public package sharing a name with a private one wins.
+
+The JSON is parsed rather than pattern-matched. A key can be written
+`"post\u0069nstall"`, which npm reads as `postinstall` and a text rule never sees.
+Invalid JSON is checked by pattern instead, with a WARN saying so.
+
+**How well-calibrated is this?** Honestly, less than the other scanners. Of 1193
+real `package.json` on the reference host, **none fail and 27 warn**; of 47
+requirements files, none fail. But that corpus is mostly published packages under
+`node_modules` rather than application roots, so it says little about how often an
+AI-generated repository's own manifest carries an install hook. These rules rest on
+what the constructs mean more than on a measured rate.
+
+```bash
+WORK_DIR=/tmp/pkgcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected FAIL: pkg_evil, pkg_escaped, pkg_invalid (hook only), composer_evil, req_evil
+# Expected PASS: pkg_plain, pkg_safe (WARN: install hook), composer_safe, req_safe (WARN x2)
+```
+
+**Not covered:** lockfiles (`package-lock.json`, `yarn.lock`, `go.sum`), which are
+generated integrity data; `go.mod`, which cannot execute anything; and
+`meson_options.txt`, which is declarative.
+
 ### 11.3 Environment variables
 
 | Variable | Default | Purpose |
@@ -2178,7 +2217,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 133/133 passed
+# Expected: ✔ 155/155 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2617,7 +2656,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  133/133 passed
+  ✔  155/155 passed
 ```
 
 ### 17.1 What each layer covers

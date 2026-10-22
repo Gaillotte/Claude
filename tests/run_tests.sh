@@ -270,6 +270,31 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for tracker.htm)" "html_hidden_iframe" \
             ".htm is routed to the HTML scanner as well as .html"
 
+        # ── Package manifests ────────────────────────────────────────────────
+        # package.json and requirements.txt got one inline credential grep and
+        # nothing else, so an install hook that pipes a download into a shell
+        # was approved. npm runs preinstall/install/postinstall on every
+        # `npm install`, and prepare on a bare one: execution before any build.
+        assert_contains "$(line_for pkg_evil/package.json)" "CWE-78:npm_lifecycle_hook_fetches_and_executes" \
+            "an npm postinstall piping curl into a shell is flagged"
+        assert_contains "$(line_for pkg_evil/package.json)" "CWE-78:npm_lifecycle_hook_decodes_and_executes" \
+            "an npm hook decoding base64 into a shell is flagged"
+        # The key is written post\u0069nstall. npm reads that as postinstall; the
+        # literal text "postinstall" appears nowhere in the file, so a pattern
+        # rule never sees it. Only parsing the JSON does.
+        assert_contains "$(line_for pkg_escaped/package.json)" "CWE-78:npm_lifecycle_hook_fetches_and_executes" \
+            "an npm hook whose key is written with a \\u escape is still flagged"
+        assert_contains "$(line_for pkg_evil/package.json)" "CWE-319:npm_dependency_over_plaintext" \
+            "an npm dependency fetched over http:// or git:// is flagged"
+        assert_contains "$(line_for composer_evil/composer.json)" "CWE-78:composer_hook_fetches_and_executes" \
+            "a Composer install hook piping curl into a shell is flagged"
+        assert_contains "$(line_for composer_evil/composer.json)" "CWE-319:composer_insecure_transport" \
+            "Composer secure-http=false or an http:// repository is flagged"
+        assert_contains "$(line_for req_evil/requirements.txt)" "CWE-319:pip_index_or_requirement_over_plaintext" \
+            "a pip index or requirement over http:// or git:// is flagged"
+        assert_contains "$(line_for req_evil/requirements.txt)" "CWE-798:pip_credentials_embedded_in_url" \
+            "credentials embedded in a pip index URL are flagged"
+
         # ── XML ──────────────────────────────────────────────────────────────
         # XXE needs an entity that actually references an external resource.
         # A bare <!DOCTYPE was failing 736 of 3362 real XML files (22%), and
@@ -370,6 +395,41 @@ for p,i in d.get('file_results',{}).items():
         # set_package_properties URL — which is a homepage, not a fetch. Two
         # real CMake modules were failed by a rule that could not tell those
         # last two apart.
+        # The near-misses: a husky `prepare`, a node -e guard (it is in a real
+        # claude-code package.json), a local postinstall script, a download
+        # script that is not a lifecycle hook, a dependency literally named
+        # csrf-token, a file: link and a GitHub shorthand. Only the install-time
+        # hook is worth a WARN; none may FAIL.
+        SAFE_PKG=$(echo "$F" | grep 'pkg_safe/package.json' || true)
+        assert_not_contains "$SAFE_PKG" "[FAIL]" \
+            "does NOT fail an ordinary package.json (husky, node -e, file: link)"
+        assert_contains "$SAFE_PKG" "npm:install_time_hook_present" \
+            "an install-time hook is reported, but does not block"
+        # Valid JSON with nothing to report yields no findings — which the first
+        # version mistook for "could not parse", so 1172 of 1193 real manifests
+        # went down the weaker pattern fallback. The repository and homepage
+        # URLs here are what that fallback then failed 154 files on.
+        PLAIN_PKG=$(echo "$F" | grep 'pkg_plain/package.json' || true)
+        assert_not_contains "$PLAIN_PKG" "pkg:not_parsed" \
+            "a valid package.json with nothing to report is not treated as unparseable"
+        assert_not_contains "$PLAIN_PKG" "[FAIL]" \
+            "does NOT fail repository and homepage URLs over git:// and http://"
+        INVALID_PKG=$(echo "$F" | grep 'pkg_invalid/package.json' || true)
+        assert_contains "$INVALID_PKG" "pkg:not_parsed_as_json_checked_by_pattern_only" \
+            "invalid JSON is reported as inspected by pattern only"
+        assert_contains "$INVALID_PKG" "CWE-78:npm_lifecycle_hook_fetches_and_executes" \
+            "a hook in invalid JSON is still flagged by the pattern fallback"
+        assert_not_contains "$INVALID_PKG" "CWE-319" \
+            "the fallback does NOT read a repository url as a plaintext dependency"
+        SAFE_COMPOSER=$(echo "$F" | grep 'composer_safe/composer.json' || true)
+        assert_not_contains "$SAFE_COMPOSER" "[FAIL]" \
+            "does NOT fail a Composer manifest with @php and callable hooks"
+        SAFE_REQ=$(echo "$F" | grep 'req_safe/requirements.txt' || true)
+        assert_not_contains "$SAFE_REQ" "[FAIL]" \
+            "does NOT fail pinned requirements or a commit-pinned VCS line"
+        assert_contains "$SAFE_REQ" "pip:trusted_host_disables_tls_verification" \
+            "--trusted-host is reported, but does not block"
+
         # safe_xml.xml carries the whole false-positive set: an ordinary
         # PUBLIC doctype, two legitimate internal entities, the checkstyle
         # attribute lines the old credential rule matched by running [^>]*
@@ -454,6 +514,40 @@ if ! _skipping; then
     assert_eq "1" "$RUN_EXIT" "vulnerable repo exits 1"
     [[ -n "$RUN_JSON" ]] && assert_eq "FAIL" "$(json_get "$RUN_JSON" verdict)" \
         "vulnerable repo verdict is FAIL"
+fi
+
+# A monorepo with dozens of requirements files. Layer 3 listed them with
+# `find … | head -5`; under `set -o pipefail`, head exiting early kills find
+# with SIGPIPE once its output no longer fits one 4 KB write, the pipeline
+# returns 141, and `set -e` aborted the whole scan — no verdict, no report.
+# Eight short paths never trigger it, which is how it went unnoticed; it needs
+# a few dozen realistic ones. ai_transit.sh defaults a missing verdict to FAIL,
+# so the failure was safe but wrong: the repository was quarantined for having
+# too many requirements files.
+MONO="${SCRATCH}/monorepo"
+for i in $(seq 1 40); do
+    mkdir -p "${MONO}/service-number-${i}/backend/application/config"
+    echo "requests==2.31.0" > "${MONO}/service-number-${i}/backend/application/config/requirements.txt"
+done
+run_pipeline "$MONO" --quiet
+assert_eq "0" "$RUN_EXIT" "a monorepo with 40 requirements files completes and passes"
+if [[ -n "$RUN_JSON" ]]; then
+    ok_test "a monorepo with 40 requirements files writes a report"
+else
+    fail_test "a monorepo with 40 requirements files writes a report" \
+              "scan died without a report (exit ${RUN_EXIT}; 141 is SIGPIPE under pipefail)"
+fi
+MONOLOCK="${SCRATCH}/monorepo_locks"
+for i in $(seq 1 45); do
+    mkdir -p "${MONOLOCK}/package-number-${i}/frontend/application/workspace"
+    echo '{"lockfileVersion":3}' > "${MONOLOCK}/package-number-${i}/frontend/application/workspace/package-lock.json"
+done
+run_pipeline "$MONOLOCK" --quiet
+if [[ -n "$RUN_JSON" ]]; then
+    ok_test "a monorepo with 45 lockfiles writes a report"
+else
+    fail_test "a monorepo with 45 lockfiles writes a report" \
+              "scan died without a report (exit ${RUN_EXIT}; 141 is SIGPIPE under pipefail)"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -806,6 +900,19 @@ if ! _skipping; then
         ok_test "grep_check helpers pass their pattern after -e"
     else
         fail_test "grep_check helpers pass their pattern after -e" "$BAD"
+    fi
+
+    # `find … | head -N` under `set -o pipefail`. head exits after N lines, find
+    # is killed by SIGPIPE once its output no longer fits one write, the pipeline
+    # returns 141 and `set -e` aborts the scan with no verdict and no report.
+    # `sed -n '1,Np'` reads everything and has none of that. Backslash-continued
+    # lines are joined first, because the offending site was split across two.
+    BAD=$(sed -e ':a' -e '/\\$/N' -e 's/\\\n[[:space:]]*/ /' -e 'ta' "${ROOT_DIR}/scan_pipeline.sh" \
+          | grep -nE 'find .*\|[[:space:]]*head' || true)
+    if [[ -z "$BAD" ]]; then
+        ok_test "scan_pipeline.sh has no find piped into head"
+    else
+        fail_test "scan_pipeline.sh has no find piped into head" "$BAD"
     fi
 
     # A RETURN trap is not scoped to the function that installs it: it keeps

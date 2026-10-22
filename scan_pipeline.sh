@@ -498,10 +498,16 @@ print(total)
         record_layer L3_dependency_cve "skipped:trivy not installed"
     fi
 
-    # pip-audit: Python requirements
+    # pip-audit: Python requirements.
+    # The first few files are enough to decide whether to run, and `sed -n 1,5p`
+    # reads its whole input where `head -5` exits early. Under `set -o pipefail`
+    # head's early exit kills find with SIGPIPE once its output exceeds one
+    # 4 KB write, the pipeline returns 141, and `set -e` aborts the scan with no
+    # verdict and no report — a monorepo with a few dozen requirements files
+    # was quarantined for that. See the monorepo tests in tests/run_tests.sh.
     local req_files
     req_files=$(find "$SCAN_DIR" -name "requirements*.txt" -o -name "Pipfile.lock" \
-                -o -name "pyproject.toml" 2>/dev/null | head -5)
+                -o -name "pyproject.toml" 2>/dev/null | sed -n '1,5p')
     if [[ -n "$req_files" && "$OFFLINE" == "true" ]]; then
         # pip-audit and safety both resolve advisories from a remote service and
         # have no offline database. Say so explicitly: a silent skip here would
@@ -540,7 +546,7 @@ print(len([v for dep in d.get('dependencies',[]) for v in dep.get('vulns',[])]))
 
     # npm audit: JavaScript package.json
     local pkg_files
-    pkg_files=$(find "$SCAN_DIR" -name "package-lock.json" -o -name "yarn.lock" 2>/dev/null | head -3)
+    pkg_files=$(find "$SCAN_DIR" -name "package-lock.json" -o -name "yarn.lock" 2>/dev/null | sed -n '1,3p')
     if [[ -n "$pkg_files" && "$OFFLINE" == "true" ]]; then
         # npm audit always queries the registry advisory endpoint; there is no
         # offline equivalent.
@@ -1425,6 +1431,237 @@ scan_archive() {
             record_fail "$f" "CWE-22:zip_slip_path_traversal_in_archive"
         fi
     fi
+}
+
+# ── Package manifests ────────────────────────────────────────────────────────
+# package.json and requirements.txt used to get a single credential grep. That
+# left the thing that actually matters in a manifest unexamined: code that runs
+# when the dependencies are installed. npm runs preinstall, install and
+# postinstall on every `npm install`, and prepare on a bare one, so a hostile
+# hook fires before anything is built or reviewed.
+#
+# Calibration is weak and should be read that way. Of 1189 parseable
+# package.json on this host, 3 carry an install hook — but the corpus is mostly
+# published packages under node_modules, not application roots, so it says
+# little about how often an AI-generated repository's own manifest has one. The
+# FAIL rules measured 0 real hits; the only fetch-piped-to-shell file found was
+# a fixture left by a research agent. The rules therefore rest on what the
+# constructs mean rather than on a measured rate, and the WARN tier carries the
+# ones that are ordinary in some projects (an install hook, a git dependency).
+#
+# JSON is parsed rather than grepped. A key can be written "post\u0069nstall",
+# which npm reads as postinstall and a pattern does not.
+_pkg_facts() {
+    python3 - "$1" <<'PYEOF' 2>/dev/null
+import json, os, re, sys
+
+path = sys.argv[1]
+base = os.path.basename(path)
+try:
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        d = json.load(fh)
+except Exception:
+    print("FACT unparsed")
+    raise SystemExit(0)
+if not isinstance(d, dict):
+    print("FACT unparsed")
+    raise SystemExit(0)
+# Parsing succeeded. This is stated outright because a manifest with nothing to
+# report prints nothing else, and empty output must not be read as a failure.
+print("FACT parsed")
+
+PIPE   = re.compile(r"(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|k|da)?sh\b", re.I)
+DECODE = re.compile(r"(base64\s+(-d|-D|--decode)|openssl\s+enc\s+-d)[^|;&]*\|\s*(sudo\s+)?(ba|z)?sh\b"
+                    r"|/dev/tcp/|\bnc(at)?\s+-[a-z]*e\b", re.I)
+FETCH  = re.compile(r"\b(curl|wget)\b", re.I)
+
+
+def emit(kind):
+    print("FACT " + kind)
+
+
+def commands(value):
+    """A script is a string, or for Composer a list of strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str)]
+    return []
+
+
+if base == "composer.json":
+    LIFE = {"pre-install-cmd", "post-install-cmd", "pre-update-cmd", "post-update-cmd",
+            "post-autoload-dump", "post-root-package-install", "post-create-project-cmd",
+            "pre-autoload-dump", "post-package-install", "post-package-update"}
+    scripts = d.get("scripts") if isinstance(d.get("scripts"), dict) else {}
+    for key, val in scripts.items():
+        for cmd in commands(val):
+            # "@php artisan x" is a script reference and "Vendor\Class::method" a
+            # PHP callable; only a shell command line can fetch and execute.
+            if cmd.startswith("@") or "::" in cmd:
+                continue
+            life = key in LIFE
+            if PIPE.search(cmd):
+                emit("hook_pipe" if life else "script_pipe")
+            elif DECODE.search(cmd):
+                emit("hook_decode" if life else "script_decode")
+            elif FETCH.search(cmd):
+                emit("script_fetch")
+    cfg = d.get("config") if isinstance(d.get("config"), dict) else {}
+    if cfg.get("secure-http") is False:
+        emit("composer_insecure")
+    repos = d.get("repositories")
+    items = list(repos.values()) if isinstance(repos, dict) else (repos if isinstance(repos, list) else [])
+    for r in items:
+        if isinstance(r, dict) and isinstance(r.get("url"), str) and r["url"].startswith("http://"):
+            emit("composer_insecure")
+    raise SystemExit(0)
+
+# npm
+LIFE_NPM = {"preinstall", "install", "postinstall", "prepare", "prepack", "postpack",
+            "prepublish", "prepublishOnly", "publish", "postpublish",
+            "preuninstall", "uninstall", "postuninstall"}
+INSTALL_TIME = {"preinstall", "install", "postinstall"}
+scripts = d.get("scripts") if isinstance(d.get("scripts"), dict) else {}
+for key, val in scripts.items():
+    if not isinstance(val, str):
+        continue
+    life = key in LIFE_NPM
+    if key in INSTALL_TIME:
+        emit("install_hook")
+    if PIPE.search(val):
+        emit("hook_pipe" if life else "script_pipe")
+    elif DECODE.search(val):
+        emit("hook_decode" if life else "script_decode")
+    elif FETCH.search(val):
+        emit("script_fetch")
+
+for dk in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+    deps = d.get(dk) if isinstance(d.get(dk), dict) else {}
+    for spec in deps.values():
+        if not isinstance(spec, str):
+            continue
+        if re.match(r"^(http://|git://|git\+http://)", spec):
+            emit("dep_plain")
+        elif (re.match(r"^(https://|git\+https://|git\+ssh://|github:|gitlab:|bitbucket:)", spec)
+              or re.match(r"^[\w.-]+/[\w.-]+(#.*)?$", spec)):
+            emit("dep_remote")
+PYEOF
+}
+
+scan_package_json() {
+    local f="$1"
+    local failed=false facts="" base
+    base=$(basename "$f")
+    if has_cmd python3; then
+        facts=$(_pkg_facts "$f" || true)
+    fi
+
+    if [[ "$facts" != *"FACT parsed"* ]]; then
+        # Invalid JSON (a template with comments) or no python3: fall back to
+        # patterns on the raw text, and say the inspection was weaker. 6 of 1195
+        # real package.json were not valid JSON.
+        #
+        # Absence of facts is NOT the test. A valid manifest with nothing to
+        # report prints nothing, and the first version read that as a failed
+        # parse: 1172 of 1193 real files took this path.
+        record_warn "$f" "pkg:not_parsed_as_json_checked_by_pattern_only"
+        if grep_check_i '"((pre|post)?install|prepare|prepublish(only)?|post-install-cmd|post-update-cmd)"[[:space:]]*:[[:space:]]*"[^"]*(curl|wget)[^"]*\|[[:space:]]*(sudo[[:space:]]+)?(ba|z)?sh' "$f"; then
+            facts+=$'\nFACT hook_pipe'
+        fi
+        # Without parsing there is no telling a dependency from a repository
+        # or homepage URL — `"url": "git://github.com/x/y.git"` is in most
+        # published packages and the first fallback failed 154 files on it. So
+        # this can only warn.
+        if grep_check_i '"[^"]+"[[:space:]]*:[[:space:]]*"(http|git)://' "$f"; then
+            record_warn "$f" "pkg:plaintext_url_present_unscoped_check_dependencies_manually"
+        fi
+    fi
+
+    if [[ "$base" == "composer.json" ]]; then
+        if [[ "$facts" == *"FACT hook_pipe"* ]]; then
+            record_fail "$f" "CWE-78:composer_hook_fetches_and_executes"; failed=true
+        fi
+        if [[ "$facts" == *"FACT hook_decode"* ]]; then
+            record_fail "$f" "CWE-78:composer_hook_decodes_and_executes"; failed=true
+        fi
+        if [[ "$facts" == *"FACT composer_insecure"* ]]; then
+            record_fail "$f" "CWE-319:composer_insecure_transport"; failed=true
+        fi
+        # Composer hooks are ordinary (@php artisan …); fetching in one is not.
+        if [[ "$facts" == *"FACT script_fetch"* || "$facts" == *"FACT script_pipe"* ]]; then
+            record_warn "$f" "composer:script_fetches_from_the_network"
+        fi
+    else
+        if [[ "$facts" == *"FACT hook_pipe"* ]]; then
+            record_fail "$f" "CWE-78:npm_lifecycle_hook_fetches_and_executes"; failed=true
+        fi
+        if [[ "$facts" == *"FACT hook_decode"* ]]; then
+            record_fail "$f" "CWE-78:npm_lifecycle_hook_decodes_and_executes"; failed=true
+        fi
+        if [[ "$facts" == *"FACT dep_plain"* ]]; then
+            record_fail "$f" "CWE-319:npm_dependency_over_plaintext"; failed=true
+        fi
+        # preinstall/install/postinstall run on every `npm install`. Ordinary in
+        # some projects (native builds), so a WARN rather than a block.
+        if [[ "$facts" == *"FACT install_hook"* ]]; then
+            record_warn "$f" "npm:install_time_hook_present"
+        fi
+        if [[ "$facts" == *"FACT script_pipe"* ]]; then
+            record_warn "$f" "npm:script_pipes_a_download_into_a_shell"
+        elif [[ "$facts" == *"FACT script_fetch"* ]]; then
+            record_warn "$f" "npm:script_fetches_from_the_network"
+        fi
+        if [[ "$facts" == *"FACT dep_remote"* ]]; then
+            record_warn "$f" "npm:dependency_from_a_git_or_tarball_url_not_the_registry"
+        fi
+    fi
+
+    # Credentials in the manifest itself. A dependency NAME ending in "token"
+    # (csrf-token, jwt-token) sits in the same key position, so a semver range
+    # as the value is excluded — "csrf-token": "^2.0.0" is not a secret.
+    if grep_check_excl \
+        '(password|secret|token|api_key|private_key)"?[[:space:]]*:[[:space:]]*"[^"${[:space:]]{4,}' \
+        ':[[:space:]]*"[\^~><=v]*[0-9]+(\.[0-9xX*]+)*"' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential_in_JSON"; failed=true
+    fi
+
+    $failed || record_pass "$f"
+}
+
+# ── pip requirements ─────────────────────────────────────────────────────────
+# A requirements file decides where code comes from. 47 real files on this host,
+# none carrying any of these, so the rules rest on what the options mean.
+scan_requirements() {
+    local f="$1"
+    local failed=false
+
+    # An index or a requirement over plaintext transport: whoever is on the path
+    # chooses the package, and pip then runs its setup. git:// is unauthenticated.
+    if grep_check_i \
+        '^[[:space:]]*((--index-url|-i|--extra-index-url|--find-links|-f)[[:space:]=]+http://|(-e[[:space:]]+)?(git\+http://|git://)|http://[^[:space:]]+\.(tar\.gz|tgz|zip|whl|tar\.bz2))' \
+        "$f"; then
+        record_fail "$f" "CWE-319:pip_index_or_requirement_over_plaintext"; failed=true
+    fi
+    # user:password@host inside a URL.
+    if grep_check '(https?|git\+https?|ssh)://[^/[:space:]:@]+:[^/[:space:]@]+@' "$f"; then
+        record_fail "$f" "CWE-798:pip_credentials_embedded_in_url"; failed=true
+    fi
+
+    if grep_check_i '^[[:space:]]*--trusted-host' "$f"; then
+        record_warn "$f" "pip:trusted_host_disables_tls_verification"
+    fi
+    # A second index is the dependency-confusion vector: pip takes the highest
+    # version from ANY index, so a public package with the same name wins.
+    if grep_check_i '^[[:space:]]*--extra-index-url' "$f"; then
+        record_warn "$f" "pip:extra_index_url_enables_dependency_confusion"
+    fi
+    # A VCS requirement not pinned to a commit follows a moving branch.
+    if grep_check_excl 'git\+(https|ssh)://' '@[0-9a-f]{7,40}([#[:space:]]|$)' "$f"; then
+        record_warn "$f" "pip:vcs_requirement_not_pinned_to_a_commit"
+    fi
+
+    $failed || record_pass "$f"
 }
 
 # ── CMake ────────────────────────────────────────────────────────────────────
@@ -2390,6 +2627,11 @@ classify_file() {
         # CMakeLists.txt ends in .txt, so without this it is routed to the
         # plain-text scanner and gets no CMake analysis at all.
         CMakeLists.txt|CMakeLists.*.txt)      scan_cmake    "$f"; return ;;
+        # Manifests are routed by basename. package.json and composer.json end in
+        # .json and were only credential-checked; requirements*.txt ended in .txt
+        # and went to the documentation scanner.
+        package.json|composer.json)           scan_package_json "$f"; return ;;
+        requirements*.txt|constraints*.txt)   scan_requirements "$f"; return ;;
     esac
 
     case ".$ext" in
@@ -2685,7 +2927,7 @@ report = {
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
                      "PDF-Active-Content", "Build-Script-Hardening",
-                     "HTML-Active-Content", "XML-Build-Hardening"],
+                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},

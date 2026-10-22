@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("Package manifests", "L5", True,
+     "No hostile install hook, no plaintext source",
+     "curl|sh hook, http:// dependency or index, URL credential → FAIL",
+     "install hook, --trusted-host, git dependency → WARN"),
     ("XML / Maven / Ant", "L5", True,
      "No external entity, no secret, no http repo",
      "xxe SYSTEM, http repository, exec of a shell, secret → FAIL",
@@ -1732,7 +1736,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "133 assertions", [
+    ("Test suite", "155 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

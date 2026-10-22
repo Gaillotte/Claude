@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -354,6 +354,63 @@ There is deliberately **no rule for a bare `$(eval …)`**: it fired on 7 of tho
 88 as ordinary metaprogramming, and the dangerous composition
 `$(eval $(shell curl …))` is already a FAIL under the parse-time fetch rule.
 
+## Package manifests
+
+`package.json`, `composer.json` and `requirements*.txt` / `constraints*.txt` are
+routed **by basename**. Before, the first two ended in `.json` and got one
+credential grep, and the third ended in `.txt` and went to the documentation
+scanner — so the thing that matters in a manifest, code that runs when
+dependencies are installed, was never examined.
+
+**npm.** `preinstall`, `install` and `postinstall` run on every `npm install`, and
+`prepare` on a bare one, so a hostile hook fires before anything is built or
+reviewed.
+
+- **FAIL** a lifecycle hook that pipes a download into a shell · a hook that
+  decodes base64 (or opens a `/dev/tcp` socket, or `nc -e`) into a shell · a
+  dependency on `http://`, `git://` or `git+http://`.
+- **WARN** an install-time hook being present · a non-lifecycle script that pipes
+  or fetches · a dependency from a git or tarball URL rather than the registry.
+
+**Composer.** The same hook rules over `post-install-cmd` and friends. A hook
+beginning `@` (a script reference) or containing `::` (a PHP callable) is skipped:
+only a shell command line can fetch and execute. **FAIL** also on
+`"secure-http": false` or an `http://` repository.
+
+**pip.** **FAIL** an index, `-f`, or requirement over `http://` or `git://`, and
+credentials embedded in a URL. **WARN** `--trusted-host` (TLS verification off for
+that host), `--extra-index-url` (dependency confusion: pip takes the highest
+version from *any* index), and a VCS requirement not pinned to a commit.
+
+**JSON is parsed, not grepped.** A key can be written `"post\u0069nstall"`, which
+npm reads as `postinstall` and a pattern never sees. `pkg_escaped/package.json`
+has no literal `postinstall` anywhere in the file, and the assertion on it goes
+red if parsing is disabled — which is how it was verified. Invalid JSON falls back
+to patterns on the raw text with a WARN saying so; there that fallback may FAIL on
+a hook but only WARN on a plaintext URL, because without parsing a dependency
+cannot be told from the `repository.url` of most published packages.
+
+> **Two bugs the real corpus caught that no fixture could.** The first version
+> treated *empty* fact output as "could not parse"; a valid manifest with nothing
+> to report prints nothing, so 1172 of 1193 real files took the weaker fallback. And
+> that fallback matched any `"url": "git://github.com/…"`, failing 154 of them. The
+> fix makes parsing success an explicit `FACT parsed`.
+
+**Calibration is weak here, and this section would be wrong to claim otherwise.**
+Of 1193 real `package.json`, **0 fail, 27 warn**; of 47 `requirements.txt`, 0 fail.
+But the corpus is mostly published packages under `node_modules`, not application
+roots, so it says little about how often an AI-generated repository's own
+manifest carries an install hook (2 of 1193 here). The FAIL rules rest on what the
+constructs mean, not on a measured rate.
+
+A dependency *name* ending in `token` (`"csrf-token": "^2.0.0"`) sits in the same
+key position as a credential, so the JSON credential rule excludes semver-shaped
+values. `pkg_safe/package.json` carries that near-miss.
+
+**Not covered:** lockfiles (`package-lock.json`, `yarn.lock`, `go.sum`) — generated
+integrity data, large, and little rule value; `go.mod` (cannot execute anything);
+`meson_options.txt` (declarative).
+
 ## XML, Maven and Ant
 
 `scan_xml()` handles `.xml` and `.pom`. `pom.xml` and Ant's `build.xml` have no
@@ -527,12 +584,26 @@ python3 selfcheck.py --write-manifest
 5. Update `INSTALL.md` (§5 tool section), `build_pdf_en.py` (`TOOL_CATALOG` list), and `build_pdf_en.py` summary table.
 6. Regenerate all PDFs.
 
-### Two bug classes that have already shipped — lint enforces both
+### Bug classes that have already shipped — lint enforces each
+
+All five are the same kind of defect: a rule or a script that fails *silently*,
+so nothing in a normal run shows it is broken.
 
 - **Multi-character `IFS`.** `IFS=':::'` is a character *set*, silently identical to
   `IFS=':'`. This broke the allowlist and the semgrep result parser.
 - **Top-level `local`.** Valid syntax, but aborts at runtime under `set -e`; `bash -n`
   cannot see it. It silently broke private-repo cloning.
+- **A `RETURN` trap that defers expansion.** The trap is not scoped to the function
+  that sets it, so it keeps firing as later functions return and dies on `set -u`.
+- **`grep_check` without `-e`.** A pattern starting with a dash is parsed as options,
+  grep exits 2, and `if` reads 2 as false: the rule never fires and never complains.
+- **`find … | head -N`.** Under `set -o pipefail`, `head` exits early, `find` dies of
+  SIGPIPE once its output exceeds one 4 KB write, the pipeline returns 141, and
+  `set -e` aborts the scan with no verdict and no report. Eight short paths never
+  trigger it; a few dozen realistic ones do (a monorepo with 30 requirements files
+  reproduces it). `ai_transit.sh` clears stale sidecars and defaults a missing
+  verdict to `FAIL`, so it failed *closed* — wrong, but not unsafe. Use
+  `sed -n '1,Np'`, which reads its whole input.
 
 ## Tests
 
