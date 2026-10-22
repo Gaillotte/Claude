@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -353,6 +353,68 @@ WORK_DIR=/tmp/mkcheck bash scan_pipeline.sh /tmp/realmk --quiet
 There is deliberately **no rule for a bare `$(eval …)`**: it fired on 7 of those
 88 as ordinary metaprogramming, and the dangerous composition
 `$(eval $(shell curl …))` is already a FAIL under the parse-time fetch rule.
+
+## Gradle scanning
+
+`scan_gradle()` handles `*.gradle`, `*.gradle.kts`, `gradle.properties` and
+`gradle-wrapper.properties`, all **by basename**. The basename branch for
+`*.gradle.kts` is essential: its extension is `.kts`, so the extension branch
+would send it to `scan_kotlin` — Kotlin *source* rules (`Runtime.exec`, MD5, a
+quoted credential) and none of the build constructs below. `foo.main.kts` and
+other non-Gradle Kotlin scripts still reach `scan_kotlin`. Plain `*.gradle` had
+no entry at all and fell through to `scan_unknown`, recorded PASS.
+
+**A Gradle script is a program, not a declarative file.** Groovy is compiled to a
+`Script` subclass and Kotlin to a class, and both are evaluated in full at
+**configuration** time: on `gradle tasks`, on `--dry-run`, and automatically when
+an IDE imports the project. There is no read-only mode and no declarative stage to
+retreat to, so a hostile top-level statement fires before any target is chosen.
+`settings.gradle` runs first of all, before any project exists.
+
+**FAIL** — build scripts: `apply from: 'http(s)://…'` (downloads a script and runs
+it) · `allowInsecureProtocol = true` (Kotlin: `isAllowInsecureProtocol`) · a process
+started from a literal or list, a `ProcessBuilder`, or `Runtime.exec`.
+`gradle.properties`: a literal `*.password` / `*.secret` / `*.apiKey` ·
+`org.gradle.dependency.verification=off|lenient` · `-javaagent` / `-agentpath` in
+`org.gradle.jvmargs`. `gradle-wrapper.properties`: a plaintext `distributionUrl`.
+**WARN** — a configuration-time remote fetch · `exec` / `commandLine` / `javaexec` ·
+a `trustStore` override · `validateDistributionUrl=false`.
+
+**Calibration is real here.** ~6290 build scripts, 101 `gradle.properties` and 26
+wrapper files from gradle/gradle, spring-boot, kafka and elasticsearch. The corpus
+is *cloned*, because this host has no `.gradle` file at all, so it measures what real
+projects write and not what an AI-generated repository does. The workflow agent's
+counts were re-measured independently and agreed once its own `attackdemo/` fixture
+directory was excluded.
+
+Two calibration results drove the design, and the first is the CMake `URL` lesson
+over again:
+
+- **`url = 'http://…'` matched 21 of 6249 and almost none were repositories** —
+  licence urls, developer urls and project homepages in POM metadata. Bare `http://`
+  is 341 of 6249. So no rule keys on a URL scheme: Gradle 7+ refuses an `http://`
+  repository unless `allowInsecureProtocol` is set, which makes the flag the reliable
+  tell and the scheme noise.
+- **`.execute()` is also a Gradle API call** — `ArtifactResolutionQuery.execute()` was
+  2 of the 3 hits. The spawn rule needs a string literal or a list in front of it.
+
+`ProcessBuilder` is matched **without `new`**. The research agent's pattern required
+it; Kotlin has no such keyword, so `ProcessBuilder("sh", …)` — the whole spelling —
+would have evaded the rule in every `.gradle.kts`. The fix cost nothing on the
+corpus and `gradle_kts/build.gradle.kts` pins it.
+
+**Result on 6413 real files:** 99.8% pass. The remaining FAILs are all accounted
+for: 8 `signing.password=<literal>` in Gradle's own publishing docs, 2
+`allowInsecureProtocol` in the documentation snippet whose comment reads *"you
+shouldn't"*, 2 genuine process spawns, and 2 Elasticsearch integration-test users
+caught by the pre-existing universal credential rule. A missing
+`distributionSha256Sum` is deliberately not reported: 20 of 26 real wrappers omit it.
+
+**Not covered:** `gradle-wrapper.jar` (a committed binary that `./gradlew` runs before
+any code the repo declares — `.jar` is in neither the binary nor archive extension
+list, so it reaches `scan_unknown`); version catalogs (`libs.versions.toml`);
+`-SNAPSHOT` and dynamic versions (71 and 33 of 6249 — dependency hygiene for Layer 3,
+not an execution vector).
 
 ## Package manifests
 

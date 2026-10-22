@@ -270,6 +270,36 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for tracker.htm)" "html_hidden_iframe" \
             ".htm is routed to the HTML scanner as well as .html"
 
+        # ── Gradle ───────────────────────────────────────────────────────────
+        # A .gradle script is not a declarative file with a few dangerous
+        # constructs in it: it is a program, compiled and evaluated in full at
+        # CONFIGURATION time, on `gradle tasks`, on `--dry-run`, and on IDE
+        # import. Before this, *.gradle fell through to scan_unknown (PASS) and
+        # *.gradle.kts went to scan_kotlin, which has Kotlin SOURCE rules and
+        # none of these.
+        assert_contains "$(line_for gradle_evil/build.gradle)" "CWE-829:gradle_apply_from_remote_script" \
+            "Gradle apply from an http:// URL is flagged"
+        assert_contains "$(line_for gradle_evil/build.gradle)" "CWE-494:gradle_insecure_repository_protocol_enabled" \
+            "Gradle allowInsecureProtocol = true is flagged"
+        assert_contains "$(line_for gradle_evil/build.gradle)" "CWE-78:gradle_process_spawn_from_literal" \
+            "Gradle \"cmd\".execute() is flagged"
+        # build.gradle.kts must reach scan_gradle, not scan_kotlin: the Kotlin
+        # spelling is isAllowInsecureProtocol and scan_kotlin cannot see it.
+        assert_contains "$(line_for gradle_kts/build.gradle.kts)" "CWE-494:gradle_insecure_repository_protocol_enabled" \
+            "build.gradle.kts is scanned as Gradle (isAllowInsecureProtocol)"
+        assert_contains "$(line_for gradle_kts/build.gradle.kts)" "CWE-78:gradle_process_spawn_from_literal" \
+            "build.gradle.kts new ProcessBuilder(...) is flagged"
+        assert_contains "$(line_for gradle_evil/gradle.properties)" "CWE-829:gradle_daemon_java_agent" \
+            "-javaagent in org.gradle.jvmargs is flagged"
+        assert_contains "$(line_for gradle_evil/gradle.properties)" "CWE-494:gradle_dependency_verification_disabled" \
+            "org.gradle.dependency.verification=off is flagged"
+        assert_contains "$(line_for gradle_evil/gradle.properties)" "CWE-798:gradle_credential_in_properties" \
+            "signing.password=<literal> in gradle.properties is flagged"
+        assert_contains "$(line_for gradle_evil/gradle.properties)" "CWE-295:gradle_truststore_override" \
+            "a trustStore override in gradle.properties is reported"
+        assert_contains "$(line_for gradle_wrapper_evil/gradle-wrapper.properties)" "CWE-494:gradle_wrapper_plaintext_distribution" \
+            "a plaintext distributionUrl in the wrapper is flagged"
+
         # ── Package manifests ────────────────────────────────────────────────
         # package.json and requirements.txt got one inline credential grep and
         # nothing else, so an install hook that pipes a download into a shell
@@ -405,6 +435,25 @@ for p,i in d.get('file_results',{}).items():
             "does NOT fail an ordinary package.json (husky, node -e, file: link)"
         assert_contains "$SAFE_PKG" "npm:install_time_hook_present" \
             "an install-time hook is reported, but does not block"
+        # The measured near-misses. POM metadata over http:// matched 21 of 6249
+        # real build scripts; query.execute() is a Gradle API call (2 of the 3
+        # real .execute() hits); commandLineIncludePatterns is a property whose
+        # name merely begins with commandLine; rootVariant.get() contains ant.get(.
+        SAFE_GRADLE=$(echo "$F" | grep 'gradle_safe/build.gradle' || true)
+        assert_not_contains "$SAFE_GRADLE" "[FAIL]" \
+            "does NOT fail POM-metadata http:// urls, query.execute() or a local apply"
+        assert_contains "$SAFE_GRADLE" "gradle_build_step_runs_process" \
+            "an exec/commandLine build step is reported, but does not block"
+        SAFE_KTS=$(echo "$F" | grep 'gradle_kts_safe/build.gradle.kts' || true)
+        assert_not_contains "$SAFE_KTS" "[FAIL]" \
+            "does NOT fail an ordinary build.gradle.kts"
+        SAFE_GPROPS=$(echo "$F" | grep 'gradle_safe/gradle.properties' || true)
+        assert_not_contains "$SAFE_GPROPS" "[FAIL]" \
+            "does NOT fail JVM tuning flags or a blank signing.password"
+        SAFE_WRAP=$(echo "$F" | grep 'gradle_wrapper_safe/gradle-wrapper.properties' || true)
+        assert_not_contains "$SAFE_WRAP" "[FAIL]" \
+            "does NOT fail an https distributionUrl"
+
         # Valid JSON with nothing to report yields no findings — which the first
         # version mistook for "could not parse", so 1172 of 1193 real manifests
         # went down the weaker pattern fallback. The repository and homepage

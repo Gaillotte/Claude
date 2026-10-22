@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("Gradle scanner",    "L5", True,
+     "No remote apply, no insecure repo, no spawn",
+     "apply from http, allowInsecureProtocol, \"cmd\".execute() → FAIL",
+     "exec / commandLine, configuration-time fetch → WARN"),
     ("Package manifests", "L5", True,
      "No hostile install hook, no plaintext source",
      "curl|sh hook, http:// dependency or index, URL credential → FAIL",
@@ -1736,7 +1740,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "155 assertions", [
+    ("Test suite", "170 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 155/155 passed
+./tests/run_tests.sh          # Expected: ✔ 170/170 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 155/155 passed
+# Expected: ✔ 170/170 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1564,6 +1564,7 @@ tool; nothing to stage, no flags required.
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
+| Gradle (`scan_gradle`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Package manifests (`scan_package_json`, `scan_requirements`) | L5 | Built in; needs `python3` (standard library) to parse JSON, otherwise falls back to patterns with a WARN |
 | XML / Maven / Ant (`scan_xml`) | L5 | Built in; pattern matching, plus `python3` to strip comments — falls back to scanning the raw file without it |
 | Bandit | L5 | Local Python AST analysis |
@@ -1941,6 +1942,55 @@ WORK_DIR=/tmp/pkgcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 generated integrity data; `go.mod`, which cannot execute anything; and
 `meson_options.txt`, which is declarative.
 
+### 11.2.8 Gradle — `*.gradle`, `*.gradle.kts`, `gradle.properties`, `gradle-wrapper.properties`
+
+`scan_gradle` is pure pattern matching, so nothing needs staging and it behaves
+identically offline. Matching is **by name**: `*.gradle.kts` ends in `.kts`, which
+would otherwise send it to the Kotlin *source* scanner — rules for `Runtime.exec` and
+weak hashes, and none of the build constructs below.
+
+A Gradle script is a program, not a declarative file. It is evaluated in full at
+**configuration** time — on `gradle tasks`, on `--dry-run`, and automatically when an
+IDE imports the project — so a hostile top-level statement runs before any target is
+chosen, and `settings.gradle` runs before any project exists.
+
+| File | Fails on | Warns on |
+|------|----------|----------|
+| `*.gradle`, `*.gradle.kts` | `apply from:` an http(s) URL · `allowInsecureProtocol = true` · a process started from a literal or list, a `ProcessBuilder`, `Runtime.exec` | a configuration-time remote fetch · `exec` / `commandLine` / `javaexec` |
+| `gradle.properties` | a literal `*.password` / `*.secret` / `*.apiKey` · `dependency.verification=off` · `-javaagent` in `org.gradle.jvmargs` | a `trustStore` override |
+| `gradle-wrapper.properties` | a plaintext `distributionUrl` | `validateDistributionUrl=false` |
+
+The rules are narrow because the ordinary forms look like the hostile ones. Measured
+against ~6290 real build scripts:
+
+| Ordinary — never reported | Reported |
+|---------------------------|----------|
+| `url = 'http://www.apache.org/licenses/…'` in POM metadata (21 of 6249) | `allowInsecureProtocol = true` |
+| `query.execute()`, a Gradle API call | `"curl …".execute()` |
+| `apply from: rootProject.file('common.gradle')` | `apply from: 'http://…'` |
+| `signing.password=` (blank) | `signing.password=hunter2` |
+
+That first row is why no rule keys on a URL scheme: Gradle 7+ refuses an `http://`
+repository unless `allowInsecureProtocol` is set, so the flag is the reliable tell.
+
+```bash
+WORK_DIR=/tmp/gradlecheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected FAIL: gradle_evil/*, gradle_kts/build.gradle.kts, gradle_wrapper_evil/*
+# Expected PASS: gradle_safe/* (WARN: exec), gradle_kts_safe/*, gradle_wrapper_safe/*
+```
+
+On 6413 real files 99.8% pass; every remaining FAIL is a true positive by form (eight
+`signing.password=<literal>` in Gradle's own docs, a documentation snippet whose
+comment reads *"you shouldn't"*, two genuine process spawns). The corpus is cloned
+from gradle/gradle, spring-boot, kafka and elasticsearch, because the reference host
+has no `.gradle` file — so it measures what real projects write, not what an
+AI-generated one does.
+
+**Not covered:** `gradle-wrapper.jar`, a committed binary that `./gradlew` runs before
+any code the repository declares (`.jar` is in neither the binary nor the archive
+extension list, so it is recorded PASS); version catalogs; and `-SNAPSHOT` versions,
+which are dependency hygiene rather than an execution vector.
+
 ### 11.3 Environment variables
 
 | Variable | Default | Purpose |
@@ -2217,7 +2267,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 155/155 passed
+# Expected: ✔ 170/170 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2656,7 +2706,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  155/155 passed
+  ✔  170/170 passed
 ```
 
 ### 17.1 What each layer covers

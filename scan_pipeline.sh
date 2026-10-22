@@ -1664,6 +1664,131 @@ scan_requirements() {
     $failed || record_pass "$f"
 }
 
+# ── Gradle ───────────────────────────────────────────────────────────────────
+# A .gradle script is not a declarative file with a few dangerous constructs in
+# it: it is a program. Groovy is compiled to a Script subclass and Kotlin to a
+# class, and both are evaluated in full at CONFIGURATION time — on `gradle
+# tasks`, on `--dry-run`, and automatically when an IDE imports the project.
+# There is no read-only mode and no declarative stage to retreat to, so a
+# hostile top-level statement fires before any target is chosen. settings.gradle
+# is evaluated first of all, before any project exists.
+#
+# Before this, *.gradle fell through to scan_unknown and was recorded PASS, and
+# *.gradle.kts went to scan_kotlin, which has Kotlin SOURCE rules (Runtime.exec,
+# MD5, a quoted credential) and none of the build constructs below.
+#
+# Rates are measured against ~6290 real build scripts, 101 gradle.properties and
+# 26 gradle-wrapper.properties from gradle/gradle, spring-boot, kafka and
+# elasticsearch. That corpus is cloned rather than found on this host (which has
+# no .gradle file at all), so it is a measurement of what real projects write and
+# not of what an AI-generated repository does.
+#
+# Calibration changed the design twice, and both are the CMake `URL` lesson:
+#
+#   `url = 'http://…'` matched 21 of 6249 and almost none were repositories —
+#   licence urls, developer urls and project homepages in POM metadata. Bare
+#   `http://` is 341 of 6249. So no rule keys on a URL scheme; allowInsecureProtocol
+#   carries that job, because Gradle 7+ refuses an http:// repository unless it
+#   is set, which makes the flag the reliable tell and the scheme noise.
+#
+#   `.execute()` is also a Gradle API call (ArtifactResolutionQuery.execute() was
+#   2 of the 3 hits), so the process-spawn rule needs a string literal or a list
+#   in front of it, as in `"curl …".execute()`.
+scan_gradle() {
+    local f="$1"
+    local failed=false base
+    base=$(basename "$f")
+
+    case "$base" in
+    gradle.properties)
+        # Java .properties has no quoting, so signing.password=hunter2 has no
+        # quote after the `=` and the universal credential rule cannot see it.
+        # 7 of 101 real files, all `signing.password=<literal>` in Gradle's own
+        # publishing documentation — true positives by form; 0 of 187 unrelated
+        # .properties files on this host. A blank value, a ${…} reference and a
+        # path are excluded.
+        if grep_check_i '^[[:space:]]*[A-Za-z0-9_.-]*(password|passwd|secret|apikey|api[_.-]?key|auth[_.-]?token|access[_.-]?token)[[:space:]]*=[[:space:]]*[^[:space:]$/~.]' "$f"; then
+            record_fail "$f" "CWE-798:gradle_credential_in_properties"
+            failed=true
+        fi
+        # Turns off the checksum and signature verification of every resolved
+        # artifact. 0 of 101.
+        if grep_check_i '^[[:space:]]*(org\.gradle\.)?dependency[._-]verification[[:space:]]*=[[:space:]]*(off|lenient)' "$f"; then
+            record_fail "$f" "CWE-494:gradle_dependency_verification_disabled"
+            failed=true
+        fi
+        # A -javaagent loads arbitrary code into the build JVM before any script
+        # runs. 0 of 101.
+        if grep_check_i '^[[:space:]]*(org\.gradle\.jvmargs|systemProp\.)[^=]*=.*-(javaagent|agentpath|agentlib):' "$f"; then
+            record_fail "$f" "CWE-829:gradle_daemon_java_agent"
+            failed=true
+        fi
+        # Repoints TLS trust for all resolution traffic. Legitimate behind a
+        # corporate proxy, so a WARN. 0 of 101.
+        if grep_check_i '^[[:space:]]*systemProp\.javax\.net\.ssl\.(trustStore|trustStorePassword)[[:space:]]*=' "$f"; then
+            record_warn "$f" "CWE-295:gradle_truststore_override"
+        fi
+        ;;
+
+    gradle-wrapper.properties)
+        # ./gradlew downloads this distribution and runs it as the build tool.
+        # The `\:` is Java .properties escaping of the colon. 0 of 26.
+        if grep_check_i '^[[:space:]]*distributionUrl[[:space:]]*=[[:space:]]*(http|ftp)\\?://' "$f"; then
+            record_fail "$f" "CWE-494:gradle_wrapper_plaintext_distribution"
+            failed=true
+        fi
+        if grep_check_i '^[[:space:]]*validateDistributionUrl[[:space:]]*=[[:space:]]*false' "$f"; then
+            record_warn "$f" "CWE-494:gradle_wrapper_url_validation_disabled"
+        fi
+        # Deliberately no rule for a missing distributionSha256Sum: 20 of 26 real
+        # wrapper files omit it.
+        ;;
+
+    *)
+        # apply from: 'https://…' downloads a script and executes it at once.
+        # One meaning, no innocent reading. Bare `apply from:` is 14 of 6249 and
+        # every one is a local path. 0 of 6249.
+        if grep_check_i 'apply[[:space:]]*\(?[[:space:]]*from[[:space:]]*[:=][[:space:]]*["'"'"']?(https?|ftp)://' "$f"; then
+            record_fail "$f" "CWE-829:gradle_apply_from_remote_script"
+            failed=true
+        fi
+        # Gradle 7+ refuses an http:// repository unless this is set, so the flag
+        # is the reliable tell. Kotlin DSL spells it isAllowInsecureProtocol,
+        # which the case-insensitive match covers. 2 of 6249, both Gradle's own
+        # insecure-repository documentation snippet.
+        if grep_check_i 'allowinsecureprotocol[[:space:]]*=[[:space:]]*true' "$f"; then
+            record_fail "$f" "CWE-494:gradle_insecure_repository_protocol_enabled"
+            failed=true
+        fi
+        # A process started from a literal or a list, a ProcessBuilder, or
+        # Runtime.exec. The literal in front of .execute() is what separates it
+        # from the Gradle API call of the same name. 2 of 6249, both genuine
+        # spawns; the unanchored form would have been 2 of 3 wrong. ProcessBuilder
+        # is matched without `new`, because Kotlin has no such keyword and a
+        # pattern requiring it would miss every .gradle.kts script.
+        if grep_check_i '(["'"'"'][^"'"'"']*["'"'"']|\])[[:space:]]*\.execute\(\)|(^|[^[:alnum:]_.])ProcessBuilder[[:space:]]*\(|Runtime\.getRuntime\(\)\.exec[[:space:]]*\(' "$f"; then
+            record_fail "$f" "CWE-78:gradle_process_spawn_from_literal"
+            failed=true
+        fi
+
+        # A fetch at configuration time: legitimate for a version lookup, but it
+        # runs on every Gradle invocation. 5 of 6249: three are Gradle's own
+        # "what not to do" snippet, two are real.
+        if grep_check_i '(new[[:space:]]+URL|URL|URI)[[:space:]]*\([^)]*\)[[:space:]]*(\.toURL\(\))?[[:space:]]*\.(text|readText|getText|openStream|newInputStream)' "$f"; then
+            record_warn "$f" "CWE-494:gradle_configuration_time_remote_fetch"
+        fi
+        # exec / commandLine / javaexec / providers.exec. The left guard keeps
+        # commandLineIncludePatterns, a property that begins with commandLine,
+        # from matching. 7 of 6249, all ordinary (git --version, dpkg-deb, ls).
+        if grep_check_i '(^|[^[:alnum:]_.])(commandLine|javaexec|providers\.exec|exec)[[:space:]]*[({'"'"'"]' "$f"; then
+            record_warn "$f" "CWE-78:gradle_build_step_runs_process"
+        fi
+        ;;
+    esac
+
+    $failed || record_pass "$f"
+}
+
 # ── CMake ────────────────────────────────────────────────────────────────────
 # Two things make CMake worth its own scanner.
 #
@@ -2632,6 +2757,11 @@ classify_file() {
         # and went to the documentation scanner.
         package.json|composer.json)           scan_package_json "$f"; return ;;
         requirements*.txt|constraints*.txt)   scan_requirements "$f"; return ;;
+        # Gradle build scripts are programs. *.gradle.kts must be matched here,
+        # by name, because its extension is .kts and the extension branch would
+        # send it to scan_kotlin, which knows Kotlin source and not Gradle.
+        gradle.properties|gradle-wrapper.properties|*.gradle|*.gradle.kts)
+                                              scan_gradle   "$f"; return ;;
     esac
 
     case ".$ext" in
@@ -2927,7 +3057,7 @@ report = {
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
                      "PDF-Active-Content", "Build-Script-Hardening",
-                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity"],
+                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},
