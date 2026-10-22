@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09), plus known credential formats (18 providers) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -353,6 +353,75 @@ WORK_DIR=/tmp/mkcheck bash scan_pipeline.sh /tmp/realmk --quiet
 There is deliberately **no rule for a bare `$(eval …)`**: it fired on 7 of those
 88 as ordinary metaprogramming, and the dangerous composition
 `$(eval $(shell curl …))` is already a FAIL under the parse-time fetch rule.
+
+## PowerShell
+
+Every PowerShell file type is routed, and all of them share one rule set (`_ps_rules`):
+
+| Extension | What it is | Scanner |
+|-----------|-----------|---------|
+| `.ps1` | script | `scan_powershell` |
+| `.psm1` | module | `scan_powershell` |
+| `.psd1` | module manifest (a data hashtable) | `scan_powershell` |
+| `.pssc` | session configuration | `scan_powershell` |
+| `.psrc` | role capability (JEA) | `scan_powershell` |
+| `.ps1xml` | type / format data (XML carrying script blocks) | `scan_powershell_xml` |
+| `.psc1` | console file (XML) | `scan_powershell_xml` |
+| `.cdxml` | CIM cmdlet definition (XML) | `scan_powershell_xml` |
+| *(none)* | a `#!…pwsh` or `#!…powershell` first line | `scan_unknown` → `scan_powershell` |
+
+The legacy Monad extensions (`.msh`, `.msh1`, `.msh2`, `.mshxml`) are **not** routed:
+PowerShell has not associated them since 1.0 shipped. The XML-based types get the
+PowerShell rules *and* the external-entity check from `scan_xml`.
+
+**Extension matching is case-insensitive.** The dispatch used to compare the extension
+as written, so `UPPER.PS1` and `UPPER.PY` fell through to `scan_unknown` and **passed**
+while `lower.ps1` and `lower.py` failed — renaming a file bypassed its scanner. Windows
+users write `.PS1` and `.BAT` as a matter of course. `classify_file` now lower-cases the
+extension. This is a general fix, not a PowerShell one; `case_upper.PY` pins it.
+
+**The old scanner was wrong in both directions.** It had three rules. On the 69 real
+`.ps1` files on this host (32 distinct) it FAILed 8, **every one a false positive**:
+`npm.ps1` and `npx.ps1` (they ship with every Node install and call `Invoke-Expression`
+on a command they assemble), pnpm's completion script (same), and Playwright's five
+browser installers (download an MSI over https, run `msiexec`). Meanwhile `iex $c`,
+`IEX (iwr …)` and `powershell -enc …` all **passed**, because the rules were
+case-sensitive — PowerShell is not — and `iex` was only matched before a parenthesis.
+
+The shape that came out of it: a construct that is ordinary on its own (`Invoke-Expression`,
+`Start-Process`, a download) is a **WARN**; it becomes a **FAIL** only in a composition with
+no innocent reading.
+
+**FAIL** — fetch then execute (`irm … | iex`, `DownloadString` + `iex`, or a shell pipe) ·
+`-EncodedCommand` and its abbreviations (`-enc`, `-e`) followed by a base64 blob · decode
+then execute (`FromBase64String` with `iex` / `ScriptBlock::Create` / `Assembly::Load` /
+`VirtualAlloc`) · a backtick inside the command name (``i`e`x``) · an AMSI bypass · Defender
+disabled · persistence (a `CurrentVersion\Run` key, WMI event consumers, the Startup folder) ·
+a socket stream fed to a shell · `VirtualAlloc` with `CreateThread` · offensive tooling by
+name (`Invoke-Mimikatz`…) · a literal `$Password` or `ConvertTo-SecureString "…" -AsPlainText` ·
+a plaintext `http://` download that is then run.
+**WARN** — `Invoke-Expression` alone · `Start-Process` / `cmd /c` · an https download that is
+then run · execution-policy bypass · hidden window · a Defender exclusion · a scheduled task ·
+certificate validation off · creating a local account · a command name built from strings ·
+`ScriptsToProcess` in a manifest · a wildcard `VisibleCmdlets` in a role capability.
+
+Several FAIL rules are **whole-file** tests, because the halves sit on different lines and
+PowerShell spreads a pipeline across them; `ps_decode_exec.psm1` puts the decode and the
+`iex` on separate lines and its assertion goes red if the rule is made line-based.
+
+> **A deliberate relaxation.** `Invoke-Expression` was a FAIL and is now a WARN. In the real
+> corpus it occurred in 3 distinct scripts and was benign every time, and PSScriptAnalyzer
+> ranks it a warning. The dangerous uses are covered by the FAIL compositions above, but a
+> lone `Invoke-Expression $userInput` no longer blocks. `ps_safe_npm_shim.ps1` is modelled on
+> `npm.ps1` and pins the decision. Mutation 7 (turn it back into a FAIL) turns that red.
+
+**Result on the 69 real scripts: 8 FAIL → 0 FAIL, 8 WARN** (the same eight files).
+
+**Calibration, honestly.** 32 distinct real scripts is small, and **none** of `.psm1`,
+`.psd1`, `.pssc`, `.psrc`, `.ps1xml`, `.psc1` or `.cdxml` exists on this host, so those routes
+are tested from fixtures and reasoned from the format, not measured. Comments are not
+stripped: a payload inside `#` or `<# #>` is still matched, which errs towards reporting.
+`.bat` and `.cmd` remain unscanned.
 
 ## setup.py and conanfile.py
 

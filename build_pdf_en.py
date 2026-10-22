@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("PowerShell scanner", "L5", True,
+     "No fetch-and-execute, no encoded command",
+     "irm|iex, -enc, AMSI bypass, persistence, literal $Password → FAIL",
+     "Invoke-Expression alone, Start-Process, policy bypass → WARN"),
     ("Credential formats", "L4", True,
      "No provider-shaped token in any file",
      "AWS / GitHub / Stripe / Slack / Google / Anthropic … token → FAIL",
@@ -1748,7 +1752,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "198 assertions", [
+    ("Test suite", "227 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

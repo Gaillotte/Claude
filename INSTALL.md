@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 198/198 passed
+./tests/run_tests.sh          # Expected: ✔ 227/227 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 198/198 passed
+# Expected: ✔ 227/227 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1564,6 +1564,7 @@ tool; nothing to stage, no flags required.
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
+| PowerShell (`scan_powershell`, `scan_powershell_xml`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Known credential formats (Layer 4, every file) | L4 | Built in; pure pattern matching, nothing to stage |
 | `setup.py` / `conanfile.py` (`scan_setup_py`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Gradle (`scan_gradle`) | L5 | Built in; pure pattern matching, nothing to stage |
@@ -2078,6 +2079,63 @@ WORK_DIR=/tmp/credcheck bash tests/run_tests.sh credential   # builds every toke
 If a vendored file legitimately contains a key (a public Google client key, say), use
 `.transit-allow.json` with rule `CWE-798` and the file's path.
 
+### 11.2.11 PowerShell — every extension
+
+Pure pattern matching; nothing to stage, identical offline. All PowerShell file types
+share one rule set:
+
+| Extension | What it is | Notes |
+|-----------|-----------|-------|
+| `.ps1` | script | |
+| `.psm1` | module | |
+| `.psd1` | module manifest | a data hashtable; `ScriptsToProcess` runs code at import |
+| `.pssc` | session configuration | defines a remote session |
+| `.psrc` | role capability (JEA) | a wildcard `VisibleCmdlets` exposes everything |
+| `.ps1xml` | type / format data | XML carrying script blocks; also checked for external entities |
+| `.psc1` | console file | XML; also checked for external entities |
+| `.cdxml` | CIM cmdlet definition | XML; also checked for external entities |
+| *(none)* | `#!…pwsh` or `#!…powershell` first line | |
+
+The legacy Monad extensions (`.msh`, `.msh1`, `.msh2`, `.mshxml`) are not routed;
+PowerShell has not associated them since 1.0.
+
+**Extension case no longer matters.** Matching was case-sensitive, so `PAYLOAD.PS1` and
+`PAYLOAD.PY` passed unscanned while their lower-case twins failed. Extensions are now
+compared in lower case, for every file type.
+
+**What it reports.** A construct that is ordinary on its own is a WARN, and becomes a
+FAIL only in a composition with no innocent reading:
+
+| Ordinary — reported, not blocked | Blocks |
+|----------------------------------|--------|
+| `Invoke-Expression` on a command it assembles itself (npm's own `npm.ps1`) | `irm https://… \| iex` |
+| `Start-Process msiexec.exe …` after an https download (Playwright) | `DownloadString` + `iex`, or a shell pipe |
+| `-ExecutionPolicy Bypass`, a hidden window, a scheduled task | `powershell -enc <base64>` (any abbreviation of `-EncodedCommand`) |
+| a `TcpClient` port check | a socket stream fed to `iex` or `cmd.exe` |
+| `$token = $env:GITHUB_TOKEN`, `$tokenEndpoint = 'https://…'` | `$Password = "literal"`, `ConvertTo-SecureString "…" -AsPlainText` |
+| `FromBase64String` on its own | `FromBase64String` with `iex`, `ScriptBlock::Create`, `Assembly::Load` |
+
+It also fails an AMSI bypass, disabling Defender, a `CurrentVersion\Run` key, a WMI event
+consumer, `VirtualAlloc` with `CreateThread`, offensive tooling by name, and the obfuscated
+spelling of iex with backticks between its letters. Several of these are whole-file tests, because PowerShell spreads a
+pipeline across lines.
+
+**A deliberate relaxation:** `Invoke-Expression` alone is now a WARN. It appeared in three
+distinct real scripts (npm, npx and pnpm's completion), benign every time. The dangerous
+compositions above still block; a lone `Invoke-Expression $userInput` does not.
+
+**How well-calibrated is it?** The previous scanner FAILed 8 of the 69 real scripts on this
+host (32 distinct) and every one was a false positive; now 0 FAIL and the same eight are WARNs.
+But 32 distinct scripts is small, and none of the other extensions exists on the reference host,
+so they are tested from fixtures and not measured. Comments are not stripped, so a payload in a
+comment is still reported. `.bat` and `.cmd` are not yet scanned.
+
+```bash
+WORK_DIR=/tmp/pscheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected FAIL: ps_download_exec.ps1, ps_irm_iex.ps1, ps_encoded_short.ps1, ps_decode_exec.psm1, …
+# Expected WARN (no FAIL): ps_safe_npm_shim.ps1, ps_safe_installer.ps1, ps_manifest.psd1, ps_role.psrc
+```
+
 ### 11.3 Environment variables
 
 | Variable | Default | Purpose |
@@ -2354,7 +2412,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 198/198 passed
+# Expected: ✔ 227/227 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2793,7 +2851,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  198/198 passed
+  ✔  227/227 passed
 ```
 
 ### 17.1 What each layer covers

@@ -2794,7 +2794,8 @@ scan_unknown() {
         '#!'*ruby*)   scan_ruby       "$f"; return ;;
         '#!'*node*)   scan_javascript "$f"; return ;;
         '#!'*php*)    scan_php        "$f"; return ;;
-        '#!'*pwsh*)   scan_powershell "$f"; return ;;
+        '#!'*pwsh*|'#!'*powershell*)
+                      scan_powershell "$f"; return ;;
     esac
 
     if has_cmd file; then
@@ -2810,22 +2811,219 @@ scan_unknown() {
 }
 
 # ── PowerShell ───────────────────────────────────────────────────────────────
+# One rule set, `_ps_rules`, shared by every PowerShell file type:
+#
+#   text         .ps1 script · .psm1 module · .psd1 manifest · .pssc session
+#                configuration · .psrc role capability · and an extensionless file
+#                whose first line is a pwsh / powershell shebang
+#   XML-based    .ps1xml type and format data · .psc1 console file · .cdxml CIM
+#                cmdlet definition — XML that carries script blocks, so they get
+#                the same rules plus the external-entity check
+#
+# The legacy Monad extensions (.msh, .msh1, .msh2, .mshxml …) are not routed:
+# PowerShell has not associated them since 1.0 shipped. None of .psm1, .psd1,
+# .ps1xml, .psc1, .pssc, .psrc or .cdxml exists on the reference host, so those
+# routes are tested from fixtures and reasoned from the format, not calibrated.
+#
+# The previous scanner had three rules and was wrong in both directions. On the 69
+# real .ps1 files on this host (32 distinct) it FAILed 8, and every one was a
+# false positive: npm.ps1 and npx.ps1 ship with every Node install and call
+# Invoke-Expression on a command they assemble; pnpm's completion script does the
+# same; and Playwright's five browser installers download an MSI over https and
+# run msiexec on it. Meanwhile `iex $c`, `IEX (iwr …)` and `powershell -enc …` all
+# PASSED, because the rules were case-sensitive and `iex` was only matched before
+# a parenthesis.
+#
+# The shape that came out of that corpus: a construct that is ordinary on its own
+# (Invoke-Expression, Start-Process, a download) is a WARN, and it becomes a FAIL
+# only in a composition that has no innocent reading — fetch-then-execute, decode-
+# then-execute, an AMSI bypass. Several of those are whole-file tests, because the
+# two halves sit on different lines and PowerShell happily spreads a pipeline
+# across them.
+#
+# Not handled: comments. A payload inside a # or <# #> comment is still matched,
+# which errs towards reporting; stripping them would need a PowerShell lexer to
+# avoid mistaking a # inside a string for a comment.
+PS_FAILED=false
+
+_ps_rules() {
+    local f="$1"
+
+    # Primitives. PowerShell is case-insensitive throughout — IEX, iex and
+    # Invoke-Expression are one command — so every match below is -i.
+    #
+    # `iex` is matched before a space, a parenthesis or end of line, because the
+    # common forms are `iex $c`, `… | iex` and `iex (iwr …)`; the first scanner
+    # only matched `iex(`. The backtick variants are the obfuscated spellings
+    # i`ex, ie`x and i`e`x, which PowerShell reads as plain iex.
+    local IEXA='(invoke-expression|(^|[^[:alnum:]_.$-])(iex|i`e`?x|ie`x)([[:space:]]|\(|$))'
+    local FETCH='(downloadstring|downloaddata|downloadfile|net\.webclient|invoke-webrequest|invoke-restmethod|start-bitstransfer|(^|[^[:alnum:]_.$-])(iwr|irm)([[:space:]]|\())'
+    local RUN='(start-process|invoke-item|msiexec|regsvr32|rundll32|(^|[;|{[:space:]])&[[:space:]]*["'"'"'$(])'
+
+    # CWE-78 — fetch, then execute. Whole-file, because `irm $u |` and `iex` can
+    # be on different lines. This is also the canonical installer one-liner
+    # (`irm https://… | iex`), which is exactly why it is a FAIL here: it runs
+    # whatever the server sends with no integrity check. A shell pipe inside a
+    # pwsh script is the same thing. 0 of 32 distinct real scripts.
+    if { grep_check_i "$IEXA" "$f" && grep_check_i "$FETCH" "$f"; } \
+       || grep_check_i '(curl|wget)[^|;]*\|[[:space:]]*(sudo[[:space:]]+)?(ba|z)?sh([[:space:]]|$)' "$f"; then
+        record_fail "$f" "CWE-78:PowerShell_download_and_execute"
+        PS_FAILED=true
+    fi
+
+    # CWE-78 — a base64 command line. -EncodedCommand has legal abbreviations
+    # down to -e, and -enc is the form attackers actually write. 30+ base64
+    # characters after it separates it from `-ExecutionPolicy Bypass`.
+    if grep_check_i '-encodedcommand' "$f" \
+       || grep_check_i '(powershell|pwsh)(\.exe)?[^|;]*[[:space:]]-e[a-z]*[[:space:]]+["'"'"']?[A-Za-z0-9+/]{30,}' "$f"; then
+        record_fail "$f" "CWE-78:PowerShell_EncodedCommand_obfuscation"
+        PS_FAILED=true
+    fi
+
+    # CWE-95 — decode a blob, then run it. Decoding alone is ordinary (a
+    # certificate, a file), so this needs an execution primitive in the same file.
+    if grep_check_i 'frombase64string' "$f" \
+       && { grep_check_i "$IEXA" "$f" \
+            || grep_check_i '(scriptblock\]::create|assembly\]::load|virtualalloc|createthread)' "$f"; }; then
+        record_fail "$f" "CWE-95:PowerShell_decodes_and_executes"
+        PS_FAILED=true
+    fi
+
+    # CWE-95 — a backtick inside the command name. No innocent reading.
+    if grep_check_i '(^|[^[:alnum:]_.$-])(i`e`?x|ie`x)([[:space:]]|\(|$)' "$f"; then
+        record_fail "$f" "CWE-95:PowerShell_obfuscated_Invoke_Expression"
+        PS_FAILED=true
+    fi
+
+    # CWE-693 — defeating the Antimalware Scan Interface, or Defender itself.
+    if grep_check_i '(amsiinitfailed|amsiutils|amsiscanbuffer|amsicontext)' "$f"; then
+        record_fail "$f" "CWE-693:PowerShell_AMSI_bypass"
+        PS_FAILED=true
+    fi
+    if grep_check_i 'set-mppreference[^|;]*-disable(realtimemonitoring|ioavprotection|behaviormonitoring|scriptscanning|intrusionpreventionsystem|blockatfirstseen)[[:space:]:=]*(\$true|1|true)' "$f"; then
+        record_fail "$f" "CWE-693:PowerShell_disables_Defender"
+        PS_FAILED=true
+    fi
+
+    # CWE-912 — persistence: a Run key, a WMI event subscription, or a file in
+    # the Startup folder.
+    if grep_check_i '(new-itemproperty|set-itemproperty|reg(\.exe)?[[:space:]]+add)[^|;]*currentversion[\\]+run' "$f" \
+       || grep_check_i '(__eventfilter|commandlineeventconsumer|activescripteventconsumer)' "$f" \
+       || grep_check_i '(copy-item|move-item|set-content|out-file|add-content|new-item)[^|;]*[\\]start menu[\\]programs[\\]startup' "$f"; then
+        record_fail "$f" "CWE-912:PowerShell_persistence"
+        PS_FAILED=true
+    fi
+
+    # CWE-78 — a socket whose stream is fed to a command interpreter. A TcpClient
+    # on its own is a port check and is not reported.
+    if { grep_check_i 'tcpclient' "$f" && grep_check_i 'getstream' "$f" \
+         && { grep_check_i "$IEXA" "$f" || grep_check_i '(cmd\.exe|powershell)' "$f"; }; } \
+       || grep_check_i '(nc(\.exe)?[[:space:]]+-[a-z]*e[[:space:]]|/dev/tcp/)' "$f"; then
+        record_fail "$f" "CWE-78:PowerShell_reverse_shell"
+        PS_FAILED=true
+    fi
+
+    # CWE-94 — allocate executable memory and start a thread in it.
+    if grep_check_i 'virtualalloc' "$f" \
+       && grep_check_i '(createthread|createremotethread|writeprocessmemory|marshal\]::copy)' "$f"; then
+        record_fail "$f" "CWE-94:PowerShell_in_memory_shellcode_loader"
+        PS_FAILED=true
+    fi
+
+    # CWE-506 — offensive tooling by name.
+    if grep_check_i '(invoke-mimikatz|invoke-shellcode|invoke-reflectivepeinjection|invoke-dllinjection|invoke-tokenmanipulation|invoke-kerberoast|invoke-powerdump|get-gpppassword|invoke-ninjacopy|sekurlsa::)' "$f"; then
+        record_fail "$f" "CWE-506:PowerShell_known_offensive_tool"
+        PS_FAILED=true
+    fi
+
+    # CWE-798 — a literal credential. Case-insensitive now ($Password is $password
+    # to PowerShell); the variable name must be exactly one of these, so that
+    # `$tokenEndpoint = 'https://…'` is not read as a token.
+    if grep_check_i '\$(password|passwd|secret|apikey|api_key|token|accesstoken|clientsecret|client_secret|authtoken)[[:space:]]*=[[:space:]]*["'"'"'][^"'"'"'$]{4,}["'"'"']' "$f" \
+       || grep_check_i 'convertto-securestring[[:space:]]+["'"'"'][^"'"'"'$]{4,}["'"'"'][^|;]*-asplaintext' "$f"; then
+        record_fail "$f" "CWE-798:hardcoded_credential"
+        PS_FAILED=true
+    fi
+
+    # CWE-319 — a download over plaintext http://. If something is then run the
+    # contents were chosen by whoever is on the path, so it blocks; alone, it warns.
+    if grep_check_i '(downloadfile|downloadstring|downloaddata|iwr|irm|invoke-webrequest|invoke-restmethod|start-bitstransfer)[^;|]*["'"'"']http://' "$f"; then
+        if grep_check_i "$RUN" "$f" || grep_check_i "$IEXA" "$f"; then
+            record_fail "$f" "CWE-319:PowerShell_plaintext_download_then_run"
+            PS_FAILED=true
+        else
+            record_warn "$f" "powershell:plaintext_http_download"
+        fi
+    fi
+
+    # ── Ordinary on their own: reported, not blocked ─────────────────────
+    # Invoke-Expression appeared in 3 distinct real scripts (npm, npx, pnpm's
+    # completion) and was benign every time; PSScriptAnalyzer ranks it a warning.
+    # The message keeps the old rule's token so the original test still matches.
+    if grep_check_i "$IEXA" "$f"; then
+        record_warn "$f" "CWE-78:PowerShell_command_execution_Invoke_Expression"
+    fi
+    # Start-Process: 5 real hits, all Playwright's `Start-Process msiexec.exe`.
+    if grep_check_i '(start-process|cmd(\.exe)?[[:space:]]+/c)' "$f"; then
+        record_warn "$f" "CWE-78:PowerShell_command_execution_Start_Process"
+    fi
+    # Fetch and run in one script without an iex: the installer idiom. 5 real
+    # hits, all Playwright, all https.
+    if grep_check_i "$FETCH" "$f" && grep_check_i "$RUN" "$f"; then
+        record_warn "$f" "powershell:downloads_then_runs_a_program"
+    fi
+    if grep_check_i '(set-executionpolicy|-executionpolicy|[[:space:]]-ep)[[:space:]]+(bypass|unrestricted)' "$f"; then
+        record_warn "$f" "powershell:execution_policy_bypass"
+    fi
+    if grep_check_i '(-windowstyle|[[:space:]]-w)[[:space:]]+h(idden)?([[:space:]]|$)' "$f"; then
+        record_warn "$f" "powershell:hidden_window"
+    fi
+    if grep_check_i 'add-mppreference[^|;]*-exclusion' "$f"; then
+        record_warn "$f" "powershell:adds_a_Defender_exclusion"
+    fi
+    if grep_check_i '(schtasks(\.exe)?[[:space:]]+/create|register-scheduledtask|new-scheduledtask)' "$f"; then
+        record_warn "$f" "powershell:creates_a_scheduled_task"
+    fi
+    if grep_check_i '(servercertificatevalidationcallback[^;]*(\$true|\{[[:space:]]*\$true)|-skipcertificatecheck|trustallcertspolicy)' "$f"; then
+        record_warn "$f" "CWE-295:powershell_certificate_validation_disabled"
+    fi
+    if grep_check_i '(net(\.exe)?[[:space:]]+(user|localgroup)[^|;]*/add|new-localuser|add-localgroupmember)' "$f"; then
+        record_warn "$f" "powershell:creates_or_elevates_a_local_account"
+    fi
+    # `& ('ie' + 'x')`, `& ("{0}{1}" -f 'ie','x')`: a command name assembled from
+    # pieces so no pattern can see it.
+    if grep_check_i '&[[:space:]]*\([[:space:]]*["'"'"'][^"'"'"')]{1,12}["'"'"'][[:space:]]*(\+|-f)' "$f"; then
+        record_warn "$f" "powershell:command_name_built_from_strings"
+    fi
+    # Data files (.psd1 .pssc .psrc). Ordinary in a module author's hands, but
+    # these run code at import or define what a remote session may do.
+    if grep_check_i 'scriptstoprocess[[:space:]]*=[[:space:]]*@?\(?[[:space:]]*["'"'"']' "$f"; then
+        record_warn "$f" "powershell:manifest_runs_scripts_at_import"
+    fi
+    if grep_check_i 'visible(cmdlets|functions|externalcommands|providers|aliases)[[:space:]]*=[[:space:]]*@?\(?[[:space:]]*["'"'"']\*' "$f"; then
+        record_warn "$f" "powershell:role_capability_exposes_everything"
+    fi
+}
+
 scan_powershell() {
     local f="$1"
-    local failed=false
-    # CWE-78: Invoke-Expression / cmd.exe exec
-    if grep_check '(Invoke-Expression|iex\s*\(|Start-Process|cmd\.exe\s*/c)' "$f"; then
-        record_fail "$f" "CWE-78:PowerShell_command_execution"; failed=true
+    PS_FAILED=false
+    _ps_rules "$f"
+    $PS_FAILED || record_pass "$f"
+}
+
+# .ps1xml, .psc1, .cdxml: XML first, PowerShell second. The script blocks inside
+# get the PowerShell rules; the document gets the external-entity check that
+# scan_xml applies, matched with newlines folded for the same reason.
+scan_powershell_xml() {
+    local f="$1"
+    PS_FAILED=false
+    _ps_rules "$f"
+    if grep_flat '<!ENTITY[^>]*[[:space:]]SYSTEM[[:space:]]+["'"'"'](file:|expect:|php:|gopher:|jar:|netdoc:|ftp:|https?:|/|\\\\)' "$f"; then
+        record_fail "$f" "CWE-611:xxe_external_entity_references_a_resource"
+        PS_FAILED=true
     fi
-    # CWE-798: hardcoded credential
-    if grep_check '(\$password|\$secret|\$apikey|\$token)\s*=\s*["'"'"'][^"'"'"'$]{4,}' "$f"; then
-        record_fail "$f" "CWE-798:hardcoded_credential"; failed=true
-    fi
-    # Encoded/obfuscated commands (common malware technique)
-    if grep_check '-EncodedCommand\s' "$f"; then
-        record_fail "$f" "CWE-78:PowerShell_EncodedCommand_obfuscation"; failed=true
-    fi
-    $failed || record_pass "$f"
+    $PS_FAILED || record_pass "$f"
 }
 
 # ── Rust ─────────────────────────────────────────────────────────────────────
@@ -2899,6 +3097,11 @@ classify_file() {
     local base ext
     base=$(basename "$f")
     ext="${f##*.}"
+    # Matched in lower case. The dispatch was case-sensitive, so UPPER.PS1 and
+    # UPPER.PY fell through to scan_unknown and PASSED while lower.ps1 and
+    # lower.py FAILed: renaming a file bypassed its scanner. Windows users write
+    # .PS1 and .BAT as a matter of course.
+    ext="${ext,,}"
 
     # Run universal patterns on every file first
     scan_universal_patterns "$f"
@@ -2937,7 +3140,10 @@ classify_file() {
         .go)                              scan_go          "$f" ;;
         .c|.cpp|.h|.hpp|.cc)            scan_c_cpp       "$f" ;;
         .sh|.bash|.zsh|.ksh)            scan_shell       "$f" ;;
-        .ps1|.psm1|.psd1)               scan_powershell  "$f" ;;
+        # Text: script, module, manifest, session configuration, role capability.
+        .ps1|.psm1|.psd1|.pssc|.psrc)    scan_powershell      "$f" ;;
+        # XML-based: type/format data, console file, CIM cmdlet definition.
+        .ps1xml|.psc1|.cdxml)            scan_powershell_xml  "$f" ;;
         .rs)                              scan_rust        "$f" ;;
         .kt|.kts)                         scan_kotlin      "$f" ;;
         .cs)                              scan_csharp      "$f" ;;
@@ -3221,7 +3427,7 @@ report = {
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
                      "PDF-Active-Content", "Build-Script-Hardening",
-                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python", "Known-Credential-Formats"],
+                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python", "Known-Credential-Formats", "PowerShell-Hardening"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},

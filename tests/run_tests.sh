@@ -162,7 +162,7 @@ if ! _skipping; then
         assert_contains "$(line_for hardcoded_secret.py)" "CWE-798" \
             "hardcoded_secret.py is flagged for a hardcoded credential"
         assert_contains "$(line_for exec.ps1)" "CWE-78:PowerShell_command_execution" \
-            "exec.ps1 is flagged for Invoke-Expression"
+            "exec.ps1 is reported for Invoke-Expression (a WARN: see the PowerShell group below)"
         assert_contains "$(line_for deserialize.py)" "CWE-502" \
             "deserialize.py is flagged for insecure deserialization"
         # Extensionless scripts are routed by shebang; without that they fall
@@ -269,6 +269,88 @@ for p,i in d.get('file_results',{}).items():
         # .htm must route exactly as .html does.
         assert_contains "$(line_for tracker.htm)" "html_hidden_iframe" \
             ".htm is routed to the HTML scanner as well as .html"
+
+        # ── PowerShell ───────────────────────────────────────────────────────
+        # The scanner had three rules and was wrong in both directions. On the 69
+        # real .ps1 files on this host (32 distinct) it FAILed 8, every one a false
+        # positive: npm.ps1 and npx.ps1 (Invoke-Expression on a command they
+        # assemble), pnpm's completion script, and Playwright's browser installers
+        # (download an MSI, run msiexec). Meanwhile `iex $c`, `IEX (iwr …)` and
+        # `-enc …` all passed, because the rules were case-sensitive and `iex` was
+        # only matched before a parenthesis.
+        assert_contains "$(line_for ps_download_exec.ps1)" "CWE-78:PowerShell_download_and_execute" \
+            "DownloadString piped to IEX is flagged"
+        assert_contains "$(line_for ps_irm_iex.ps1)" "CWE-78:PowerShell_download_and_execute" \
+            "lower-case \`irm … | iex\` with no parenthesis is flagged"
+        assert_contains "$(line_for ps_mixed_case.ps1)" "CWE-78:PowerShell_download_and_execute" \
+            "mixed-case InVoKe-ExPrEsSiOn is flagged (PowerShell is case-insensitive)"
+        assert_contains "$(line_for ps_encoded_short.ps1)" "CWE-78:PowerShell_EncodedCommand_obfuscation" \
+            "the short form -enc <base64> is flagged"
+        assert_contains "$(line_for ps_amsi.ps1)" "CWE-693:PowerShell_AMSI_bypass" \
+            "an AMSI bypass is flagged"
+        assert_contains "$(line_for ps_defender.ps1)" "CWE-693:PowerShell_disables_Defender" \
+            "Set-MpPreference -DisableRealtimeMonitoring \$true is flagged"
+        assert_contains "$(line_for ps_persistence.ps1)" "CWE-912:PowerShell_persistence" \
+            "writing a CurrentVersion\\Run key is flagged"
+        assert_contains "$(line_for ps_reverse_shell.ps1)" "CWE-78:PowerShell_reverse_shell" \
+            "a TCPClient stream fed to iex is flagged"
+        assert_contains "$(line_for ps_shellcode.ps1)" "CWE-94:PowerShell_in_memory_shellcode_loader" \
+            "VirtualAlloc with CreateThread is flagged"
+        assert_contains "$(line_for ps_secret.ps1)" "CWE-798:hardcoded_credential" \
+            "a literal \$Password and ConvertTo-SecureString -AsPlainText are flagged"
+        assert_contains "$(line_for ps_obfuscated.ps1)" "CWE-95:PowerShell_obfuscated_Invoke_Expression" \
+            "i\`e\`x with backticks inside the name is flagged"
+        assert_contains "$(line_for ps_plaintext_dl_run.ps1)" "CWE-319:PowerShell_plaintext_download_then_run" \
+            "a plaintext http:// download that is then run is flagged"
+        assert_contains "$(line_for ps_offensive_tool.ps1)" "CWE-506:PowerShell_known_offensive_tool" \
+            "Invoke-Mimikatz is flagged"
+
+        # Every PowerShell extension must reach the scanner. .ps1 is above; each
+        # of these is a different file type with the same interpreter behind it.
+        assert_contains "$(line_for ps_decode_exec.psm1)" "CWE-95:PowerShell_decodes_and_executes" \
+            ".psm1 (module): decode on one line, execute on another, is flagged"
+        assert_contains "$(line_for ps_manifest.psd1)" "powershell:manifest_runs_scripts_at_import" \
+            ".psd1 (manifest) is scanned: ScriptsToProcess is reported"
+        assert_contains "$(line_for ps_session.pssc)" "powershell:manifest_runs_scripts_at_import" \
+            ".pssc (session configuration) is scanned"
+        assert_contains "$(line_for ps_role.psrc)" "powershell:role_capability_exposes_everything" \
+            ".psrc (role capability) is scanned: a wildcard VisibleCmdlets is reported"
+        assert_contains "$(line_for ps_types.ps1xml)" "CWE-78:PowerShell_download_and_execute" \
+            ".ps1xml (type/format data): a script block that downloads and executes is flagged"
+        assert_contains "$(line_for ps_console.psc1)" "CWE-611:xxe_external_entity_references_a_resource" \
+            ".psc1 (console file) is scanned as XML: an external entity is flagged"
+        assert_contains "$(line_for ps_cmdlet.cdxml)" "CWE-78:PowerShell_download_and_execute" \
+            ".cdxml (CIM cmdlet definition) is scanned for PowerShell payloads"
+        assert_contains "$(line_for ps_shebang_pwsh)" "CWE-78:PowerShell_download_and_execute" \
+            "an extensionless script with a pwsh shebang is scanned"
+        assert_contains "$(line_for ps_shebang_powershell)" "CWE-78:PowerShell_download_and_execute" \
+            "an extensionless script with a powershell shebang is scanned"
+
+        # Extension CASE. The dispatch was case-sensitive, so UPPER.PS1 and
+        # UPPER.PY fell through to scan_unknown and PASSED while lower.ps1 and
+        # lower.py FAILed. Windows users write .PS1; the fix is general.
+        assert_contains "$(line_for ps_upper_ext.PS1)" "CWE-78:PowerShell_download_and_execute" \
+            "an upper-case .PS1 extension reaches the PowerShell scanner"
+        assert_contains "$(line_for case_upper.PY)" "CWE-78:OS_command_injection_risk" \
+            "an upper-case .PY extension reaches the Python scanner"
+
+        # Near-misses, modelled on the real scripts. Invoke-Expression on its own
+        # appears in npm.ps1, npx.ps1 and pnpm's completion and was benign every
+        # time, so it is a WARN; so is Start-Process, and an https download that
+        # is then run (Playwright). None may FAIL.
+        SAFE_NPM=$(echo "$F" | grep 'ps_safe_npm_shim.ps1' || true)
+        assert_not_contains "$SAFE_NPM" "[FAIL]" \
+            "does NOT fail npm's own shim: Invoke-Expression on a command it assembles"
+        assert_contains "$SAFE_NPM" "PowerShell_command_execution_Invoke_Expression" \
+            "a lone Invoke-Expression is reported, but does not block"
+        SAFE_INST=$(echo "$F" | grep 'ps_safe_installer.ps1' || true)
+        assert_not_contains "$SAFE_INST" "[FAIL]" \
+            "does NOT fail Playwright's installer: https download, then msiexec"
+        assert_contains "$SAFE_INST" "powershell:downloads_then_runs_a_program" \
+            "an https download that is then run is reported, but does not block"
+        SAFE_PSMISC=$(echo "$F" | grep 'ps_safe_misc.ps1' || true)
+        assert_not_contains "$SAFE_PSMISC" "[FAIL]" \
+            "does NOT fail a TcpClient port check, Read-Host, \$env: tokens or \$tokenEndpoint"
 
         # ── setup.py ─────────────────────────────────────────────────────────
         # setup.py runs on a source `pip install`, so it is install-time code with
