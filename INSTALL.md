@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 326/326 passed
+./tests/run_tests.sh          # Expected: ✔ 357/357 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 326/326 passed
+# Expected: ✔ 357/357 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -2216,14 +2216,15 @@ result must not read as a review.
 | Blocks (FAIL) | Reported (WARN) |
 |---|---|
 | an entry path with `..`, a leading `/` or `\`, or a drive letter (zip-slip) | native libraries named `.so` / `.dll` / `.dylib` |
-| a symlink entry pointing outside the archive | a Java agent (`Premain-Class`, `Agent-Class`) |
+| a symlink entry pointing outside the archive, or whose target cannot be read | a Java agent (`Premain-Class`, `Agent-Class`) |
 | a `.class` entry that does not begin `0xCAFEBABE` | a `.sh` / `.bat` / `.ps1` / `.exe` entry |
 | a PE / ELF / Mach-O stored as `logo.png` | a nested archive, a symlink, duplicate entry names |
 | a native executable glued in front of a valid archive | encrypted or unreadable entries |
+| a local file record the central directory does not list | |
 | a file named `.jar` that is not an archive | a shell launch script before the archive |
 | a manifest `Class-Path` naming an `http(s)://` jar | an absolute `Class-Path` |
 | `curl \| sh`, `/dev/tcp`, `powershell -enc`, `certutil -urlcache` in a resource or class constant | an offensive-tool name |
-| a PEM private key, or any of the 18 known credential formats | every wrapper jar: verify its checksum |
+| a PEM private key (any line width), or any of the 18 known credential formats | every wrapper jar: verify its checksum |
 | a wrapper jar with extra entries or no `GradleWrapperMain` | |
 
 Every limit is reported when reached — an archive that was not fully read must not look like one
@@ -2258,8 +2259,20 @@ because a 78-character class path looks like a base64 body; it now runs on each 
 > layout is not detected. That is why every wrapper jar warns: compare its SHA-256 with
 > `https://gradle.org/release-checksums/` before trusting `./gradlew`.
 
+Entries are read the way the JVM and `unzip` read them, not the way a strict library does: a bad CRC, a
+local-header name that disagrees with the central directory, or a declared size that is too small do not
+hide an entry, and a local file record the central directory does not list is a FAIL. UTF-16 resources
+are decoded before the text rules run.
+
+**Known gaps.** Padding a jar with enough compressible entries to exhaust the read budget yields a WARN
+(`jar:inspection_incomplete`), not a FAIL — treat that message as "not inspected". A jar under
+`build/`, `dist/`, `target/`, `vendor/` or `node_modules/` is skipped like every other file there. The
+shell-pipe and PowerShell rules look 400 and 300 characters back from the pipe / `-enc`. An independent
+red-team pass over the first version found 15 defects and 3 false positives; the ones that reproduced are
+fixed, each with a fixture (see CLAUDE.md, "Java archives").
+
 Not covered: bytecode semantics; code in a non-`.class` entry loaded by a custom classloader; JSP web
-shells inside a `.war`; obfuscated strings; `.hpi`, `.apk`, `.whl`, `.nupkg` and other ZIP containers.
+shells inside a `.war`; `.hpi`, `.apk`, `.whl`, `.nupkg` and other ZIP containers.
 
 ```bash
 WORK_DIR=/tmp/jarcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
@@ -2544,7 +2557,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 326/326 passed
+# Expected: ✔ 357/357 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2983,7 +2996,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  326/326 passed
+  ✔  357/357 passed
 ```
 
 ### 17.1 What each layer covers

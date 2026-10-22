@@ -563,6 +563,75 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for case_UPPER.JAR)" "CWE-22:jar_entry_path_traversal_zip_slip" \
             "an upper-case .JAR extension is routed to the jar scanner"
 
+        # ── Found by an independent red-team pass ────────────────────────────
+        # The severity downgrade in record_fail greps the whole message for :LOW: and
+        # friends; an entry name is part of the message, so a name containing :LOW:
+        # turned a zip-slip FAIL into a warning.
+        JSEV=$(line_for jar_severity_marker.jar)
+        assert_contains "$JSEV" "[FAIL] CWE-22:jar_entry_path_traversal_zip_slip" \
+            "an entry name containing :LOW: does not downgrade the zip-slip FAIL"
+        assert_not_contains "$JSEV" "LOW_SEV" \
+            "…and the message carries no severity marker taken from the archive"
+
+        # Python's zipfile refuses an entry whose CRC, local name or declared size
+        # disagree with the central directory; the JVM and unzip do not. Each fixture
+        # is an entry the JVM reads and a strict reader would drop.
+        assert_contains "$(line_for jar_bad_crc.jar)" "CWE-829:jar_manifest_class_path_names_a_remote_url" \
+            "a manifest with a bad CRC is still read"
+        assert_contains "$(line_for jar_local_name_mismatch.jar)" "CWE-829:jar_manifest_class_path_names_a_remote_url" \
+            "a manifest whose local header names a different file is still read"
+        assert_contains "$(line_for jar_short_declared_size.jar)" "CWE-78:jar_embeds_download_piped_to_shell" \
+            "content past a declared size that is too small is still read"
+        JLZ=$(line_for jar_lzma_corrupt.jar)
+        assert_contains "$JLZ" "CWE-78:jar_embeds_download_piped_to_shell" \
+            "an entry that cannot be decoded does not stop the other entries being scanned"
+        assert_contains "$JLZ" "jar:entries_could_not_be_read" \
+            "…and the unreadable entry is reported"
+        assert_not_contains "$JLZ" "jar:inspection_failed" \
+            "…without the whole inspection being reported as failed"
+        assert_contains "$(line_for jar_symlink_unreadable.jar)" "CWE-22:jar_symlink_entry_target_unreadable" \
+            "a symlink entry whose target cannot be read is flagged (unzip can read it)"
+        assert_contains "$(line_for jar_orphan_local.jar)" "CWE-22:jar_local_entry_missing_from_central_directory" \
+            "a local file record the central directory does not list is flagged"
+
+        JU16=$(line_for jar_utf16.jar)
+        assert_contains "$JU16" "run.properties" \
+            "curl | sh in a UTF-16 resource with a BOM is found"
+        assert_contains "$JU16" "win/fetch.txt" \
+            "certutil -urlcache in UTF-16 without a BOM is found"
+        assert_contains "$(line_for jar_private_key_short.jar)" "CWE-321:hardcoded_private_key" \
+            "a PEM body wrapped at 40 characters a line is flagged"
+        assert_not_contains "$JSAFE" "docs/keys.txt" \
+            "prose that follows a PEM header (words, not a base64 body) is not a key"
+
+        JHV=$(line_for jar_hostile_variants.jar)
+        assert_contains "$JHV" "v/long_url.txt" "curl … | sh with a 250-character URL is found"
+        assert_contains "$JHV" "v/continued.txt" "curl … \\<newline> | sh is found"
+        assert_contains "$JHV" "v/abs_sh.txt" "… | /bin/sh is found"
+        assert_contains "$JHV" "v/env_bash.txt" "… | /usr/bin/env bash is found"
+        assert_contains "$JHV" "v/ps_flags.txt" "powershell with twenty flags before -enc is found"
+
+        assert_contains "$(line_for jar_pe_late.jar)" "res/logo.png" \
+            "a PE whose header lies past the first 4 KB is flagged"
+        JFAT=$(line_for jar_fat_macho.jar)
+        assert_contains "$JFAT" "res/icon.gif" \
+            "a fat Mach-O (0xCAFEBABE + architecture count) stored as icon.gif is flagged"
+        assert_contains "$JFAT" "CWE-506:jar_class_entry_is_not_bytecode(1: com/x/Fat.class" \
+            "a fat Mach-O named .class is not bytecode (a class has major version 45 or more)"
+        assert_contains "$(line_for jar_class_attribute.jar)" "CWE-78:jar_embeds_download_piped_to_shell" \
+            "a payload in a class file's attribute area, outside the constant pool, is found"
+
+        # Benign shapes. Each of these failed a first-cut rule.
+        assert_not_contains "$(line_for jar_macosx.jar)" "[FAIL]" \
+            "does NOT fail an AppleDouble ._Name.class resource fork under __MACOSX"
+        assert_not_contains "$(line_for jar_waitforit.jar)" "[FAIL]" \
+            "does NOT fail wait-for-it.sh (a /dev/tcp port probe is not a reverse shell)"
+        JNH=$(line_for jar_native_helpers.jar)
+        assert_not_contains "$JNH" "[FAIL]" \
+            "does NOT fail an extensionless native helper, a .pyd or a .o"
+        assert_contains "$JNH" "jar:bundles_native_library" \
+            "…they are reported as native libraries"
+
         # gradle-wrapper.jar runs on ./gradlew before any code the repository
         # declares. Its shape is checked; its contents cannot be: the official
         # checksums are not embedded here.
@@ -576,6 +645,8 @@ for p,i in d.get('file_results',{}).items():
             "the finding names the stray entry"
         assert_contains "$(line_for wrapper_hollow/gradle-wrapper.jar)" "missing org/gradle/wrapper/GradleWrapperMain.class" \
             "a gradle-wrapper.jar without GradleWrapperMain is flagged"
+        assert_contains "$(line_for wrapper_multirelease/gradle-wrapper.jar)" "CWE-494:wrapper_jar_has_unexpected_content" \
+            "a wrapper hiding a Multi-Release copy of its main class under META-INF/versions is flagged"
         assert_contains "$(line_for wrapper_maven/maven-wrapper.jar)" "jar:wrapper_checksum_must_be_verified" \
             "maven-wrapper.jar is held to the same shape check"
 
@@ -924,6 +995,9 @@ if ! _skipping; then
     # read as "nothing found". Run as root a real permission error cannot be
     # produced, so the helper is extracted from the scanner and given a path that
     # is not there.
+    # Regular expressions with unbounded classes go quadratic on adversarial input,
+    # and the time budget is only checked between entries. 50000 repetitions of a
+    # PEM-header fragment took the first version tens of seconds.
     JARPY="${SCRATCH}/jar_facts.py"
     awk '/^_jar_facts\(\) \{/{f=1;next} f&&/<<.PYEOF.*/{g=1;next} g&&/^PYEOF$/{exit} g{print}' \
         "${ROOT_DIR}/scan_pipeline.sh" > "$JARPY"
@@ -932,6 +1006,14 @@ if ! _skipping; then
         "a file that cannot be opened is reported as unreadable"
     assert_contains "$JARGONE" "FACT done" \
         "…and the helper still finishes, so the scanner can tell it from a crash"
+    python3 -I - "${SCRATCH}/redos.jar" <<'PYEOF'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("res/keys.txt", "-----BEGIN " + "PRIVATE KEY " * 50000)
+PYEOF
+    JARSLOW=$(timeout 20 python3 -I "$JARPY" "${SCRATCH}/redos.jar" "${SCRATCH}/view.txt" 2>&1 || true)
+    assert_contains "$JARSLOW" "FACT done" \
+        "adversarial repeated PEM-header fragments finish inside 20 s (no quadratic regex)"
 fi
 
 group "Layer B — end-to-end verdicts"
@@ -1071,6 +1153,8 @@ assert_contains "$(kline jar_cred_text.jar)" "CWE-798:known_credential_format_gi
     "a GitHub token in a jar's text resource is flagged"
 assert_contains "$(kline jar_cred_class.jar)" "CWE-798:known_credential_format_github_token" \
     "a GitHub token in a class file's constant pool is flagged"
+assert_contains "$(kline jar_cred_utf16.jar)" "CWE-798:known_credential_format_github_token" \
+    "a GitHub token in a UTF-16 resource is flagged"
 assert_contains "$(kline known_jwt.txt)" "jwt_embedded" \
     "a JWT is reported, but does not block"
 assert_not_contains "$(kline known_jwt.txt)" "[FAIL]" \
@@ -1323,6 +1407,21 @@ PYEOF
         "HTML report: a hostile jar entry name in a finding is not written as markup"
     assert_contains "$XSS_HTML" "&lt;img src=x onerror" \
         "HTML report: the hostile file name is shown escaped, not dropped"
+
+    # The console helpers used `echo -e`, which turns a literal \033 in a file name
+    # or a jar entry name into a real escape byte: a terminal can be retitled, or
+    # worse, by whoever names a file.
+    ESCD="${SCRATCH}/esc_repo"
+    mkdir -p "$ESCD"
+    printf 'password = "hunter2hunter2"\n' > "$ESCD/esc\\033]0;pwned\\007.txt"
+    python3 - "$ESCD/hostile.jar" <<'PYEOF'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("../esc\\033]0;pwned\\007.sh", "x")
+PYEOF
+    run_pipeline "$ESCD"
+    assert_not_contains "$RUN_OUT" $'\033]0;' \
+        "console output: a literal \\033 in a file or entry name is not turned into an escape byte"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════

