@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 227/227 passed
+./tests/run_tests.sh          # Expected: ✔ 247/247 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 227/227 passed
+# Expected: ✔ 247/247 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1564,6 +1564,7 @@ tool; nothing to stage, no flags required.
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
+| Windows batch (`scan_bat`) | L5 | Built in; pure pattern matching, nothing to stage |
 | PowerShell (`scan_powershell`, `scan_powershell_xml`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Known credential formats (Layer 4, every file) | L4 | Built in; pure pattern matching, nothing to stage |
 | `setup.py` / `conanfile.py` (`scan_setup_py`) | L5 | Built in; pure pattern matching, nothing to stage |
@@ -2128,12 +2129,60 @@ compositions above still block; a lone `Invoke-Expression $userInput` does not.
 host (32 distinct) and every one was a false positive; now 0 FAIL and the same eight are WARNs.
 But 32 distinct scripts is small, and none of the other extensions exists on the reference host,
 so they are tested from fixtures and not measured. Comments are not stripped, so a payload in a
-comment is still reported. `.bat` and `.cmd` are not yet scanned.
+comment is still reported. `.bat` and `.cmd` are covered separately, in §11.2.12.
 
 ```bash
 WORK_DIR=/tmp/pscheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 # Expected FAIL: ps_download_exec.ps1, ps_irm_iex.ps1, ps_encoded_short.ps1, ps_decode_exec.psm1, …
 # Expected WARN (no FAIL): ps_safe_npm_shim.ps1, ps_safe_installer.ps1, ps_manifest.psd1, ps_role.psrc
+```
+
+### 11.2.12 Windows batch — `.bat` and `.cmd`
+
+Pure pattern matching; nothing to stage, identical offline. Before this, every one of the 116
+real batch files on the reference host (64 distinct) was recorded PASS, because neither
+extension had a handler.
+
+Three properties of the language shape the scanner, and all three occur in the real files:
+
+| Property | In the real files | What the scanner does |
+|---|---|---|
+| CRLF line endings | 104 of 116 | strips the CR before matching |
+| `REM` / `::` comment lines | 56 of 116 | drops them: a commented-out payload does not execute |
+| `^` line continuation | 6 of 116 | joins the lines, so `certutil ^` / `-urlcache …` is seen as one command |
+
+Matching is case-insensitive (`CERTUTIL -URLCACHE`) and so is the extension (`.BAT`).
+
+| Ordinary — reported at most as a WARN | Blocks |
+|---|---|
+| `certutil -decode cert.b64 cert.cer` | `certutil -decode payload.b64 payload.exe` |
+| `FOR /F … IN ('powershell -command "Get-Date …"')` | `certutil -urlcache -split -f http://…` |
+| `call :setvars` (21 of 116 files) | `curl -o %TEMP%\u.exe https://… && start %TEMP%\u.exe` |
+| `rd /s /q build`, `del /q /s %BUILDDIR%\*`, `RD /S /Q C:\build\out` | `rd /s /q C:\` |
+| `set /p PASSWORD=` (a prompt), `SET "API_KEY=%MY_KEY%"` | `set DB_PASSWORD=hunter2` |
+| `powershell -ExecutionPolicy Bypass -File setup.ps1` | `powershell -enc <base64>` |
+| a licence comment mentioning "a copy of this software" | `c^e^r^t^u^t^i^l …` (carets inside the name) |
+
+It also fails a PowerShell download cradle, a `Run` / `RunOnce` / `Winlogon` key, a file copied into
+the Startup folder, UAC / Defender / the firewall being turned off, `curl -k`, and a new member of
+the local Administrators group. It warns on `net user /add`, `schtasks /create`, a hidden
+PowerShell window, `mshta` / `wscript` / `regsvr32`, `wmic process call create`, a remote UNC
+path, and a command built from adjacent `%v:~n,1%` extractions.
+
+**How well-calibrated is it?** Less than the 116-file result suggests. The corpus is npm and
+corepack shims, virtualenv `activate.bat`, Sphinx `make.bat` and Go and Maven wrappers: there is
+**no Windows-native automation in it**. A clean result there shows the rules do not misfire on
+benign scripts; it says almost nothing about detecting a hostile one, which rests on fixtures.
+Across the 116 real files the scanner reports no finding of any kind, and the first version's one
+false WARN (any two substring extractions on a line, which fired on Maven's `mvn.cmd`) is fixed.
+
+Not handled: batch can build a command from variable substrings at run time, which no pattern can
+follow; `.btm` (Take Command) and the 4DOS family are not routed.
+
+```bash
+WORK_DIR=/tmp/batcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected FAIL: bat_certutil_dl.bat, bat_continued.bat, bat_UPPER.BAT, bat_ps_cradle.cmd, …
+# Expected PASS: bat_safe_real.cmd (WARN: ExecutionPolicy), bat_safe_fetch.bat (WARN: certutil -decode)
 ```
 
 ### 11.3 Environment variables
@@ -2412,7 +2461,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 227/227 passed
+# Expected: ✔ 247/247 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2851,7 +2900,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  227/227 passed
+  ✔  247/247 passed
 ```
 
 ### 17.1 What each layer covers

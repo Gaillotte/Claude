@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09), plus known credential formats (18 providers) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_bat** (bat/cmd), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -421,7 +421,77 @@ PowerShell spreads a pipeline across them; `ps_decode_exec.psm1` puts the decode
 `.psd1`, `.pssc`, `.psrc`, `.ps1xml`, `.psc1` or `.cdxml` exists on this host, so those routes
 are tested from fixtures and reasoned from the format, not measured. Comments are not
 stripped: a payload inside `#` or `<# #>` is still matched, which errs towards reporting.
-`.bat` and `.cmd` remain unscanned.
+`.bat` and `.cmd` are covered by `scan_bat`, below.
+
+## Windows batch (`.bat` and `.cmd`)
+
+`scan_bat()` handles both extensions. Before it, all **116** real batch files on this host
+(64 distinct) were recorded PASS: neither extension had a handler.
+
+Three properties of the language shape the scanner, and **all three occur in the real
+files**, so none is hypothetical:
+
+- **CRLF line endings — 104 of 116.** A `$` anchor or a character class that does not
+  expect the CR quietly stops matching, so the scanner builds a normalised view first and
+  strips it. Every batch fixture is CRLF-encoded for the same reason.
+- **Comment lines (`REM`, `@REM`, `::`) — 56 of 116.** virtualenv's `activate.bat` carries
+  the MIT licence as `REM` lines, and a rule keyed on the bare word `copy` fails **27 of 116**
+  real files on the sentence "a copy of this software" alone. A commented-out payload does
+  not execute, so comment lines are dropped.
+- **Caret line-continuation — 6 of 116.** A trailing `^` continues the command, so
+  `certutil ^` / `-urlcache …` is one command; a line-based rule never sees the halves
+  together. Continuations are joined first. The same character inside a word
+  (`c^e^r^t^u^t^i^l`) is the oldest obfuscation there is, and is its own rule.
+
+Batch is case-insensitive throughout (`CERTUTIL -URLCACHE`), so all matching is `-i`, and
+the extension is compared in lower case (`.BAT` works).
+
+**FAIL** — `certutil -urlcache` / `bitsadmin /transfer` · a PowerShell download cradle ·
+`powershell -enc <base64>` (any abbreviation) · `certutil -decode` into an executable ·
+download-then-execute on one line · carets inside a command name · a literal
+`set …PASSWORD=` · a `Run` / `RunOnce` / `Winlogon` / IFEO key, or a file copied into the
+Startup folder · UAC, Defender or the firewall turned off · a delete aimed **exactly** at a
+drive root or the profile, or a `format` · `curl -k` · a new member of the local
+Administrators group.
+**WARN** — `net user /add` · `certutil -decode` of anything else · `schtasks /create` ·
+`for /f` reading a download · fetch **and** run in one script · a plaintext `http://`
+download · `-ExecutionPolicy Bypass` · a hidden PowerShell window · `mshta` / `wscript` /
+`rundll32` / `regsvr32` · `wmic process call create` · a remote UNC path · a command
+assembled from **adjacent** `%v:~n,1%` extractions.
+
+The distinctions were taken from the real scripts, and four of them are reductions:
+
+| Ordinary (real) | Why it is not reported |
+|---|---|
+| `call :setvars` — 21 of 116 | a `call` must name something that is not a label |
+| `del /q /s %BUILDDIR%\*`, `rd /s /q build`, `RD /S /Q C:\build\out` | the delete target must be **exactly** the root; a bare `del`/`rd` is 13 of 116 |
+| `set /p PASSWORD=Password:` | `/p` is a prompt, not a literal |
+| `SET "API_KEY=%MY_KEY%"` | a `%reference%` is the correct form |
+| `FOR /F … IN ('powershell -command "Get-Date …"')` | the usual way to get a timestamp, so only a fetcher inside `for /f` counts |
+| `if "_%EXEC_DIR:~-1%"=="_\" set "EXEC_DIR=%EXEC_DIR:~0,-1%"` (Maven's `mvn.cmd`) | the trailing-backslash trim has two substring extractions **apart**; assembly has them adjacent |
+
+That last row is a bug the real corpus caught: the first version warned on *any* two
+substring extractions on a line and fired on `mvn.cmd`. It is now adjacency, with the
+Maven line in the safe fixture and a genuine assembly (`bat_substring_cmd.bat`) as the
+positive.
+
+> **Calibration is weaker than it looks.** The corpus is npm and corepack shims,
+> virtualenv `activate.bat`, Sphinx `make.bat` and Go and Maven wrappers: **no Windows-native
+> automation at all.** "0 of 116" shows the rules do not misfire on benign scripts; it says
+> almost nothing about recall, which rests on fixtures. Where a construct is ordinary in real
+> Windows administration (decoding a certificate, provisioning an account, a scheduled task)
+> it is a WARN, and only a composition with no innocent reading is a FAIL.
+
+**Result: 116 real files, 116 PASS, no finding of any kind.** Ten mutations were run against
+the rule corpus (no CR stripping, no continuation joining, no comment stripping, case-sensitive
+matching, no extension lower-casing, the `call :label` guard, `set /p`, the `%reference%`
+guard, the delete anchor, and a loosened caret rule); each turned the right assertion red. The
+`%reference%` one **initially turned nothing red**: the fixture's `GIT_TOKEN` is not on the
+credential name list, so the rule never reached its value. The fixture now uses `API_KEY`.
+
+**Not handled:** batch can assemble a command from variable substrings at run time, which
+no pattern can follow — adjacent extractions are reported instead. `.btm` (Take Command) and
+the 4DOS family are not routed.
 
 ## setup.py and conanfile.py
 

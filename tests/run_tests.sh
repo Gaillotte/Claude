@@ -352,6 +352,69 @@ for p,i in d.get('file_results',{}).items():
         assert_not_contains "$SAFE_PSMISC" "[FAIL]" \
             "does NOT fail a TcpClient port check, Read-Host, \$env: tokens or \$tokenEndpoint"
 
+        # ── Windows batch (.bat / .cmd) ──────────────────────────────────────
+        # 116 real batch files on this host were all recorded PASS: .bat and .cmd
+        # had no handler. Three properties of the language shape the scanner, and
+        # all three occur in the real files: 104 of 116 use CRLF line endings, 56
+        # carry REM/:: comment lines, and 6 use caret line-continuation, which lets
+        # an attacker split `certutil` and `-urlcache` across lines. All the
+        # fixtures below are CRLF-encoded.
+        assert_contains "$(line_for bat_certutil_dl.bat)" "CWE-78:bat_download_cradle_certutil_or_bitsadmin" \
+            "certutil -urlcache is flagged"
+        assert_contains "$(line_for bat_ps_cradle.cmd)" "CWE-78:bat_powershell_download_cradle" \
+            ".cmd: a PowerShell DownloadString cradle is flagged"
+        assert_contains "$(line_for bat_ps_encoded.bat)" "CWE-78:bat_powershell_encoded_command" \
+            "powershell -enc <base64> is flagged"
+        assert_contains "$(line_for bat_certutil_decode.bat)" "CWE-78:bat_certutil_decodes_to_an_executable" \
+            "certutil -decode into an .exe is flagged"
+        assert_contains "$(line_for bat_download_run.bat)" "CWE-78:bat_download_then_execute" \
+            "curl … && start <downloaded file> is flagged"
+        assert_contains "$(line_for bat_secret.bat)" "CWE-798:bat_hardcoded_credential" \
+            "set DB_PASSWORD=<literal> is flagged"
+        assert_contains "$(line_for bat_persistence.bat)" "CWE-912:bat_persistence_run_key" \
+            "reg add … CurrentVersion\\Run is flagged"
+        assert_contains "$(line_for bat_startup_folder.bat)" "CWE-912:bat_persistence_startup_folder" \
+            "copying a file into the Startup folder is flagged"
+        assert_contains "$(line_for bat_defender.bat)" "CWE-693:bat_security_control_disabled" \
+            "disabling Defender and the firewall is flagged"
+        assert_contains "$(line_for bat_wipe.bat)" "bat:destructive_delete_of_a_drive_root_or_profile" \
+            "rd /s /q C:\\ is flagged"
+        assert_contains "$(line_for bat_insecure_tls.bat)" "CWE-494:bat_download_without_certificate_verification" \
+            "curl -k is flagged"
+        assert_contains "$(line_for bat_admin.bat)" "CWE-250:bat_local_admin_account_added" \
+            "net localgroup administrators … /add is flagged"
+        assert_contains "$(line_for bat_caret_name.bat)" "CWE-78:bat_caret_obfuscated_command_name" \
+            "c^e^r^t^u^t^i^l with carets inside the name is flagged"
+
+        # The same download as bat_certutil_dl.bat, split across caret-continued
+        # lines. A line-based rule never sees `certutil` and `-urlcache` together.
+        assert_contains "$(line_for bat_continued.bat)" "CWE-78:bat_download_cradle_certutil_or_bitsadmin" \
+            "a certutil download split across ^-continued lines is still flagged"
+        # Upper-case extension AND upper-case content: batch is case-insensitive.
+        assert_contains "$(line_for bat_UPPER.BAT)" "CWE-78:bat_download_cradle_certutil_or_bitsadmin" \
+            "an upper-case .BAT holding CERTUTIL -URLCACHE is flagged"
+
+        # Near-misses taken from the real scripts: the MIT licence in REM comments
+        # (the bare word `copy` is 27 of 116 on that alone), commented-out
+        # payloads, `for /f` substitution (19 of 116), `SET "PATH=%~dp0;%PATH%"`,
+        # `rd /s /q build`, `set /p PASSWORD=` (a prompt, not a literal), a
+        # credential-named variable holding a %reference%, caret continuation.
+        SAFE_BAT=$(echo "$F" | grep 'bat_safe_real.cmd' || true)
+        assert_not_contains "$SAFE_BAT" "[FAIL]" \
+            "does NOT fail real-world batch idioms, licence comments or commented-out payloads"
+        assert_contains "$SAFE_BAT" "bat:powershell_execution_policy_bypass" \
+            "-ExecutionPolicy Bypass is reported, but does not block"
+        # Maven's own mvn.cmd trims a trailing backslash with two substring
+        # extractions on one line. Assembling a command looks different: the
+        # extractions are ADJACENT, building a word one character at a time.
+        assert_not_contains "$SAFE_BAT" "assembled_from_variable_substrings" \
+            "does NOT warn on Maven's trailing-backslash trim (two extractions apart)"
+        assert_contains "$(line_for bat_substring_cmd.bat)" "bat:command_assembled_from_variable_substrings" \
+            "a command built from adjacent %v:~n,1% extractions is reported"
+        SAFE_FETCH=$(echo "$F" | grep 'bat_safe_fetch.bat' || true)
+        assert_not_contains "$SAFE_FETCH" "[FAIL]" \
+            "does NOT fail an https download that is not run, or certutil -decode to a .cer"
+
         # ── setup.py ─────────────────────────────────────────────────────────
         # setup.py runs on a source `pip install`, so it is install-time code with
         # its own risk model: os.system and subprocess are ordinary build tools

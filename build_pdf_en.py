@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("Batch scanner",     "L5", True,
+     "No certutil/bitsadmin fetch, no encoded command",
+     "certutil -urlcache, curl|start, Run key, UAC off, rd C:\\ → FAIL",
+     "net user /add, schtasks, ExecutionPolicy Bypass → WARN"),
     ("PowerShell scanner", "L5", True,
      "No fetch-and-execute, no encoded command",
      "irm|iex, -enc, AMSI bypass, persistence, literal $Password → FAIL",
@@ -1752,7 +1756,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "227 assertions", [
+    ("Test suite", "247 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

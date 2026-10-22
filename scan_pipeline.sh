@@ -1875,6 +1875,202 @@ scan_gradle() {
     $failed || record_pass "$f"
 }
 
+# ── Windows batch: .bat and .cmd ─────────────────────────────────────────────
+# 116 real batch files on this host (64 distinct) were all recorded PASS: neither
+# extension had a handler, so a script could download and run anything.
+#
+# Three properties of the language shape the scanner, and all three occur in the
+# real files, so none is hypothetical:
+#
+#   CRLF line endings — 104 of 116. A `$` anchor or a character class that does
+#   not expect the CR quietly stops matching, so the view below strips it first.
+#
+#   Comment lines (REM, @REM, ::) — 56 of 116. The MIT licence header in
+#   virtualenv's activate.bat is made of them, and a rule keyed on the bare word
+#   `copy` fails 27 of 116 files on the sentence "a copy of this software" alone.
+#   A commented-out payload does not execute, so comment lines are dropped.
+#
+#   Caret line-continuation — 6 of 116. A trailing ^ continues the command on the
+#   next line, so `certutil ^` / `-urlcache …` is one command; a line-based rule
+#   would never see the two halves together. Continuations are joined first. The
+#   same character, inside a word, is the oldest obfuscation there is
+#   (c^e^r^t^u^t^i^l), which is its own rule.
+#
+# Batch is case-insensitive throughout (CERTUTIL -URLCACHE), so all matching is -i,
+# and the extension is compared in lower case by classify_file.
+#
+# CALIBRATION IS WEAKER THAN IT LOOKS. The corpus is npm and corepack shims,
+# virtualenv activate.bat, Sphinx make.bat and Go and Maven wrappers: it carries no
+# Windows-native automation at all. "0 of 116" therefore shows the rules do not
+# misfire on benign scripts; it says almost nothing about recall, which is covered
+# by fixtures only. Where a construct is ordinary in real Windows administration
+# (certutil -decode of a certificate, `net user /add` in provisioning, a
+# scheduled task, `powershell` inside `for /f` to read the date) it is a WARN, and
+# only a composition with no innocent reading is a FAIL.
+#
+# Not handled: batch can assemble a command from variable substrings at run time
+# (%a:~0,1%%b:~3,1%…), which no pattern can follow. Two or more substring
+# extractions on one line are reported as a WARN instead. `.btm` (Take Command)
+# and the 4DOS family are not routed.
+_bat_view() {
+    local f="$1" out="$2"
+    tr -d '\r' < "$f" \
+        | sed -e '/^[[:space:]]*@\{0,1\}rem\([[:space:]]\|$\)/Id' -e '/^[[:space:]]*@\{0,1\}::/d' \
+        | sed -e ':a' -e '/\^$/N' -e 's/\^\n[[:space:]]*//' -e 'ta' > "$out"
+}
+
+scan_bat() {
+    local f="$1"
+    local failed=false v="$f" tmp=""
+
+    tmp=$(mktemp "${TMPDIR:-/tmp}/aitransit_bat_XXXXXX" 2>/dev/null) || tmp=""
+    if [[ -n "$tmp" ]]; then
+        # If the view cannot be built the raw file is scanned instead: more noise,
+        # never less coverage.
+        if _bat_view "$f" "$tmp" 2>/dev/null; then v="$tmp"; fi
+    fi
+
+    local FETCH='(curl|wget|bitsadmin(\.exe)?[^|&]*[-/](transfer|addfile)|certutil(\.exe)?[^|&]*[-/](urlcache|verifyctl)|powershell.*(downloadstring|downloadfile|downloaddata|invoke-webrequest|invoke-restmethod|start-bitstransfer|net\.webclient|[[:space:]](iwr|irm)[[:space:]]))'
+
+    # CWE-78 — a native downloader. certutil -urlcache and bitsadmin /transfer are
+    # the classic living-off-the-land fetches; neither has a use in a build script.
+    if grep_check_i '(certutil(\.exe)?[^|&]*[-/](urlcache|verifyctl)|bitsadmin(\.exe)?[^|&]*[-/](transfer|addfile))' "$v"; then
+        record_fail "$f" "CWE-78:bat_download_cradle_certutil_or_bitsadmin"
+        failed=true
+    fi
+    # CWE-78 — a PowerShell download cradle launched from batch.
+    if grep_check_i 'powershell(\.exe)?.*(downloadstring|downloadfile|downloaddata|invoke-webrequest|invoke-restmethod|start-bitstransfer|net\.webclient|[[:space:]](iwr|irm)[[:space:]])' "$v"; then
+        record_fail "$f" "CWE-78:bat_powershell_download_cradle"
+        failed=true
+    fi
+    # CWE-78 — a base64 command line. -EncodedCommand has legal abbreviations down
+    # to -e; 24+ base64 characters after it separates it from `-ExecutionPolicy`.
+    if grep_check_i 'powershell(\.exe)?.*[-/]e[a-z]*[[:space:]]+["'"'"']?[A-Za-z0-9+/]{24,}' "$v"; then
+        record_fail "$f" "CWE-78:bat_powershell_encoded_command"
+        failed=true
+    fi
+    # CWE-78 — certutil -decode into something executable. Decoding a certificate
+    # is ordinary, so it is the output type that decides.
+    if grep_check_i 'certutil(\.exe)?[^|&]*[-/]decode[^|&]*\.(exe|dll|bat|cmd|ps1|vbs|vbe|js|jse|msi|scr|hta)' "$v"; then
+        record_fail "$f" "CWE-78:bat_certutil_decodes_to_an_executable"
+        failed=true
+    fi
+    # CWE-78 — fetch, then run, on one line. `call :label` is a subroutine call
+    # and appears in 21 of 116 real files, so a call must name something that is
+    # not a label.
+    if grep_check_i '(curl|wget|bitsadmin|certutil|powershell).*(https?|ftp)://.*(&&|&|\|)[[:space:]]*(start[[:space:]]|call[[:space:]]+[^:[:space:]]|cmd|wscript|cscript|mshta|"?%[A-Za-z_]+%)' "$v"; then
+        record_fail "$f" "CWE-78:bat_download_then_execute"
+        failed=true
+    fi
+    # CWE-78 — obfuscation: carets inside a word. A caret as a
+    # line continuation or as a redirection escape (2^>nul) is ordinary and is
+    # not matched; three letters separated by two carets is not.
+    if grep_check_i '[a-z]\^[a-z]\^[a-z]' "$v"; then
+        record_fail "$f" "CWE-78:bat_caret_obfuscated_command_name"
+        failed=true
+    fi
+
+    # CWE-798 — a literal credential. The name must be one of these words, so a
+    # variable that merely contains TOKEN is not read as a secret; the value must
+    # not start with % or !, so `set "GIT_TOKEN=%GITHUB_TOKEN%"` — a reference,
+    # the correct form — is not either; and `set /p` is a prompt, not a literal.
+    if grep_check_i 'set[[:space:]]+(/a[[:space:]]+)?"?[A-Za-z_]*(passwd|password|secret|api_?key|auth_?token|access_?token|credential)[A-Za-z_]*=[^%!"[:space:]][^"[:space:]]{3,}' "$v"; then
+        record_fail "$f" "CWE-798:bat_hardcoded_credential"
+        failed=true
+    fi
+
+    # CWE-912 — persistence: a Run / RunOnce / Winlogon / IFEO key, or a file
+    # dropped into the Startup folder.
+    if grep_check_i 'reg(\.exe)?[[:space:]]+add[^|&]*(currentversion[\\]+run(once)?|winlogon|image file execution options)' "$v"; then
+        record_fail "$f" "CWE-912:bat_persistence_run_key"
+        failed=true
+    fi
+    if grep_check_i '(copy|xcopy|move|echo|type)[^|&]*start menu[\\]+programs[\\]+startup' "$v"; then
+        record_fail "$f" "CWE-912:bat_persistence_startup_folder"
+        failed=true
+    fi
+
+    # CWE-693 — turning off the defences: UAC, Defender, the firewall.
+    if grep_check_i 'reg(\.exe)?[[:space:]]+add[^|&]*(enablelua|consentpromptbehavioradmin|disableantispyware|disablerealtimemonitoring|disableantivirus)' "$v" \
+       || grep_check_i '(add|set)-mppreference.*(exclusionpath|exclusionextension|disablerealtimemonitoring)' "$v" \
+       || grep_check_i 'netsh[^|&]*advfirewall[^|&]*state[[:space:]]+off' "$v" \
+       || grep_check_i 'sc(\.exe)?[[:space:]]+(stop|config)[[:space:]]+(windefend|mpssvc)' "$v"; then
+        record_fail "$f" "CWE-693:bat_security_control_disabled"
+        failed=true
+    fi
+
+    # Destructive: a delete aimed at a drive root or the profile itself, or a
+    # format. The target must be EXACTLY the root, so `del /q /s %BUILDDIR%\*`
+    # (Sphinx's clean) and `rd /s /q build` — both in the real corpus — are not
+    # matched. A bare `\bdel\b|\brd\b` is 13 of 116.
+    if grep_check_i '(^|[^[:alnum:]_])(del|erase|rd|rmdir)[[:space:]]+(/[a-z][[:space:]]*)*"?(%systemdrive%|%homedrive%|%userprofile%|%appdata%|[a-z]:)([\\](\*(\.\*)?)?)?"?[[:space:]]*$' "$v" \
+       || grep_check_i '(^|[^[:alnum:]_])format(\.com)?[[:space:]]+[a-z]:' "$v"; then
+        record_fail "$f" "bat:destructive_delete_of_a_drive_root_or_profile"
+        failed=true
+    fi
+
+    # CWE-494 — certificate checking switched off for a download.
+    if grep_check_i '(curl|wget).*([[:space:]]--insecure|[[:space:]]-k([[:space:]]|$)|--no-check-certificate)|servercertificatevalidationcallback' "$v"; then
+        record_fail "$f" "CWE-494:bat_download_without_certificate_verification"
+        failed=true
+    fi
+
+    # CWE-250 — a new member of the local Administrators group.
+    if grep_check_i 'net[[:space:]]+localgroup[^|&]*(administrators|administrateurs)[^|&]*/add' "$v"; then
+        record_fail "$f" "CWE-250:bat_local_admin_account_added"
+        failed=true
+    fi
+
+    # ── Ordinary in real Windows administration: reported, not blocked ───
+    if grep_check_i 'net[[:space:]]+user[^|&]*/add' "$v"; then
+        record_warn "$f" "bat:creates_a_local_account"
+    fi
+    if grep_check_i 'certutil(\.exe)?[^|&]*[-/]decode' "$v"; then
+        record_warn "$f" "bat:certutil_decodes_a_file"
+    fi
+    if grep_check_i 'schtasks(\.exe)?[[:space:]]+/create' "$v"; then
+        record_warn "$f" "bat:creates_a_scheduled_task"
+    fi
+    # `for /f … in ('curl …')` reads a download into a variable. Not an execution
+    # on its own, and `for /f` with `powershell` inside is the usual way to get a
+    # timestamp, so only a fetcher counts.
+    if grep_check_i "for[[:space:]]+/f[^(]*\\([[:space:]]*'[^']*(curl|wget|certutil[^']*urlcache|bitsadmin)" "$v"; then
+        record_warn "$f" "bat:command_output_comes_from_a_download"
+    fi
+    if grep_check_i "$FETCH" "$v" && grep_check_i '(^|[&|(][[:space:]]*)(start|msiexec)[[:space:]]|call[[:space:]]+[^:[:space:]]' "$v"; then
+        record_warn "$f" "bat:downloads_then_runs_a_program"
+    fi
+    if grep_check_i '(curl|wget|bitsadmin|certutil|powershell).*http://' "$v"; then
+        record_warn "$f" "bat:plaintext_http_download_no_transport_integrity"
+    fi
+    if grep_check_i 'powershell.*[-/]e[a-z]*[[:space:]]+(bypass|unrestricted)' "$v"; then
+        record_warn "$f" "bat:powershell_execution_policy_bypass"
+    fi
+    if grep_check_i 'powershell.*[-/]w(indowstyle)?[[:space:]]+h(idden)?([[:space:]]|$)' "$v"; then
+        record_warn "$f" "bat:powershell_hidden_window"
+    fi
+    if grep_check_i '(^|[^[:alnum:]_])(mshta|wscript|cscript|rundll32|regsvr32)(\.exe)?[[:space:]]' "$v"; then
+        record_warn "$f" "bat:script_host_or_proxy_execution"
+    fi
+    if grep_check_i 'wmic.*process.*call.*create' "$v"; then
+        record_warn "$f" "bat:wmic_process_create"
+    fi
+    if grep_check_i '(start|call|cmd[[:space:]]*/c|xcopy|copy)[[:space:]]+[^[:space:]]*\\\\[A-Za-z0-9._-]+\\' "$v"; then
+        record_warn "$f" "bat:runs_or_copies_from_a_remote_unc_path"
+    fi
+    # Substring extractions ADJACENT to each other build a word one character at a
+    # time, which is how a command name is assembled so that no pattern can see
+    # it: %a:~2,1%%a:~3,1%%a:~4,1%. The first version fired on any two on a line,
+    # and Maven's own mvn.cmd has two apart — `if "_%EXEC_DIR:~-1%"=="_\" set
+    # "EXEC_DIR=%EXEC_DIR:~0,-1%"` — the standard trailing-backslash trim.
+    if grep_check_i '%[a-z0-9_]+:~[-0-9]+(,[-0-9]+)?%%[a-z0-9_]+:~[-0-9]+(,[-0-9]+)?%' "$v"; then
+        record_warn "$f" "bat:command_assembled_from_variable_substrings"
+    fi
+
+    [[ -n "$tmp" ]] && rm -f "$tmp"
+    $failed || record_pass "$f"
+}
+
 # ── setup.py and conanfile.py ────────────────────────────────────────────────
 # setup.py runs on a source `pip install`, and a Conan recipe runs on `conan
 # install` / `conan create`: both are install-time code, so everything in them
@@ -3144,6 +3340,8 @@ classify_file() {
         .ps1|.psm1|.psd1|.pssc|.psrc)    scan_powershell      "$f" ;;
         # XML-based: type/format data, console file, CIM cmdlet definition.
         .ps1xml|.psc1|.cdxml)            scan_powershell_xml  "$f" ;;
+        # Windows batch. The extension is already lower-cased, so .BAT and .CMD match.
+        .bat|.cmd)                       scan_bat             "$f" ;;
         .rs)                              scan_rust        "$f" ;;
         .kt|.kts)                         scan_kotlin      "$f" ;;
         .cs)                              scan_csharp      "$f" ;;
@@ -3427,7 +3625,7 @@ report = {
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
                      "PDF-Active-Content", "Build-Script-Hardening",
-                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python", "Known-Credential-Formats", "PowerShell-Hardening"],
+                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python", "Known-Credential-Formats", "PowerShell-Hardening", "Windows-Batch-Hardening"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},
