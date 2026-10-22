@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("CMake scanner",     "L5", True,
+     "No configure-time fetch, no secrets in set()",
+     "plaintext/unverified download, credential, hardening off → FAIL",
+     "install(CODE), shell -c, moving GIT_TAG → WARN"),
     ("HTML scanner",      "L5", True,
      "No active content, no credentials in markup",
      "eval, http:// script, hidden iframe, cookie exfil → FAIL",
@@ -1724,7 +1728,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "108 assertions", [
+    ("Test suite", "116 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

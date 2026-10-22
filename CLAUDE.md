@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -219,6 +219,48 @@ and confirm `PASS` with no findings.
 **Remaining gap:** an encrypted PDF (`/Encrypt`, or a `/Crypt` stream filter) is
 WARNed about but not decrypted, so its streams go uninspected.
 
+## CMake scanning
+
+`scan_cmake()` handles `.cmake` by extension and `CMakeLists.txt` by basename.
+The basename branch is essential: `CMakeLists.txt` ends in `.txt`, so without it
+the file is routed to the plain-text scanner and gets no CMake analysis at all.
+
+Two things make CMake worth its own scanner:
+
+- **`file(DOWNLOAD …)` and `execute_process(…)` run at *configure* time.**
+  `cmake .` is enough to fire them; there is no build step to decline. Same
+  hazard as a Makefile's `$(shell …)`, one stage earlier.
+- **`set(NAME "value")` is a function call, not an assignment**, so the
+  universal CWE-798 rule — which expects `key = "value"` — cannot see a
+  credential in a CMake file at all.
+
+**FAIL:** credential in `set()` · download over plaintext `http://` ·
+`TLS_VERIFY OFF` · download piped into a shell · hardening removed
+(`-fno-stack-protector`, `_FORTIFY_SOURCE=0`, `execstack`) · `file(WRITE …)`
+into `/etc`, `~/.ssh` or cron.
+**WARN:** a build step that fetches · `COMMAND sh -c` · `install(CODE|SCRIPT)` ·
+`GIT_TAG` on a moving branch.
+
+Rates are measured against **1116 real CMake files** (the CMake 3.28 module tree
+plus installed projects). Calibration changed two rules:
+
+- `execute_process` appears in **106 of 1116**, so it cannot be a finding by
+  itself — only one running a downloader or a shell is.
+- **`URL` is overloaded.** `set_package_properties(… URL "http://xmlsoft.org/")`
+  is a project homepage, not something fetched, and a rule that could not tell
+  the difference failed two of CMake's own modules. The download rule therefore
+  requires either `file(DOWNLOAD …)` or a URL ending in an archive extension.
+
+The credential rule excludes a value that is a variable reference or starts with
+a backslash, because real CMake contains both
+`set(DROP_SITE_PASSWORD "${CTEST_DROP_SITE_PASSWORD}")` and
+`set(CMAKE_SHARED_LIBRARY_RPATH_ORIGIN_TOKEN "\$ORIGIN")` — the second being a
+name that merely contains `TOKEN`.
+
+**Result: 1 of 1116 fails**, and that one is a plaintext archive URL inside
+CMake's own `ExternalProject` documentation. `tests/fixtures/rules/safe.cmake`
+carries the near-miss of every rule above.
+
 ## HTML scanning
 
 `scan_html()` handles `.html`, `.htm` and `.xhtml`. Inline `<script>` is
@@ -319,10 +361,10 @@ quarantines repositories wholesale. Two of its rules did exactly that until they
 were narrowed, and both now carry fixtures in each direction — neither had any
 test coverage at all before.
 
-| Rule | Real Makefiles | Real HTML |
-|------|---------------|-----------|
-| old `CWE-22:path_traversal_pattern` | 27 of 88 (30%) | 254 of 388 (65%) |
-| **narrowed** | **0 of 88** | **0 of 388** |
+| Rule | Real Makefiles | Real HTML | Real CMake |
+|------|---------------|-----------|------------|
+| old `CWE-22:path_traversal_pattern` | 27 of 88 (30%) | 254 of 388 (65%) | 33 of 1116 (3%) |
+| **narrowed** | **0 of 88** | **0 of 388** | **0 of 1116** |
 
 A literal `../` is a relative path, not an attack: the old rule was failing
 `-I../include`, `VPATH = ../src` and `href="../commands"`. Traversal is now
@@ -340,6 +382,14 @@ finding:
 In the composed rule the quote **and** the slash are both required. Leaving
 either optional makes an ellipsis (`"..."`) match, which is how an earlier cut
 of this appeared to leave 14 hits on the HTML corpus.
+
+Two arms were **measured out** of the composed rule rather than reasoned out. A
+bare `${VAR}/../` matched 21 of 1116 real CMake files and `../${VAR}` another 2:
+joining a known path variable with `..` is ordinary path arithmetic
+(`${CMAKE_CURRENT_SOURCE_DIR}/../common.cmake`), not traversal. The f-string and
+template-literal arms keep the interpolated case that does matter, because they
+require the format-string marker — and none of the ten attack forms in
+`tests/fixtures/rules/traversal.txt` needed the arms that were dropped.
 
 `CWE-321` now requires a real PEM header, `-----BEGIN … PRIVATE KEY-----`, and
 a public certificate is reported without blocking:

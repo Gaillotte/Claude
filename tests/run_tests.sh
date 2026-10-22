@@ -270,6 +270,25 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for tracker.htm)" "html_hidden_iframe" \
             ".htm is routed to the HTML scanner as well as .html"
 
+        # ── CMake ────────────────────────────────────────────────────────────
+        # set(NAME "value") is a function call, not an assignment, so the
+        # universal CWE-798 rule — which expects key = "value" — cannot see a
+        # credential in a CMake file at all. And file(DOWNLOAD …) runs at
+        # CONFIGURE time, so `cmake .` alone is enough to fetch and execute.
+        assert_contains "$(line_for evil.cmake)" "CWE-798:cmake_hardcoded_credential" \
+            "credential in a CMake set() call is flagged"
+        assert_contains "$(line_for evil.cmake)" "CWE-319:cmake_download_over_plaintext_http" \
+            "CMake fetching over plaintext http is flagged"
+        assert_contains "$(line_for evil.cmake)" "CWE-295:cmake_tls_verification_disabled" \
+            "CMake disabling TLS verification is flagged"
+        assert_contains "$(line_for evil.cmake)" "cmake_hardening_disabled" \
+            "CMake removing stack-protector or FORTIFY_SOURCE is flagged"
+
+        # CMakeLists.txt ends in .txt, so without a basename branch it reaches
+        # only the plain-text scanner.
+        assert_contains "$(line_for CMakeLists.txt)" "CWE-798:cmake_hardcoded_credential" \
+            "CMakeLists.txt is routed by basename, not by its .txt extension"
+
         # ── Universal layer: traversal and key material ──────────────────────
         # Both of these rules run on EVERY file, and neither had any test
         # coverage at all until now — while between them they quarantined 65%
@@ -311,6 +330,20 @@ for p,i in d.get('file_results',{}).items():
         # A literal "../" is a relative path, not an attack. This is the guard
         # for the worst false positive the pipeline has had: -I../include and
         # href="../commands" quarantined the repository.
+        # safe.cmake carries the near-miss of every CMake rule: a credential
+        # read from the environment, a variable merely NAMED …_TOKEN, a
+        # hash-pinned https download, execute_process running git, and a
+        # set_package_properties URL — which is a homepage, not a fetch. Two
+        # real CMake modules were failed by a rule that could not tell those
+        # last two apart.
+        SAFE_CMAKE=$(echo "$F" | grep 'safe.cmake' || true)
+        assert_not_contains "$SAFE_CMAKE" "CWE-798" \
+            "does NOT flag a CMake credential read from the environment"
+        assert_not_contains "$SAFE_CMAKE" "CWE-319" \
+            "does NOT flag a homepage URL or a hash-pinned https download"
+        assert_not_contains "$SAFE_CMAKE" "cmake_hardening_disabled" \
+            "does NOT flag -fstack-protector-strong as disabled hardening"
+
         SAFE_PATHS=$(echo "$F" | grep 'safe_relative_paths.txt' || true)
         assert_not_contains "$SAFE_PATHS" "CWE-22" \
             "does NOT flag an ordinary relative path such as -I../include"

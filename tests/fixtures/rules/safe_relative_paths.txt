@@ -11,3 +11,12 @@ real Makefiles -- quarantining a repository for containing documentation.
   #include "../common/defs.h"
   cd .. && make
   sys.path.insert(0, os.path.dirname(__file__) + "/..")
+
+Path arithmetic on a known directory variable is not traversal either. Joining
+a build path with ".." to walk up one level is how every CMake project finds a
+sibling directory; matching it failed 23 of 1116 real CMake files.
+
+  set(DIR "${resolved_dir}/../lib")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/../common.cmake")
+  list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/../cmake")
+  get_filename_component(ABS "${CMAKE_CURRENT_SOURCE_DIR}/../${FILE}" ABSOLUTE)

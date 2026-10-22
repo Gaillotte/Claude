@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 108/108 passed
+./tests/run_tests.sh          # Expected: ✔ 116/116 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 108/108 passed
+# Expected: ✔ 116/116 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1563,6 +1563,7 @@ tool; nothing to stage, no flags required.
 | PDF scanner (`scan_pdf`) | L5 | Built in; needs only `python3` and its standard library — no signatures, no rules to stage, no network at any point |
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
+| CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Bandit | L5 | Local Python AST analysis |
 | ShellCheck | L5 | Local |
 | cppcheck | L5 | Local |
@@ -1637,7 +1638,49 @@ WORK_DIR=/tmp/mkcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 As a false-positive check, 88 real Makefiles collected from a Debian host —
 dpkg, java, vim and postgresql build fragments — produce **zero findings**.
 
-### 11.2.2 HTML — `.html`, `.htm`, `.xhtml`
+### 11.2.2 CMake — `.cmake` and `CMakeLists.txt`
+
+`scan_cmake` is pure pattern matching, so nothing needs staging and it behaves
+identically offline. It covers `.cmake` by extension and `CMakeLists.txt` by
+name — the latter matters, because `CMakeLists.txt` ends in `.txt` and would
+otherwise be scanned as a plain text document.
+
+Two properties of CMake drive the rules. `file(DOWNLOAD …)` and
+`execute_process(…)` run at **configure** time, so `cmake .` alone is enough to
+fetch and run something — there is no build step to decline. And
+`set(NAME "value")` is a function call rather than an assignment, so a
+credential written that way is invisible to the universal credential rule,
+which expects `key = "value"`.
+
+**FAIL:** a credential in `set()` · a download over plaintext `http://` ·
+`TLS_VERIFY OFF` · a download piped into a shell · hardening removed
+(`-fno-stack-protector`, `_FORTIFY_SOURCE=0`, `execstack`) · `file(WRITE …)`
+into `/etc`, `~/.ssh` or cron.
+
+**WARN:** a build step that fetches from the network · `COMMAND sh -c` ·
+`install(CODE|SCRIPT)` · a `GIT_TAG` pinned to a moving branch.
+
+The distinctions that keep it usable, each one drawn from the 1116-file corpus:
+
+| Ordinary — never reported | Reported |
+|---------------------------|----------|
+| `execute_process(COMMAND git rev-parse …)` — in 106 of 1116 files | `execute_process(COMMAND sh -c "curl … \| bash")` |
+| `set_package_properties(… URL "http://xmlsoft.org/")` — a homepage | `file(DOWNLOAD http://host/x.tar.gz …)` |
+| `file(DOWNLOAD https://… EXPECTED_HASH SHA256=…)` | the same without TLS or without a hash |
+| `set(DROP_SITE_PASSWORD "${CTEST_DROP_SITE_PASSWORD}")` | `set(DEPLOY_API_KEY "sk_live_…")` |
+| `set(… RPATH_ORIGIN_TOKEN "\$ORIGIN")` — a name containing TOKEN | — |
+| `-fstack-protector-strong` | `-fno-stack-protector` |
+
+```bash
+WORK_DIR=/tmp/cmakecheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected: evil.cmake FAIL, CMakeLists.txt FAIL (credential only),
+#           safe.cmake PASS — it carries the near-miss of every rule.
+```
+
+Across the 1116 real files **1 fails**, and that one is a plaintext archive URL
+written inside CMake's own `ExternalProject` documentation.
+
+### 11.2.3 HTML — `.html`, `.htm`, `.xhtml`
 
 `scan_html` is pure pattern matching, so it needs nothing staged and behaves
 identically offline.
@@ -1689,9 +1732,9 @@ like that is what `.transit-allow.json` is for:
 > a sensitive target, or traversal composed with input, and now flags none of
 > them. After that change 5 of the 388 fail in total, and all 5 are true
 > positives: three embed a private key in an example TLS config, two are the Go
-> trace viewer's genuine `eval()`. See §11.2.4.
+> trace viewer's genuine `eval()`. See §11.2.5.
 
-### 11.2.3 PDF scanning — no staging, and why that matters
+### 11.2.4 PDF scanning — no staging, and why that matters
 
 `scan_pdf` is the one content-inspection layer with no perishable data behind
 it. It needs `python3` and its standard library and nothing else: no signature
@@ -1751,7 +1794,7 @@ WORK_DIR=/tmp/pdfcheck bash scan_pipeline.sh /tmp/ownpdfs --quiet
 go uninspected. Treat a `pdf:encrypted_content_could_not_be_inspected` WARN as a
 file needing manual review, not a clean result.
 
-### 11.2.4 Traversal and key material — the rules that run on every file
+### 11.2.5 Traversal and key material — the rules that run on every file
 
 Most rules are chosen by file type. Two are not: path traversal and private key
 material are checked on **every** file by the Layer 4 universal patterns. That
@@ -2077,7 +2120,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 108/108 passed
+# Expected: ✔ 116/116 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2516,7 +2559,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  108/108 passed
+  ✔  116/116 passed
 ```
 
 ### 17.1 What each layer covers

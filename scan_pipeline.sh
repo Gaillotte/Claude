@@ -607,12 +607,20 @@ scan_universal_patterns() {
         record_fail "$f" "CWE-22:path_traversal_to_sensitive_path"
         triggered=true
     fi
-    # Composed: traversal concatenated or interpolated with something else,
-    # which is the shape the vulnerability actually takes. The quote and the
-    # slash are both required — leaving either optional made an ellipsis
-    # ("...") match, which is how this first read as clean on the corpora.
+    # Composed: traversal concatenated into a string, or interpolated inside a
+    # format string, which is the shape the vulnerability actually takes.
+    #
+    # Two arms were measured out of this rule rather than reasoned out. A bare
+    # ${VAR}/../ matched 21 of 1116 real CMake files and ../${VAR} another 2:
+    # joining a known path variable with ".." is ordinary path arithmetic
+    # (${CMAKE_CURRENT_SOURCE_DIR}/../common.cmake), not traversal. The f-string
+    # and template-literal arms below keep the interpolated case that does
+    # matter, because they require the format-string marker.
+    #
+    # The quote and the slash are both required in the concatenation arms;
+    # leaving either optional makes an ellipsis ("...") match.
     if grep_check_i \
-        '(["'"'"'`]\.\.[/\\]["'"'"'`][[:space:]]*[+.][[:space:]]*|[+.][[:space:]]*["'"'"'`]/?\.\.[/\\]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[/\\]\.\.[/\\]|\.\.[/\\]\$\{?[A-Za-z_]|\{[a-z_]+\}[/\\]\.\.[/\\])' \
+        '(["'"'"'`]\.\.[/\\]["'"'"'`][[:space:]]*[+.][[:space:]]*|[+.][[:space:]]*["'"'"'`]/?\.\.[/\\]|f["'"'"'][^"'"'"']*(\{[^}]*\}[^"'"'"']*\.\.[/\\]|\.\.[/\\][^"'"'"']*\{[^}]*\})|`[^`]*(\$\{[^}]*\}[^`]*\.\.[/\\]|\.\.[/\\][^`]*\$\{))' \
         "$f"; then
         record_fail "$f" "CWE-22:path_traversal_composed_with_input"
         triggered=true
@@ -1283,6 +1291,109 @@ scan_archive() {
             record_fail "$f" "CWE-22:zip_slip_path_traversal_in_archive"
         fi
     fi
+}
+
+# ── CMake ────────────────────────────────────────────────────────────────────
+# Two things make CMake worth its own scanner.
+#
+#   file(DOWNLOAD …) and execute_process(…) run at CONFIGURE time. `cmake .` is
+#   enough to fire them — there is no build step to decline. This is the same
+#   hazard as a Makefile's $(shell …), one stage earlier.
+#
+#   set(NAME "value") is a function call, not an assignment, so the universal
+#   CWE-798 rule — which expects key = "value" — cannot see a credential in a
+#   CMake file at all. Hence the credential rule here.
+#
+# Rates below are measured against 1116 real CMake files from this host (the
+# CMake 3.28 module tree, plus installed projects). Calibration mattered twice:
+#
+#   execute_process appears in 106 of 1116, so it cannot be a finding by
+#   itself; only one that runs a downloader or a shell is.
+#
+#   "URL" is overloaded. set_package_properties(… URL "http://xmlsoft.org/")
+#   is a project homepage, not something fetched, and a rule that could not
+#   tell the difference failed two of CMake's own modules. The download rule
+#   therefore requires either file(DOWNLOAD …) or a URL ending in an archive
+#   extension.
+scan_cmake() {
+    local f="$1"
+    local failed=false
+
+    # CWE-798 — credential in a set() call. The value must not be a variable
+    # reference: set(DROP_SITE_PASSWORD "${CTEST_…}") is the correct form, and
+    # set(…_RPATH_ORIGIN_TOKEN "\$ORIGIN") is a name that merely contains
+    # TOKEN. Both appear in real CMake, which is why the first value character
+    # may be neither $ nor a backslash. 0 of 1116.
+    if grep_check_i \
+        'set[[:space:]]*\([[:space:]]*[A-Za-z_]*(PASSWORD|PASSWD|SECRET|API_?KEY|TOKEN|CREDENTIAL)[A-Za-z_]*[[:space:]]+["'"'"'][^$\\"'"'"'][^"'"'"']{5,}["'"'"']' \
+        "$f"; then
+        record_fail "$f" "CWE-798:cmake_hardcoded_credential"
+        failed=true
+    fi
+
+    # CWE-319 — fetched over plaintext, so anyone on the path chooses the
+    # contents. 1 of 1116, and that one is a plaintext archive URL in CMake's
+    # own ExternalProject documentation. 0 after the archive-extension
+    # requirement is applied to homepage URLs.
+    if grep_check_i \
+        '(file[[:space:]]*\([[:space:]]*DOWNLOAD[[:space:]]+["'"'"']?http://|^[[:space:]]*URL[[:space:]]+["'"'"']?http://[^[:space:]"'"'"']*\.(tar\.(gz|bz2|xz|zst)|tgz|tbz2|txz|zip|7z|jar|whl))' \
+        "$f"; then
+        record_fail "$f" "CWE-319:cmake_download_over_plaintext_http"
+        failed=true
+    fi
+
+    # CWE-295 — certificate checking switched off. 0 of 1116.
+    if grep_check_i '(CMAKE_)?TLS_VERIFY[[:space:]]+(OFF|0|FALSE)' "$f"; then
+        record_fail "$f" "CWE-295:cmake_tls_verification_disabled"
+        failed=true
+    fi
+
+    # CWE-78 — a download piped into a shell, at configure or build time.
+    # 0 of 1116.
+    if grep_check_i '(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh' "$f"; then
+        record_fail "$f" "CWE-78:cmake_curl_pipe_shell_supply_chain"
+        failed=true
+    fi
+
+    # CWE-1188 — compiled-in defences removed. 0 of 1116; note the rule names
+    # the negative forms, so -fstack-protector-strong does not match.
+    if grep_check_i '(fno-stack-protector|_FORTIFY_SOURCE=0|-z[[:space:]]*execstack|fno-pie\b)' "$f"; then
+        record_fail "$f" "CWE-1188:cmake_hardening_disabled"
+        failed=true
+    fi
+
+    # CWE-912 — a build that writes outside its tree, into somewhere that runs
+    # later. 0 of 1116.
+    if grep_check_i \
+        'file[[:space:]]*\([[:space:]]*(WRITE|APPEND)[^)]*(/etc/|\.ssh/|authorized_keys|/etc/cron)' \
+        "$f"; then
+        record_fail "$f" "CWE-912:cmake_writes_to_a_sensitive_path"
+        failed=true
+    fi
+
+    # ── Review-worthy, but ordinary enough not to block ──────────────────
+    # A build step that reaches the network: legitimate with a hash check, but
+    # worth seeing. 0 of 1116.
+    if grep_check_i 'COMMAND[[:space:]]+["'"'"']?(curl|wget)\b' "$f"; then
+        record_warn "$f" "cmake:build_step_fetches_from_the_network"
+    fi
+    # A shell invoked with -c inside a build step. 1 of 1116.
+    if grep_check_i 'COMMAND[[:space:]]+["'"'"']?(sh|bash)["'"'"']?[[:space:]]+-c' "$f"; then
+        record_warn "$f" "cmake:build_step_runs_shell_dash_c"
+    fi
+    # Arbitrary code at install time — a real CMake feature, used for
+    # post-install fixups. 2 of 1116.
+    if grep_check_i 'install[[:space:]]*\([[:space:]]*(CODE|SCRIPT)' "$f"; then
+        record_warn "$f" "cmake:install_runs_arbitrary_code"
+    fi
+    # A dependency tracked by a moving branch rather than a pinned commit:
+    # whatever that branch holds at build time is what gets compiled in.
+    # 0 of 1116.
+    if grep_check_i 'GIT_TAG[[:space:]]+["'"'"']?(master|main|HEAD|develop)["'"'"']?[[:space:]]*$' "$f"; then
+        record_warn "$f" "cmake:dependency_pinned_to_a_moving_branch"
+    fi
+
+    $failed || record_pass "$f"
 }
 
 # ── HTML ─────────────────────────────────────────────────────────────────────
@@ -2142,6 +2253,9 @@ classify_file() {
     case "$base" in
         Dockerfile*)                          scan_docker   "$f"; return ;;
         Makefile*|makefile*|GNUmakefile*)     scan_makefile "$f"; return ;;
+        # CMakeLists.txt ends in .txt, so without this it is routed to the
+        # plain-text scanner and gets no CMake analysis at all.
+        CMakeLists.txt|CMakeLists.*.txt)      scan_cmake    "$f"; return ;;
     esac
 
     case ".$ext" in
@@ -2165,6 +2279,7 @@ classify_file() {
         .pdf)                             scan_pdf         "$f" ;;
         .mk|.mak|.make)                 scan_makefile    "$f" ;;
         .html|.htm|.xhtml)              scan_html        "$f" ;;
+        .cmake)                           scan_cmake       "$f" ;;
         .sql)                             scan_sql         "$f" ;;
         .json)
             if grep_check \
