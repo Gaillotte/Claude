@@ -270,6 +270,36 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for tracker.htm)" "html_hidden_iframe" \
             ".htm is routed to the HTML scanner as well as .html"
 
+        # ── XML ──────────────────────────────────────────────────────────────
+        # XXE needs an entity that actually references an external resource.
+        # A bare <!DOCTYPE was failing 736 of 3362 real XML files (22%), and
+        # pom.xml and Ant's build.xml both route here — so Maven and Ant repos
+        # were quarantined over a doctype.
+        assert_contains "$(line_for xxe.xml)" "CWE-611:xxe_external_entity_references_a_resource" \
+            "an entity referencing file:///etc/passwd is flagged"
+        assert_contains "$(line_for credential.xml)" "CWE-798:hardcoded_credential_in_XML" \
+            "a plaintext credential in XML element text is flagged"
+        # A line-based rule is evaded by a line break; the declaration below
+        # puts ENTITY, the name, SYSTEM and the target on four separate lines.
+        assert_contains "$(line_for xxe_split.xml)" "CWE-611:xxe_external_entity_references_a_resource" \
+            "an entity declaration split across lines is still flagged"
+        assert_contains "$(line_for xml_bomb.xml)" "CWE-776:xml_entity_expansion_bomb" \
+            "a nested-entity expansion bomb is flagged"
+
+        # Build files that route through scan_xml: Maven and Ant have no
+        # build-specific rules of their own, so pom.xml and build.xml were
+        # checked for XXE and nothing else.
+        assert_contains "$(line_for pom.xml)" "CWE-319:maven_repository_over_plaintext_http" \
+            "a Maven repository over http:// is flagged"
+        assert_contains "$(line_for pom.xml)" "CWE-78:maven_exec_runs_shell_or_downloader" \
+            "exec-maven-plugin running sh is flagged"
+        assert_contains "$(line_for build.xml)" "CWE-319:ant_get_over_plaintext_http" \
+            "Ant <get> over http:// is flagged"
+        assert_contains "$(line_for build.xml)" "CWE-78:ant_exec_runs_shell_or_downloader" \
+            "Ant <exec> running sh is flagged"
+        assert_contains "$(line_for build.xml)" "CWE-798:ant_credential_attribute" \
+            "Ant <sshexec> with a literal password is flagged"
+
         # ── CMake ────────────────────────────────────────────────────────────
         # set(NAME "value") is a function call, not an assignment, so the
         # universal CWE-798 rule — which expects key = "value" — cannot see a
@@ -297,6 +327,10 @@ for p,i in d.get('file_results',{}).items():
             "encoded, sensitive-target and input-composed traversal is flagged"
         assert_contains "$(line_for private_key.txt)" "CWE-321:hardcoded_private_key" \
             "a PEM private key block is flagged"
+        assert_contains "$(line_for pgp_private.asc)" "CWE-321:hardcoded_private_key" \
+            "a PGP private key with armor headers before the body is flagged"
+        assert_contains "$(line_for service_account.json)" "CWE-321:hardcoded_private_key" \
+            "a PEM key held on one line as a JSON string with \\n escapes is flagged"
 
         # ── False-positive guards: these must NOT be flagged ─────────────────
         # Regression guard for the P8 fix: the parameterised query form is the
@@ -336,6 +370,36 @@ for p,i in d.get('file_results',{}).items():
         # set_package_properties URL — which is a homepage, not a fetch. Two
         # real CMake modules were failed by a rule that could not tell those
         # last two apart.
+        # safe_xml.xml carries the whole false-positive set: an ordinary
+        # PUBLIC doctype, two legitimate internal entities, the checkstyle
+        # attribute lines the old credential rule matched by running [^>]*
+        # across tag boundaries, and the four correct credential forms —
+        # a ${...} reference, a Maven-encrypted value, a placeholder, and a
+        # path to a key rather than the key.
+        SAFE_XML=$(echo "$F" | grep 'safe_xml.xml' || true)
+        assert_not_contains "$SAFE_XML" "CWE-611:xxe" \
+            "does NOT flag an ordinary doctype or a text-shortcut entity"
+        assert_not_contains "$SAFE_XML" "CWE-798" \
+            "does NOT flag a checkstyle tokens attribute or a \${...} password"
+
+        # safe_xml.xml also ends with a real-looking <password> inside <!-- -->,
+        # the shape of Maven's own shipped settings.xml. That is covered by the
+        # CWE-798 assertion above: without comment stripping it would fail.
+
+        # safe.pom carries the default archetype homepage over http://, a
+        # -SNAPSHOT version (176 of 221 real poms) and exec-maven-plugin running
+        # java; build-safe.xml an https <get> and an env-sourced password.
+        SAFE_POM=$(echo "$F" | grep 'safe.pom' || true)
+        assert_not_contains "$SAFE_POM" "CWE-319" \
+            "does NOT flag the archetype <url>http://maven.apache.org</url>"
+        assert_not_contains "$SAFE_POM" "CWE-78" \
+            "does NOT flag exec-maven-plugin running java"
+        SAFE_ANT=$(echo "$F" | grep 'build-safe.xml' || true)
+        assert_not_contains "$SAFE_ANT" "CWE-319" \
+            "does NOT flag an Ant <get> over https"
+        assert_not_contains "$SAFE_ANT" "CWE-798" \
+            "does NOT flag an Ant password sourced from the environment"
+
         SAFE_CMAKE=$(echo "$F" | grep 'safe.cmake' || true)
         assert_not_contains "$SAFE_CMAKE" "CWE-798" \
             "does NOT flag a CMake credential read from the environment"
@@ -353,6 +417,8 @@ for p,i in d.get('file_results',{}).items():
         SAFE_KEY=$(echo "$F" | grep 'safe_key_prose.txt' || true)
         assert_not_contains "$SAFE_KEY" "CWE-321" \
             "does NOT flag the words PRIVATE KEY or CERTIFICATE in prose"
+        # The same file also carries a PEM header used as a MIME magic signature,
+        # which has no key body after it.
         assert_contains "$SAFE_KEY" "crypto:public_certificate_embedded" \
             "a public certificate is reported, but does not block"
 

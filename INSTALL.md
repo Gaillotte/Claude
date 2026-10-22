@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 116/116 passed
+./tests/run_tests.sh          # Expected: ✔ 133/133 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 116/116 passed
+# Expected: ✔ 133/133 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1564,6 +1564,7 @@ tool; nothing to stage, no flags required.
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
+| XML / Maven / Ant (`scan_xml`) | L5 | Built in; pattern matching, plus `python3` to strip comments — falls back to scanning the raw file without it |
 | Bandit | L5 | Local Python AST analysis |
 | ShellCheck | L5 | Local |
 | cppcheck | L5 | Local |
@@ -1730,9 +1731,8 @@ like that is what `.transit-allow.json` is for:
 > fail 254 of the 388 files, matching ordinary relative links such as
 > `href="../commands"`. It has since been narrowed to require an encoded `..`,
 > a sensitive target, or traversal composed with input, and now flags none of
-> them. After that change 5 of the 388 fail in total, and all 5 are true
-> positives: three embed a private key in an example TLS config, two are the Go
-> trace viewer's genuine `eval()`. See §11.2.5.
+> them. After that change, and the key-body requirement described in §11.2.5,
+> 2 of the 388 fail, both the Go trace viewer's genuine `eval()`.
 
 ### 11.2.4 PDF scanning — no staging, and why that matters
 
@@ -1839,10 +1839,68 @@ WORK_DIR=/tmp/univcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 #           (safe_key_prose.txt carries only the public-certificate WARN).
 ```
 
-After narrowing, **5 of those 388 real HTML files fail in total and all 5 are
-true positives** — three embed a private key in an example TLS config, two are
-the bundled Go trace viewer's genuine `eval()`. The entire 88-file Makefile
-corpus passes.
+A PEM header on its own is not a key, so `CWE-321` also requires a base64 body
+right after it (60 or more characters within five lines). Two things carry a
+header and no key: the shared-mime-info database, whose
+`magic="-----BEGIN PGP PRIVATE KEY BLOCK-----"` describes how to *recognise* a
+key file, and documentation that shows the format with a placeholder, such as
+npm's `key="-----BEGIN PRIVATE KEY-----\nXXXX\nXXXX\n-----END PRIVATE KEY-----"`.
+A key held on one line as a JSON string, and a PGP block with armor headers, are
+both still caught.
+
+After narrowing, **2 of the 388 real HTML files fail**, both the bundled Go trace
+viewer's genuine `eval()`. The 88-file Makefile, 1116-file CMake and 3362-file
+XML corpora have no key finding at all.
+
+> An earlier revision of this section said three HTML files "embed a private key
+> in an example TLS config". That was a misreading: all three are npm's
+> configuration documentation with an `XXXX` placeholder body.
+
+### 11.2.6 XML, Maven and Ant
+
+`scan_xml` covers `.xml` and `.pom`. Maven's `pom.xml` and Ant's `build.xml` have
+no scanner of their own — they arrive here — so this is the whole of what a Maven
+or Ant repository receives. It is pure pattern matching and behaves identically
+offline.
+
+**XXE.** The primitive is an entity that points at something, not a DOCTYPE. A
+bare `<!DOCTYPE` used to fail **736 of 3362** real XML files (22%), so a Maven or
+Ant repository was quarantined for containing one. The scanner now fails only an
+`<!ENTITY … SYSTEM` aimed at `file:`, `http(s):`, `php:`, `expect:` and similar,
+or an expansion bomb; a relative `SYSTEM` include or a `PUBLIC` DTD reference
+only warns. The declaration is matched with newlines folded, so splitting it
+across lines does not evade the rule, and commented-out XML is ignored.
+
+**Credentials** are matched on the element name — `<password>`, `<token>`,
+`<secret>`, `<apiKey>`, `<privateKey>` — so an attribute called `tokens` in a
+checkstyle file no longer counts. These forms are correct and not reported:
+
+| Not reported | Reported |
+|--------------|----------|
+| `<password>${env.REPO_PASSWORD}</password>` | `<token>9cbaf023786cd7a8b9e4f1d2c3a5b7e9</token>` |
+| `<password>{3iRQQy…=}</password>` (Maven-encrypted) | |
+| `<privateKey>/path/to/key</privateKey>` | |
+| a `<password>` inside `<!-- … -->` | |
+
+**Maven.** Fails a `<repository>` over `http://`, and `exec-maven-plugin` or
+antrun running `sh`, `bash`, `cmd`, `powershell`, `curl` or `wget`. The
+repository test is scoped to the repository block on purpose: the default Maven
+archetype writes `<url>http://maven.apache.org</url>` as a project homepage, and
+an unscoped rule would fail every generated POM. `-SNAPSHOT` is deliberately not
+reported — 176 of 221 real poms use one.
+
+**Ant.** Fails `<get>` over `http://`, `<exec>` of a shell or downloader, and an
+`<sshexec>` or `<scp>` with a literal `password=`. The Ant rules rest on only 22
+real files, all of which measured zero; treat them as less calibrated.
+
+```bash
+WORK_DIR=/tmp/xmlcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected FAIL: xxe.xml, xxe_split.xml, xml_bomb.xml, credential.xml,
+#                pom.xml, build.xml
+# Expected PASS: safe_xml.xml, safe.pom, build-safe.xml
+```
+
+Across **3362 real XML files** — 221 of them `pom.xml` — none fails.
 
 ### 11.3 Environment variables
 
@@ -2120,7 +2178,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 116/116 passed
+# Expected: ✔ 133/133 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2559,7 +2617,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  116/116 passed
+  ✔  133/133 passed
 ```
 
 ### 17.1 What each layer covers

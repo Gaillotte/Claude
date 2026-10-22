@@ -249,6 +249,24 @@ grep_check() { grep -qE -e "$1" "$2" 2>/dev/null; }
 # thing being matched rather than the rule: Makefile variables are upper-case by
 # convention, so a lower-case PASSWORD pattern would never fire on one.
 grep_check_i() { grep -qiE -e "$1" "$2" 2>/dev/null; }
+# Match $1 on a line that does NOT also match the exclusion $2. POSIX ERE has
+# no negative lookahead, and the exclusions that matter here cannot be folded
+# into the pattern: a ${...} reference, a Maven-encrypted {...} value, a
+# documentation placeholder, a path to a key rather than the key itself.
+# Usage: grep_check_excl <pattern> <exclusion> <file>
+#
+# The downstream grep deliberately writes to /dev/null instead of using -q. Under
+# `set -o pipefail`, -q exits on the first hit and the upstream grep can then die
+# of SIGPIPE; the pipeline reports 141 and a genuine match reads as no match.
+grep_check_excl() { grep -hiE -e "$1" "$3" 2>/dev/null | grep -viE -e "$2" >/dev/null; }
+# Same test over the file with newlines folded to spaces, for constructs that can
+# legally be split across lines (an <!ENTITY …> declaration). Without this a
+# payload evades every line-based rule by adding a line break.
+# Bounded to 5 MB so a large file is not slurped into one line.
+grep_flat() {
+    [[ "$(wc -c < "$2" 2>/dev/null || echo 0)" -le 5242880 ]] || return 1
+    tr '\r\n\t' '   ' < "$2" | grep -iE -e "$1" >/dev/null
+}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 1 — GLOBAL (malware, secrets, AV)
@@ -577,7 +595,20 @@ scan_universal_patterns() {
     # merely *discussed* keys failed the repository — and a public certificate,
     # which is published by design and is not a secret, was reported as a
     # leaked key. tests/fixtures/rules/safe_key_prose.txt guards both.
-    if grep_check '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----' "$f"; then
+    #
+    # The header alone is not enough: it also appears as a file-type SIGNATURE,
+    # describing how to recognise a key file rather than containing one. The
+    # shared-mime-info database has magic="-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    # and two of 3362 real XML files failed on it. A key has a base64 body right
+    # after the header — 64 characters a line in PEM, 70 in OpenSSH — so the
+    # test is the header followed within a few lines by a run of 60 or more.
+    # That also covers a key held on one line as a JSON string, where the
+    # newlines are the two characters \n, and a PGP block, whose armor headers
+    # push the body a line or two down.
+    if grep -E -A5 -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----' "$f" 2>/dev/null \
+         | tr '\r\n\t' '   ' \
+         | grep -E -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}' \
+         >/dev/null; then
         record_fail "$f" "CWE-321:hardcoded_private_key"
         triggered=true
     fi
@@ -1063,27 +1094,130 @@ scan_go() {
 # CWE-611 — XXE
 scan_xml() {
     local f="$1"
-    local failed=false
+    local failed=false base x="$f" tmp=""
+    base=$(basename "$f")
 
-    if grep_check '<!DOCTYPE' "$f"; then
-        record_fail "$f" "CWE-611:XXE_DOCTYPE_declaration"
-        failed=true
-    fi
-    if grep_check '<!ENTITY' "$f"; then
-        record_fail "$f" "CWE-611:XXE_ENTITY_declaration"
-        failed=true
-    fi
-    if grep_check 'SYSTEM\s+["'"'"'](file://|http://|https://|/etc/)' "$f"; then
-        record_fail "$f" "CWE-611:XXE_SYSTEM_external_entity"
-        failed=true
+    # Work on a view with <!-- comments --> removed. A line-based rule cannot
+    # see a comment boundary, and commented-out examples are how XML config
+    # normally documents itself: Maven's own shipped settings.xml holds real-
+    # looking <password> values inside a comment block, and an `<!ENTITY` in a
+    # comment is not a declaration at all. Without python3 the raw file is
+    # scanned instead, which errs towards reporting.
+    if has_cmd python3; then
+        tmp=$(mktemp "${TMPDIR:-/tmp}/aitransit_xml_XXXXXX" 2>/dev/null) || tmp=""
+        if [[ -n "$tmp" ]]; then
+            python3 -c '
+import re, sys
+d = open(sys.argv[1], "rb").read()
+sys.stdout.buffer.write(re.sub(rb"<!--.*?-->", b" ", d, flags=re.S))
+' "$f" > "$tmp" 2>/dev/null || true
+            [[ -s "$tmp" ]] && x="$tmp"
+        fi
     fi
 
-    # Check for inline credentials in XML config files
-    if grep_check '(password|secret|token|apiKey)[^>]*>[^<]{4,}</\w' "$f"; then
+    # ── XXE ──────────────────────────────────────────────────────────────
+    # The primitive is an ENTITY that points at something, not a DOCTYPE. A bare
+    # <!DOCTYPE failed 736 of 3362 real XML files (22%) — toolbar 390, feature
+    # 82, rss 50, node 45 — and pom.xml and Ant's build.xml both route here, so
+    # Maven and Ant repositories were quarantined over a doctype. A bare
+    # <!ENTITY failed 8 more, and every one was a text shortcut (&nbsp;) or a W3C
+    # HTML DTD reference, never an attack. Matched with newlines folded, because
+    # a declaration split across lines is still a declaration.
+    if grep_flat '<!ENTITY[^>]*[[:space:]]SYSTEM[[:space:]]+["'"'"'](file:|expect:|php:|gopher:|jar:|netdoc:|ftp:|https?:|/|\\\\)' "$x"; then
+        record_fail "$f" "CWE-611:xxe_external_entity_references_a_resource"
+        failed=true
+    fi
+    # Four or more entity references inside one entity value is the shape of an
+    # expansion bomb; ordinary shortcuts such as &#160; are not named references.
+    if grep_flat '<!ENTITY[[:space:]]+[%]?[[:space:]]*[A-Za-z0-9_.-]+[[:space:]]+["'"'"'][^"'"'"']*(&[A-Za-z0-9_.-]+;[^"'"'"'&]*){4,}' "$x"; then
+        record_fail "$f" "CWE-776:xml_entity_expansion_bomb"
+        failed=true
+    fi
+    # An external entity that is not an obvious attack: a relative SYSTEM include
+    # (DocBook uses them) or a PUBLIC DTD reference. 4 of 3362, all W3C ones.
+    if grep_flat '<!ENTITY[^>]*[[:space:]](SYSTEM|PUBLIC)[[:space:]]' "$x"; then
+        record_warn "$f" "CWE-611:xml_declares_an_external_entity"
+    fi
+
+    # ── Credentials ──────────────────────────────────────────────────────
+    # The ELEMENT NAME is the credential word. The earlier rule let [^>]*> run
+    # from a `token`-ish attribute name across the rest of the tag into a later
+    # element's closing tag, so checkstyle's tokens="LITERAL_DO,…" and the
+    # sentence "password manager! Thanks</p>" both matched. 11 raw matches on
+    # 3362 files, 2 after the exclusions below, and one of those is a genuine
+    # plaintext token in a POM.
+    #
+    # Excluded values are the correct forms: a ${…} reference, a Maven-encrypted
+    # {…} value, a path to a key (as opposed to the key), and the placeholder
+    # words that documentation uses, and a value cut short with "...".
+    if grep_check_excl \
+        '<(password|passphrase|secret|apiKey|api-key|accessKey|privateKey|token)>[[:space:]]*[^<[:space:]]{6,}' \
+        '>[[:space:]]*(\$\{|\{|/|~|[A-Za-z]:\\)|>[[:space:]]*(changeit|changeme|password|passwd|secret|somepassword|proxypass|repopwd|example|placeholder|optional|x{3,}|\*+|your[-_a-z]*)[[:space:]]*<|\.\.\.[[:space:]]*<' \
+        "$x"; then
         record_fail "$f" "CWE-798:hardcoded_credential_in_XML"
         failed=true
     fi
 
+    # ── Maven ────────────────────────────────────────────────────────────
+    case "$base" in
+    pom.xml|*.pom)
+        # A repository over plaintext http://, so anyone on the path chooses
+        # what is resolved and then run. Scoped to <repository> blocks: the
+        # default Maven archetype writes <url>http://maven.apache.org</url> as a
+        # project HOMEPAGE, and an unscoped rule would fail every generated POM.
+        # 5 of 221 real poms, all of them Gradle's own insecureProtocol* test
+        # fixtures — true positives by content.
+        if awk '
+            /<(repository|pluginRepository|snapshotRepository)>/ { r = 1 }
+            r && /<url>[ \t]*http:\/\// { found = 1 }
+            /<\/(repository|pluginRepository|snapshotRepository)>/ { r = 0 }
+            END { exit !found }' "$x"; then
+            record_fail "$f" "CWE-319:maven_repository_over_plaintext_http"
+            failed=true
+        fi
+        # exec-maven-plugin / antrun invoking a shell or a downloader, at build
+        # time. 0 of 221. The plugins themselves are ordinary (1 of 221), so
+        # only the executable decides.
+        if grep_check_i '(<executable>[[:space:]]*(sh|bash|zsh|cmd|cmd\.exe|powershell|pwsh|curl|wget)[[:space:]]*<|<exec[^>]*executable=["'"'"'](sh|bash|zsh|cmd|powershell|pwsh|curl|wget)["'"'"'])' "$x"; then
+            record_fail "$f" "CWE-78:maven_exec_runs_shell_or_downloader"
+            failed=true
+        fi
+        if grep_check_i 'exec-maven-plugin' "$x"; then
+            record_warn "$f" "maven:exec_plugin_runs_a_program_during_the_build"
+        fi
+        if grep_check_i 'maven-antrun-plugin' "$x"; then
+            record_warn "$f" "maven:antrun_plugin_runs_arbitrary_ant_tasks"
+        fi
+        # system scope points at a file on the build host rather than a
+        # resolved artifact. 3 of 221, all spring-boot test fixtures.
+        if grep_check_i '<scope>[[:space:]]*system[[:space:]]*<' "$x"; then
+            record_warn "$f" "maven:system_scope_dependency_bypasses_resolution"
+        fi
+        # Deliberately no rule for -SNAPSHOT: 176 of 221 real poms use one.
+        ;;
+    build.xml|build-*.xml|*-build.xml)
+        # 0 of 22 real build.xml for each FAIL rule below, a small corpus.
+        if grep_check_i '<get[^>]+src=["'"'"']http://' "$x"; then
+            record_fail "$f" "CWE-319:ant_get_over_plaintext_http"
+            failed=true
+        fi
+        if grep_check_i '<exec[^>]*executable=["'"'"'](sh|bash|zsh|cmd|cmd\.exe|powershell|pwsh|curl|wget)["'"'"']' "$x"; then
+            record_fail "$f" "CWE-78:ant_exec_runs_shell_or_downloader"
+            failed=true
+        fi
+        if grep_check_excl \
+            '<(sshexec|scp|ftp)[^>]*[[:space:]]password=["'"'"'][^"'"'"']{4,}' \
+            'password=["'"'"']\$\{' "$x"; then
+            record_fail "$f" "CWE-798:ant_credential_attribute"
+            failed=true
+        fi
+        if grep_check_i '<exec[[:space:]>]' "$x"; then
+            record_warn "$f" "ant:exec_task_runs_a_program_during_the_build"
+        fi
+        ;;
+    esac
+
+    [[ -n "$tmp" ]] && rm -f "$tmp"
     $failed || record_pass "$f"
 }
 
@@ -2271,7 +2405,7 @@ classify_file() {
         .rs)                              scan_rust        "$f" ;;
         .kt|.kts)                         scan_kotlin      "$f" ;;
         .cs)                              scan_csharp      "$f" ;;
-        .xml)                             scan_xml         "$f" ;;
+        .xml|.pom)                        scan_xml         "$f" ;;
         .yml|.yaml)                       scan_yaml        "$f" ;;
         .tf|.tfvars|.hcl)               scan_terraform   "$f" ;;
         .so|.dll|.dylib|.exe|.elf|.bin)  scan_binary     "$f" ;;
@@ -2551,7 +2685,7 @@ report = {
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
                      "PDF-Active-Content", "Build-Script-Hardening",
-                     "HTML-Active-Content"],
+                     "HTML-Active-Content", "XML-Build-Hardening"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},

@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("XML / Maven / Ant", "L5", True,
+     "No external entity, no secret, no http repo",
+     "xxe SYSTEM, http repository, exec of a shell, secret → FAIL",
+     "external DTD, exec/antrun plugin present → WARN"),
     ("CMake scanner",     "L5", True,
      "No configure-time fetch, no secrets in set()",
      "plaintext/unverified download, credential, hardening off → FAIL",
@@ -1728,7 +1732,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "116 assertions", [
+    ("Test suite", "133 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt/kts), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -354,6 +354,62 @@ There is deliberately **no rule for a bare `$(eval …)`**: it fired on 7 of tho
 88 as ordinary metaprogramming, and the dangerous composition
 `$(eval $(shell curl …))` is already a FAIL under the parse-time fetch rule.
 
+## XML, Maven and Ant
+
+`scan_xml()` handles `.xml` and `.pom`. `pom.xml` and Ant's `build.xml` have no
+scanner of their own: they arrive here, so everything in this section is what a
+Maven or Ant repository gets.
+
+**XXE needs an entity that points at something, not a DOCTYPE.** A bare
+`<!DOCTYPE` failed **736 of 3362** real XML files (22%) — `toolbar` 390,
+`feature` 82, `rss` 50, `node` 45 — and a bare `<!ENTITY` failed 8 more, every
+one a text shortcut (`&nbsp;`) or a W3C HTML DTD reference. The rules are now:
+
+- **FAIL** `xxe_external_entity_references_a_resource` — `<!ENTITY … SYSTEM` with
+  a `file:`, `expect:`, `php:`, `gopher:`, `jar:`, `netdoc:`, `ftp:`, `http(s):`
+  or absolute-path target.
+- **FAIL** `xml_entity_expansion_bomb` — four or more named entity references in
+  one entity value (`&#160;` is a character reference and does not count).
+- **WARN** `xml_declares_an_external_entity` — a relative `SYSTEM` include
+  (DocBook) or a `PUBLIC` DTD reference.
+
+The match runs on the file with **newlines folded** (`grep_flat`), because an
+`<!ENTITY` split across lines is still a declaration and a line-based rule is
+evaded by pressing Return. It also runs on a **comment-stripped view**:
+Maven's own shipped `settings.xml` documents its credentials inside `<!-- -->`,
+and an `<!ENTITY` in a comment is not a declaration. Both properties have a
+fixture and were confirmed by mutation — disable either and an assertion goes red.
+
+**Credentials key on the element name.** The old rule let `[^>]*>` run from a
+`token`-ish *attribute* across the rest of the tag into a later element's closing
+tag, so checkstyle's `tokens="LITERAL_DO,…"` and the sentence
+"password manager! Thanks</p>" both matched. It now requires
+`<password>`, `<token>`, `<secret>`, `<apiKey>`, `<privateKey>` … followed by a
+value of six or more characters, excluding `${…}` references, Maven-encrypted
+`{…}`, a *path* to a key, placeholder words and a value cut short with `...`.
+
+**Maven (`pom.xml`, `*.pom`)**
+
+- **FAIL** a `<repository>` whose `<url>` is `http://`. It is scoped to the
+  repository block: the default Maven archetype writes
+  `<url>http://maven.apache.org</url>` as a project *homepage*, and an unscoped
+  rule would fail every generated POM. The 5 hits in 221 real poms are all
+  Gradle's own `insecureProtocol*` test fixtures — true positives by content.
+- **FAIL** `exec-maven-plugin` / antrun whose `<executable>` is `sh`, `bash`,
+  `cmd`, `powershell`, `curl` or `wget`. The plugins themselves are ordinary
+  (1 of 221) and only the executable decides.
+- **WARN** the exec or antrun plugin being present · `system` scope.
+- **No rule for `-SNAPSHOT`:** 176 of 221 real poms use one.
+
+**Ant (`build.xml`, `build-*.xml`, `*-build.xml`)** — **FAIL** `<get>` over
+`http://` · `<exec>` of a shell or downloader · `<sshexec>`/`<scp>` with a literal
+`password=`; **WARN** any `<exec>`. This rests on **22** real files and measured
+0 for every FAIL rule, so treat it as less calibrated than the Maven half.
+
+**Result: 0 of 3362 real XML files fail** (previously 736 on DOCTYPE alone).
+`pom_evil`/`safe.pom` and `build.xml`/`build-safe.xml` are the fixture pairs;
+the basenames matter because the Maven and Ant rules are gated on them.
+
 ## Traversal and key material in the universal layer (L4)
 
 `scan_universal_patterns()` runs on **every** file, so a loose rule here
@@ -400,14 +456,29 @@ a public certificate is reported without blocking:
 
 The old rule matched the bare words `PRIVATE KEY`, `CERTIFICATE` and
 `BEGIN RSA`, so prose such as "store the PRIVATE KEY in an HSM" failed the
-repository. Note that this was a *latent* false positive rather than a measured
-one: on the 388-file HTML corpus the old and new rules flag the same 3 files,
-and those 3 genuinely embed `-----BEGIN PRIVATE KEY-----` in an example TLS
-config. They are true positives.
+repository.
 
-**After narrowing, 5 of 388 real HTML files fail and all 5 are true positives**
-(3 embedded private keys, 2 genuine `eval()` calls in the bundled Go trace
-viewer); the whole 88-file Makefile corpus passes.
+**The header alone is still not enough — a key has a body.** Narrowing to a PEM
+header was itself too loose, and the XML corpus showed it. The shared-mime-info
+database carries `magic="-----BEGIN PGP PRIVATE KEY BLOCK-----"`: a file-type
+*signature*, describing how to recognise a key file rather than containing one.
+npm's configuration reference does the same with a placeholder body,
+`key="-----BEGIN PRIVATE KEY-----\nXXXX\nXXXX\n-----END PRIVATE KEY-----"`.
+`CWE-321` therefore requires the header followed, within five lines, by a run of
+60 or more base64 characters — 64 per line in PEM, 70 in OpenSSH. Folding those
+lines together is also what lets it see a key held on one line as a JSON string
+(where the newlines are the two characters `\n`), and a PGP block whose armor
+headers push the body down.
+
+> **Correction.** An earlier version of this section, and two commit messages,
+> said the three HTML files that failed this rule "genuinely embed a private key
+> in an example TLS config" and were true positives. That was wrong: I had seen
+> only that the header was present. All three are npm's documentation with an
+> `XXXX` placeholder body. The body requirement is what removes them.
+
+**After narrowing, 2 of 388 real HTML files fail**, both genuine `eval()` calls
+in the bundled Go trace viewer; the whole 88-file Makefile corpus, the 3362-file
+XML corpus and the 1116-file CMake corpus have no `CWE-321` finding at all.
 
 ### grep_check must pass its pattern after `-e`
 

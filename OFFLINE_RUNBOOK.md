@@ -43,7 +43,7 @@ bash -n ai_transit.sh fetch_repo.sh scan_pipeline.sh && echo "scripts OK"
 
 # 2. The test suite passes — it needs no scanning tools and no network
 ./tests/run_tests.sh
-# Expected: ✔ 116/116 passed
+# Expected: ✔ 133/133 passed
 
 # 3. Record which scanners are present
 for t in betterleaks detect-secrets clamscan yara semgrep trivy \
