@@ -74,6 +74,11 @@ python3 build_pdf.py
 # English slides PDF  (45 pages, 16 tool slides + a 2-page summary table)
 python3 build_pdf_en.py
 
+# File-type deck: one slide per scanner family (every extension that shares a handler
+# shares a slide) plus one on unknown extensions. --check compares it with classify_file()
+python3 build_pdf_filetypes.py
+python3 build_pdf_filetypes.py --check
+
 # French Word doc
 python3 build_doc.py
 
@@ -213,7 +218,7 @@ guide. Every short name is matched only where the next byte cannot continue a
 PDF name. `tests/fixtures/rules/benign_doc.pdf` embeds a subset font to guard
 this; regenerate fixtures with `python3 tests/fixtures/make_pdf_fixtures.py`.
 
-**Acceptance test:** this project ships four PDFs, and they are the realistic
+**Acceptance test:** this project ships five PDFs, and they are the realistic
 negative set. After any change to `scan_pdf()`, scan a directory containing them
 and confirm `PASS` with no findings.
 
@@ -1115,7 +1120,8 @@ python3 selfcheck.py --write-manifest
    fails before the rule exists, then passes after.
 4. Update the `"standards"` array in `generate_report_json()`.
 5. Update `INSTALL.md` (§5 tool section), `build_pdf_en.py` (`TOOL_CATALOG` list), and `build_pdf_en.py` summary table.
-6. Regenerate all PDFs.
+6. Add the slide to `FAMILIES` in `build_pdf_filetypes.py` (the suite fails if a routed extension or basename is missing from it), and the section to `build_doc_en.py` / `build_doc.py`.
+7. Regenerate all PDFs and the Word documents.
 
 ### Bug classes that have already shipped — lint enforces each
 

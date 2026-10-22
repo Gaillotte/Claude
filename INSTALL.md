@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 359/359 passed
+./tests/run_tests.sh          # Expected: ✔ 360/360 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 359/359 passed
+# Expected: ✔ 360/360 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1788,13 +1788,13 @@ the words "Python/JavaScript dependency CVE", which a content stream renders as
 string literals blanked out. Anchoring alone cannot separate those cases:
 `/S/JavaScript` is valid PDF, because names self-delimit.
 
-**Acceptance test after any change to `scan_pdf`** — the four PDFs this project
+**Acceptance test after any change to `scan_pdf`** — the five PDFs this project
 ships are the realistic negative set:
 
 ```bash
 mkdir -p /tmp/ownpdfs && cp *.pdf /tmp/ownpdfs/
 WORK_DIR=/tmp/pdfcheck bash scan_pipeline.sh /tmp/ownpdfs --quiet
-# Expected: PASS, with no findings against any of the four.
+# Expected: PASS, with no findings against any of the five.
 ```
 
 **Not covered:** an encrypted PDF is reported but not decrypted, so its streams
@@ -2557,7 +2557,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 359/359 passed
+# Expected: ✔ 360/360 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2996,7 +2996,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  359/359 passed
+  ✔  360/360 passed
 ```
 
 ### 17.1 What each layer covers

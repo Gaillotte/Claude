@@ -1598,6 +1598,17 @@ if ! _skipping; then
         fail_test "scan_pipeline.sh has no find piped into head" "$BAD"
     fi
 
+    # The file-type slide deck lists every extension and basename pattern the
+    # scanner routes. A deck that omits a route, or lists one that no longer exists,
+    # misleads exactly the people who rely on it, so it is compared with
+    # classify_file() on every run. Regenerate with: python3 build_pdf_filetypes.py
+    DECK_DIFF=$(python3 "${ROOT_DIR}/build_pdf_filetypes.py" --check 2>&1 || true)
+    if python3 "${ROOT_DIR}/build_pdf_filetypes.py" --check >/dev/null 2>&1; then
+        ok_test "the file-type deck matches the routes in classify_file()"
+    else
+        fail_test "the file-type deck matches the routes in classify_file()" "$DECK_DIFF"
+    fi
+
     # `echo -e` on a message. File names, archive entry names and finding text come
     # from the repository being scanned, and `echo -e` turns a literal \033 in one
     # into a real escape byte, which can retitle or otherwise drive the reviewer's

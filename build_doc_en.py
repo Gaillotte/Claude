@@ -1344,7 +1344,7 @@ file_types = [
         "escapes, and runs two views: string literals blanked for the key rules, everything for the "
         "payload rules. Every short name is matched only where the next byte cannot continue a PDF "
         "name, because TrueType subset tags such as /AAAAAA+DejaVuSans otherwise read as /AA. The "
-        "four PDFs this project ships are the acceptance test: they must PASS with no finding.",
+        "five PDFs this project ships are the acceptance test: they must PASS with no finding.",
         [
             ("CWE-94 — embedded JavaScript and auto-run actions",
              "/JavaScript or /JS, /OpenAction and /AA (additional actions), also in hex-escaped form "
