@@ -21,14 +21,19 @@ SEV_THRESHOLD="${_SEV_NUM[${MIN_SEVERITY,,}]:-3}"
 # printed on top of a partially-drawn progress line.
 _clr()   { [[ -t 2 ]] && printf "\r\033[K" >&2 || true; }
 log()    { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo "[$(date '+%H:%M:%S')] $*"; } || true; }
-# The message goes through %s, never through `echo -e`: file names and archive entry
-# names reach these helpers, and `echo -e` turns a literal \033 in one into a real
-# escape byte, which can retitle or otherwise drive the reviewer's terminal.
-info()   { [[ "$VERBOSITY" != "quiet" ]] && { _clr; printf '\033[34m[INFO]\033[0m  %s\n' "$*"; } || true; }
-warn()   { _clr; printf '\033[33m[WARN]\033[0m  %s\n' "$*" >&2; }
-ok()     { [[ "$VERBOSITY" != "quiet" ]] && { _clr; printf '\033[32m[OK]\033[0m    %s\n' "$*"; } || true; }
-fail()   { _clr; printf '\033[31m[FAIL]\033[0m  %s\n' "$*" >&2; exit 1; }
-fail_f() { _clr; printf '\033[31m[FAIL]\033[0m  %s\n' "$*" >&2; GLOBAL_VERDICT="FAIL"; }
+# Text from the repository reaches these helpers: file names, archive entry names,
+# finding messages. Two things would turn it into terminal control. `echo -e`
+# expands a literal \033 in a name into a real escape byte, so the message goes
+# through printf %s. And a name that really contains the ESC byte (or any other
+# control byte: CR overwrites the line, CSI/OSC retitle or drive the terminal) is
+# printed raw by %s, so control bytes are replaced first. The progress line _clr
+# draws its own escapes and is not touched.
+_san()   { _SAN="$*"; _SAN="${_SAN//[[:cntrl:]]/?}"; }
+info()   { [[ "$VERBOSITY" != "quiet" ]] && { _clr; _san "$*"; printf '\033[34m[INFO]\033[0m  %s\n' "$_SAN"; } || true; }
+warn()   { _clr; _san "$*"; printf '\033[33m[WARN]\033[0m  %s\n' "$_SAN" >&2; }
+ok()     { [[ "$VERBOSITY" != "quiet" ]] && { _clr; _san "$*"; printf '\033[32m[OK]\033[0m    %s\n' "$_SAN"; } || true; }
+fail()   { _clr; _san "$*"; printf '\033[31m[FAIL]\033[0m  %s\n' "$_SAN" >&2; exit 1; }
+fail_f() { _clr; _san "$*"; printf '\033[31m[FAIL]\033[0m  %s\n' "$_SAN" >&2; GLOBAL_VERDICT="FAIL"; }
 
 has_cmd() { command -v "$1" &>/dev/null; }
 

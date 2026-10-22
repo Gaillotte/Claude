@@ -1422,6 +1422,16 @@ PYEOF
     run_pipeline "$ESCD"
     assert_not_contains "$RUN_OUT" $'\033]0;' \
         "console output: a literal \\033 in a file or entry name is not turned into an escape byte"
+
+    # The other half: a file whose name really contains the ESC byte. printf %s
+    # prints it raw, so the helpers also replace control bytes, and so does the
+    # findings summary ai_transit.sh prints through jq.
+    ESCR="${SCRATCH}/esc_raw_repo"
+    mkdir -p "$ESCR"
+    printf 'password = "hunter2hunter2"\n' > "$ESCR/$(printf 'raw\033]0;pwned\007.txt')"
+    run_pipeline "$ESCR"
+    assert_not_contains "$RUN_OUT" $'\033]0;' \
+        "console output: a real ESC byte in a file name is not passed to the terminal"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1586,6 +1596,19 @@ if ! _skipping; then
         ok_test "scan_pipeline.sh has no find piped into head"
     else
         fail_test "scan_pipeline.sh has no find piped into head" "$BAD"
+    fi
+
+    # `echo -e` on a message. File names, archive entry names and finding text come
+    # from the repository being scanned, and `echo -e` turns a literal \033 in one
+    # into a real escape byte, which can retitle or otherwise drive the reviewer's
+    # terminal. Messages go through printf %s (after control bytes are replaced).
+    # Comment lines are skipped.
+    BAD=$(grep -nE 'echo -e[^#]*\$[*@]' "${ROOT_DIR}/scan_pipeline.sh" \
+          | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+    if [[ -z "$BAD" ]]; then
+        ok_test "scan_pipeline.sh never passes \$* through echo -e"
+    else
+        fail_test "scan_pipeline.sh never passes \$* through echo -e" "$BAD"
     fi
 
     # A RETURN trap is not scoped to the function that installs it: it keeps

@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 357/357 passed
+./tests/run_tests.sh          # Expected: ✔ 359/359 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 357/357 passed
+# Expected: ✔ 359/359 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -2064,8 +2064,8 @@ anon key is one and is public by design.
 fires on 34 of 800 real Python files, because `token = tokens.pop(0)` is an expression.
 Stripe *test* keys are not matched. Providers whose secrets are bare hex or base64 with
 no prefix (Heroku, Mailgun, Twilio) are not matched either, since nothing distinguishes
-them from a hash. Binary files are skipped, so a token inside an image or a jar is not
-seen.
+them from a hash. Binary files are skipped, so a token inside an image is not
+seen; jars are the exception (their text resources and class constants are searched, §11.2.13).
 
 **False positives.** Documentation is full of example keys, so placeholders are
 excluded: anything containing `EXAMPLE`, `SAMPLE`, `DUMMY`, `YOUR` or `REDACTED`, a
@@ -2557,7 +2557,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 357/357 passed
+# Expected: ✔ 359/359 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2996,7 +2996,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  357/357 passed
+  ✔  359/359 passed
 ```
 
 ### 17.1 What each layer covers
@@ -3006,9 +3006,10 @@ Expected output on a healthy installation:
 | A — rule corpus | Detection correctness: each finding must land on the correct file, plus false-positive guards for safe code |
 | B — end-to-end | Clean repo → PASS/exit 0; vulnerable repo → FAIL/exit 1 |
 | C — flags | `--report-only`, `--min-severity`, argument guards, `.transit-allow.json`, `.transitignore`, `--no-zip`/`--no-excel` |
-| D — artifacts | JSON valid and carries a verdict, HTML written, ZIP entries repo-relative, Excel Findings tab, no escape codes when redirected |
+| D — artifacts | JSON valid and carries a verdict, HTML written and escaped (a hostile file or jar-entry name is shown as text), ZIP entries repo-relative, Excel Findings tab, no escape codes when redirected, no terminal control bytes taken from a file name |
+| Java archive limits | The `JAR_*` environment limits of `scan_jar`, each reached and reported on an 11 KB fixture, plus the archive helper's behaviour on a file that cannot be opened |
 | E — diff mode | `--since` scans exactly the changed files; `.git` excluded from local copies |
-| F — static | Parse checks, shellcheck, and lint rules for two bug classes that have already shipped |
+| F — static | Parse checks, shellcheck, and lint rules for seven bug classes that have already shipped (six silent-failure classes and `echo -e` on repository text) |
 
 ### 17.2 Fixtures
 

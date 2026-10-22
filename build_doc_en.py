@@ -199,12 +199,12 @@ toc_items = [
     ("    5.1", "Python (.py)"),
     ("    5.2", "JavaScript / TypeScript (.js .ts .jsx .tsx)"),
     ("    5.3", "C / C++ (.c .cpp .h .hpp)"),
-    ("    5.4", "Shell / PowerShell (.sh .bash .zsh .ps1)"),
+    ("    5.4", "Shell (.sh .bash .zsh .ksh)"),
     ("    5.5", "Java (.java)"),
     ("    5.6", "PHP (.php)"),
     ("    5.7", "Ruby (.rb)"),
     ("    5.8", "Go (.go)"),
-    ("    5.9", "XML (.xml)"),
+    ("    5.9", "XML, Maven and Ant (.xml .pom)"),
     ("    5.10", "YAML / GitHub Actions (.yml .yaml)"),
     ("    5.11", "Terraform / HCL (.tf .tfvars .hcl)"),
     ("    5.12", "Dockerfile"),
@@ -212,6 +212,19 @@ toc_items = [
     ("    5.14", "Archives (.zip .tar.gz)"),
     ("    5.15", "SQL (.sql)"),
     ("    5.16", "Documents (.json .xml .md .txt)"),
+    ("    5.17", "Rust (.rs)"),
+    ("    5.18", "Kotlin (.kt .kts)"),
+    ("    5.19", "C# (.cs)"),
+    ("    5.20", "PowerShell (.ps1 .psm1 .psd1 .pssc .psrc .ps1xml .psc1 .cdxml)"),
+    ("    5.21", "Windows batch (.bat .cmd)"),
+    ("    5.22", "PDF (.pdf)"),
+    ("    5.23", "Makefile (.mk .mak .make)"),
+    ("    5.24", "HTML (.html .htm .xhtml)"),
+    ("    5.25", "CMake (.cmake, CMakeLists.txt)"),
+    ("    5.26", "setup.py and conanfile.py"),
+    ("    5.27", "Gradle"),
+    ("    5.28", "Package manifests"),
+    ("    5.29", "Java archives (.jar .war .ear .aar)"),
     ("6.", "Security Standards Covered"),
     ("7.", "Tools Used — Detailed Description"),
     ("8.", "Success Criteria per Tool"),
@@ -568,9 +581,23 @@ t.style = "Table Grid"
 add_table_header(t, ["Pattern / Standard", "What it detects", "Verdict"])
 set_col_widths(t, [4, 11, 3])
 layer4_checks = [
-    ("CWE-798 / CWE-259",  "Hardcoded credentials: password=, api_key=, auth_token= with literal values", "FAIL"),
-    ("CWE-321",            "Hardcoded cryptographic keys: PRIVATE KEY, BEGIN RSA/EC/DSA/OPENSSH blocks",   "FAIL"),
-    ("CWE-22",             "Path traversal patterns: ../, ..\\, %2e%2e%2f, %252e%252e",                    "FAIL"),
+    ("CWE-798 / CWE-259",  "Hardcoded credentials: password, passwd, pwd, secret, api_key, apikey, auth_token or "
+                           "access_token followed by = or : and a quoted literal of four or more characters. "
+                           "Case-sensitive, and the keyword must be followed directly by = or :, so DB_PASSWORD, "
+                           "API_KEY and secret_key are not matched by this rule",                          "FAIL"),
+    ("CWE-798 (formats)",  "Known credential formats: 18 provider token shapes (AWS, GitHub, GitLab, Stripe live, "
+                           "Slack, Google, SendGrid, npm, PyPI, Hugging Face, Anthropic, OpenAI, Shopify, "
+                           "DigitalOcean) in any file type, quoted or not; documentation placeholders excluded; "
+                           "binary files skipped",                                                         "FAIL"),
+    ("CWE-798 (JWT)",      "An embedded JWT: a signed token, not necessarily a secret",                     "WARN"),
+    ("CWE-321",            "Private key material: a real -----BEGIN ... PRIVATE KEY----- header followed within "
+                           "five lines by 60 or more base64 characters. A placeholder body or a file-type "
+                           "signature does not count",                                                     "FAIL"),
+    ("crypto",             "A public certificate embedded in a file (the public half of the pair)",         "WARN"),
+    ("CWE-22",             "Path traversal in three contexts only: encoded (%2e%2e, ..%2f, %252e%252e), reaching "
+                           "a sensitive path (/etc/passwd, ~/.ssh, ~/.aws, id_rsa, system32, /proc/self), or "
+                           "concatenated or interpolated with another value (\"../\" + name). A literal ../ "
+                           "alone is an ordinary relative path",                                           "FAIL"),
     ("CWE-918",            "Potential SSRF: HTTP requests built from url/host/endpoint variables",          "WARN"),
     ("CWE-327",            "Weak crypto algorithms: md5, sha1, des, rc4, blowfish",                         "WARN"),
     ("CWE-338",            "Weak PRNG: Math.random(), random.random(), rand(), mt_rand()",                  "WARN"),
@@ -595,21 +622,34 @@ add_table_header(t, ["Extension(s)", "Language", "Scanners called", "CWE / OWASP
 set_col_widths(t, [3.5, 2.5, 3.5, 8.5])
 dispatch = [
     (".py",                "Python",      "Bandit",          "CWE-78/95/502/89/601/703 · OWASP A03/A02/A08"),
+    ("setup.py conanfile.py","Install-time Python","—",      "fetch-and-execute at install, decode-and-exec, reverse shell, persistence"),
     (".js .ts .jsx .tsx",  "JavaScript",  "Semgrep",         "CWE-79/78/95/89/611/1321/915 · OWASP A03/A05/A07"),
     (".java",              "Java",        "—",               "CWE-78/89/79/502/295/611 + CVE-2021-44228 Log4Shell"),
     (".php",               "PHP",         "—",               "CWE-78/89/79/22/502"),
     (".rb",                "Ruby",        "—",               "CWE-78/95/89/22"),
     (".go",                "Go",          "—",               "CWE-89/22/338/326"),
+    (".rs",                "Rust",        "—",               "CWE-119 unsafe · CWE-78 Command · CWE-798"),
+    (".kt .kts",           "Kotlin",      "—",               "CWE-78/798/327"),
+    (".cs",                "C#",          "—",               "CWE-78/798/327/89"),
     (".c .cpp .h .hpp",    "C / C++",     "cppcheck",        "CWE-120/78/134/190/338/377 · CERT STR31/MEM30/INT30"),
-    (".sh .bash .zsh .ps1","Shell",       "ShellCheck",      "CWE-78/88/426/377"),
-    (".xml",               "XML",         "—",               "CWE-611 XXE (DOCTYPE/ENTITY/SYSTEM) · CWE-798"),
+    (".sh .bash .zsh .ksh","Shell",       "ShellCheck",      "CWE-78/88/426/377"),
+    (".ps1 .psm1 .psd1 .pssc .psrc .ps1xml .psc1 .cdxml", "PowerShell", "—", "fetch-execute, -enc, AMSI bypass, persistence · CWE-78/506/912/798"),
+    (".bat .cmd",          "Windows batch","—",              "certutil/bitsadmin, -enc, Run keys, UAC/Defender off · CWE-78/912/693/250/798"),
+    (".mk .mak .make Makefile","Makefile","—",               "curl|sh, parse-time fetch, reverse shell, credentials · CWE-78/798/494"),
+    (".cmake CMakeLists.txt","CMake",     "—",               "configure-time download, credentials in set(), hardening removed"),
+    (".html .htm .xhtml",  "HTML",        "—",               "eval, http:// script, hidden iframe, cookie exfiltration · CWE-94/79/798"),
+    (".xml .pom",          "XML / Maven / Ant","—",          "CWE-611 XXE (entity with a target) · http repository · exec of a shell · CWE-798"),
     (".yml .yaml",         "YAML / CI",   "—",               "CWE-798 · OWASP A05/A08 (privileged, hostNetwork, SSTI)"),
     (".tf .tfvars .hcl",   "Terraform",   "checkov",         "CWE-798 · OWASP A05/A02 (S3 ACL, CIDR, encryption)"),
     ("Dockerfile",         "Docker",      "hadolint",        "CWE-250/798/494 · OWASP A05 (:latest, ENV secrets, ADD URL)"),
-    (".so .dll .exe .elf", "Binary",      "strings",         "Automatic FAIL + IOC search in strings"),
-    (".zip .tar.gz",       "Archive",     "—",               "Automatic FAIL · CWE-22 zip-slip check"),
+    ("*.gradle *.gradle.kts gradle.properties gradle-wrapper.properties", "Gradle", "—", "apply from http, allowInsecureProtocol, process spawn, literal passwords"),
+    ("package.json composer.json requirements*.txt", "Manifests", "—", "install-time hooks, http/git dependencies, URL credentials"),
+    (".pdf",               "PDF",         "—",               "CWE-94/78/506 · streams decoded, name escapes resolved"),
+    (".jar .war .ear .aar","Java archive", "—",              "CWE-22/506/829/494/78/321/798 · opened in place, constant pools parsed"),
+    (".so .dll .dylib .exe .elf .bin","Binary","strings",    "Automatic FAIL + IOC search in strings"),
+    (".zip .tar .gz .tgz .bz2 .xz","Archive","—",            "Automatic FAIL · CWE-22 zip-slip check"),
     (".sql",               "SQL",         "—",               "CWE-78/89 xp_cmdshell, DROP, injection patterns"),
-    (".json .xml .md .txt","Documents",   "—",               "CWE-798 inline credentials (password:, api_key=, token:)"),
+    (".json .md .txt .rst","Documents",   "—",               "CWE-798 inline credentials (password:, api_key=, token:)"),
     ("* (others)",         "Unknown",     "file (MIME)",     "Binary detection by MIME type"),
 ]
 for row in dispatch:
@@ -764,10 +804,11 @@ file_types = [
         ]
     ),
     (
-        "5.4 Shell / PowerShell (.sh .bash .zsh .ps1 .psm1)",
-        ".sh, .bash, .zsh, .ps1, .psm1",
+        "5.4 Shell (.sh .bash .zsh .ksh)",
+        ".sh, .bash, .zsh, .ksh",
         "Shell scripts are direct attack vectors because their execution "
-        "is immediate and their syntax easily allows command obfuscation.",
+        "is immediate and their syntax easily allows command obfuscation. "
+        "PowerShell has its own rule set (5.20) and Windows batch files theirs (5.21).",
         [
             ("ShellCheck",
              "ShellCheck is a specialized linter for bash/sh/zsh scripts. "
@@ -936,30 +977,43 @@ file_types = [
         ]
     ),
     (
-        "5.9 XML (.xml)",
-        ".xml",
-        "XML files can enable External Entity injection (XXE) attacks "
-        "and may contain hardcoded credentials in configuration files. "
-        "OWASP coverage: A05 Misconfiguration.",
+        "5.9 XML, Maven and Ant (.xml .pom)",
+        ".xml, .pom",
+        "pom.xml and Ant's build.xml have no scanner of their own: they arrive here, so this is "
+        "what a Maven or Ant repository gets. XXE needs an entity that points at something, not a "
+        "DOCTYPE: a bare <!DOCTYPE failed 736 of 3362 real XML files (22%) and a bare <!ENTITY 8 more, "
+        "every one a text shortcut such as &nbsp; or a W3C DTD reference. The match runs with newlines "
+        "folded (an <!ENTITY split across lines is still a declaration) and on a comment-stripped view "
+        "(Maven's own settings.xml documents credentials inside comments). Credentials key on the "
+        "element name (<password>, <token>, <secret>, <apiKey>, <privateKey> ...), excluding ${...} "
+        "references, Maven-encrypted {...} values, paths, placeholders and values cut short with ... "
+        "Result: 0 of 3362 real XML files fail.",
         [
-            ("CWE-611 — XXE via DOCTYPE declaration",
-             "A <!DOCTYPE> declaration in an XML file enables DTD processing. "
-             "Parsers that do not disable external entity resolution are vulnerable "
-             "to reading local files, SSRF, and denial-of-service via entity expansion.",
+            ("CWE-611 — external entity that references a resource",
+             "<!ENTITY ... SYSTEM pointing at file:, expect:, php:, gopher:, jar:, netdoc:, ftp:, "
+             "http(s): or an absolute path.",
              "FAIL"),
-            ("CWE-611 — XXE via ENTITY declaration",
-             "<!ENTITY> declarations define XML entities that can reference "
-             "external files or URLs. Their presence indicates potential XXE payload.",
+            ("CWE-776 — entity expansion bomb",
+             "Four or more named entity references in one entity value (&#160; is a character "
+             "reference and does not count).",
              "FAIL"),
-            ("CWE-611 — XXE via SYSTEM external entity",
-             "SYSTEM keywords with file://, http://, https://, or /etc/ paths "
-             "in XML content are classic XXE exploitation patterns.",
+            ("CWE-798 — credential in an element",
+             "A <password>, <token>, <secret>, <apiKey> ... element holding a literal of six or "
+             "more characters.",
              "FAIL"),
-            ("CWE-798 — Hardcoded credentials in XML config",
-             "XML configuration files frequently contain <password>, <secret>, "
-             "<token>, or <apiKey> elements with inline literal values. "
-             "These should use environment variable references instead.",
+            ("Maven — repository over http://, exec of a shell",
+             "A <repository> whose <url> is http:// (scoped to the repository block: the default "
+             "archetype writes http://maven.apache.org as a homepage), or exec-maven-plugin / antrun "
+             "whose <executable> is sh, bash, cmd, powershell, curl or wget.",
              "FAIL"),
+            ("Ant — insecure or shell-executing tasks",
+             "<get> over http://, <exec> of a shell or downloader, <sshexec>/<scp> with a literal "
+             "password=. Rests on only 22 real files.",
+             "FAIL"),
+            ("Reviewable",
+             "A relative SYSTEM include (DocBook) or a PUBLIC DTD reference; the exec or antrun plugin "
+             "being present; system scope. There is no rule for -SNAPSHOT: 176 of 221 real poms use one.",
+             "WARN"),
         ]
     ),
     (
@@ -1093,7 +1147,8 @@ file_types = [
         "5.14 Archives (.zip .tar .tar.gz .tgz .bz2)",
         ".zip, .tar, .tar.gz, .tgz, .bz2",
         "Archives require special handling because their contents are not "
-        "directly scannable without prior extraction.",
+        "directly scannable without prior extraction. Java archives (.jar .war .ear .aar) are "
+        "the exception: they are opened and inspected in place (5.29).",
         [
             ("Automatic FAIL + re-scan required",
              "Every archive is classified FAIL. It must be extracted in an isolated "
@@ -1143,6 +1198,381 @@ file_types = [
              "This covers secrets exposed in README files, "
              "example configurations, or data files.",
              "FAIL"),
+        ]
+    ),
+    (
+        "5.17 Rust (.rs)",
+        ".rs",
+        "A deliberately small rule set: three checks, all blocking. A build.rs build script is "
+        "routed here too, and legitimately uses std::process::Command, so it over-fires; that is "
+        "a known gap, not a covered case.",
+        [
+            ("CWE-119 — unsafe block",
+             "Any unsafe { } block disables the compiler's memory-safety guarantees and "
+             "needs a human review before the code is imported.",
+             "FAIL"),
+            ("CWE-78 — std::process::Command",
+             "Spawning an external process from Rust; if any argument is attacker-influenced "
+             "it is command injection.",
+             "FAIL"),
+            ("CWE-798 — hardcoded credential",
+             "password, secret, api_key or token assigned a literal string of four or more characters.",
+             "FAIL"),
+        ]
+    ),
+    (
+        "5.18 Kotlin (.kt, and .kts other than *.gradle.kts)",
+        ".kt, .kts",
+        "Kotlin source rules. A *.gradle.kts file is a Gradle build script, not Kotlin source, "
+        "and is routed to the Gradle scanner (5.27) instead.",
+        [
+            ("CWE-78 — Runtime.exec",
+             "Runtime.getRuntime().exec() starts a system command.",
+             "FAIL"),
+            ("CWE-798 — hardcoded credential",
+             "A password, secret or API key assigned a literal string.",
+             "FAIL"),
+            ("CWE-327 — weak hash MD5 / SHA-1",
+             "MessageDigest.getInstance(\"MD5\") or \"SHA-1\".",
+             "FAIL"),
+        ]
+    ),
+    (
+        "5.19 C# (.cs)",
+        ".cs",
+        "C# source rules for command execution, credentials, weak hashing and SQL built by "
+        "string concatenation.",
+        [
+            ("CWE-78 — Process.Start",
+             "Process.Start() launches an operating-system command.",
+             "FAIL"),
+            ("CWE-798 — hardcoded credential",
+             "A password, secret or API key assigned a literal string.",
+             "FAIL"),
+            ("CWE-327 — MD5",
+             "new MD5CryptoServiceProvider(): a broken hash.",
+             "FAIL"),
+            ("CWE-89 — SQL string concatenation",
+             "A \"SELECT ...\" literal followed by + (concatenation) instead of query parameters.",
+             "FAIL"),
+        ]
+    ),
+    (
+        "5.20 PowerShell (.ps1 .psm1 .psd1 .pssc .psrc .ps1xml .psc1 .cdxml)",
+        ".ps1, .psm1, .psd1, .pssc, .psrc, .ps1xml, .psc1, .cdxml",
+        "Every PowerShell file type shares one rule set. A construct that is ordinary on its own "
+        "(Invoke-Expression, Start-Process, a download) is a WARN; it becomes a FAIL only in a "
+        "composition with no innocent reading. Matching is case-insensitive, because PowerShell is, "
+        "and so is the extension (UPPER.PS1 used to bypass the scanner and PASS). The legacy "
+        "Monad extensions (.msh and friends) are not routed. Calibration: 32 distinct real scripts, "
+        "8 FAIL (all false positives) became 0 FAIL; none of the module, manifest or XML types "
+        "exists on the reference host, so those routes rest on fixtures.",
+        [
+            ("Fetch then execute",
+             "irm ... | iex, DownloadString plus iex, or a download piped to a shell.",
+             "FAIL"),
+            ("Encoded command",
+             "-EncodedCommand and its abbreviations (-enc, -e) followed by a base64 blob.",
+             "FAIL"),
+            ("Decode then execute",
+             "FromBase64String combined with iex, ScriptBlock::Create, Assembly::Load or VirtualAlloc, "
+             "tested over the whole file because the halves sit on different lines.",
+             "FAIL"),
+            ("Evasion and defence tampering",
+             "A backtick inside the command name, an AMSI bypass, Defender disabled.",
+             "FAIL"),
+            ("Persistence and implants",
+             "A CurrentVersion\\Run key, WMI event consumers, the Startup folder, a socket stream "
+             "fed to a shell, VirtualAlloc with CreateThread, offensive tooling named in the code.",
+             "FAIL"),
+            ("Credentials and plaintext downloads",
+             "A literal $Password, ConvertTo-SecureString -AsPlainText with a literal, or an "
+             "http:// download that is then run.",
+             "FAIL"),
+            ("Ordinary but reviewable",
+             "Invoke-Expression alone (a deliberate relaxation: benign in every real case measured), "
+             "Start-Process, cmd /c, an https download that is then run, execution-policy bypass, "
+             "hidden window, Defender exclusion, scheduled task, certificate validation off, "
+             "local account creation, a command name built from strings, ScriptsToProcess in a "
+             "manifest, a wildcard VisibleCmdlets in a role capability.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.21 Windows batch (.bat .cmd)",
+        ".bat, .cmd",
+        "Before this scanner all 116 real batch files on the reference host were recorded PASS. "
+        "Three language properties shape it: CRLF line endings (104 of 116, so a normalised view "
+        "strips the CR), REM and :: comment lines (56 of 116, dropped: a commented-out payload does "
+        "not run) and caret line-continuation (6 of 116, joined first, so a command split across "
+        "lines is seen whole). Matching is case-insensitive. Calibration is weaker than it looks: "
+        "the real files are npm shims, virtualenv scripts and Maven wrappers, with no Windows-native "
+        "automation, so 116 clean files say little about recall.",
+        [
+            ("Download cradles",
+             "certutil -urlcache, bitsadmin /transfer, a PowerShell DownloadString cradle, curl -k, "
+             "and download-then-execute on one line.",
+             "FAIL"),
+            ("Encoded and obfuscated commands",
+             "powershell -enc <base64> in any abbreviation, certutil -decode into an executable, "
+             "carets inside a command name (c^e^r^t^u^t^i^l).",
+             "FAIL"),
+            ("Persistence and defence tampering",
+             "A Run, RunOnce, Winlogon or IFEO key; a file copied into the Startup folder; UAC, "
+             "Defender or the firewall turned off; a new member of the local Administrators group.",
+             "FAIL"),
+            ("Destruction and credentials",
+             "A delete aimed exactly at a drive root or the profile, a format command, or a literal "
+             "set ...PASSWORD=.",
+             "FAIL"),
+            ("Ordinary but reviewable",
+             "net user /add, certutil -decode of anything else, schtasks /create, for /f reading a "
+             "download, fetch and run in one script, a plaintext http:// download, -ExecutionPolicy "
+             "Bypass, a hidden PowerShell window, mshta / wscript / rundll32 / regsvr32, wmic process "
+             "call create, a remote UNC path, a command built from adjacent %v:~n,1% extractions.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.22 PDF (.pdf)",
+        ".pdf",
+        "A PDF is a container, not a flat document: it can auto-run JavaScript on open, start an "
+        "external program and carry an embedded executable. From PDF 1.5 the object dictionaries may "
+        "sit inside compressed object streams, so the dangerous names need not appear in the "
+        "plaintext. The scanner decodes the declared filter chain of every stream (Flate, LZW, "
+        "ASCIIHex, ASCII85, RunLength; stdlib only, 64 MB decompression ceiling), decodes #xx name "
+        "escapes, and runs two views: string literals blanked for the key rules, everything for the "
+        "payload rules. Every short name is matched only where the next byte cannot continue a PDF "
+        "name, because TrueType subset tags such as /AAAAAA+DejaVuSans otherwise read as /AA. The "
+        "four PDFs this project ships are the acceptance test: they must PASS with no finding.",
+        [
+            ("CWE-94 — embedded JavaScript and auto-run actions",
+             "/JavaScript or /JS, /OpenAction and /AA (additional actions), also in hex-escaped form "
+             "(/J#61vaScript) and inside compressed streams.",
+             "FAIL"),
+            ("CWE-78 — /Launch",
+             "An action that starts an external program.",
+             "FAIL"),
+            ("CWE-506 — embedded payload",
+             "/EmbeddedFile, or an embedded Windows executable.",
+             "FAIL"),
+            ("Exploit shapes",
+             "Acrobat APIs with an exploit history (util.printf, collab.getIcon, media.newPlayer ...), "
+             "heap-spray and shellcode shapes (unescape of a percent-encoded blob), rich media, and "
+             "forms that submit or import data.",
+             "FAIL"),
+            ("Not inspected",
+             "An encrypted PDF (/Encrypt) is reported but not decrypted; a stream behind a filter that "
+             "cannot be decoded is named; XFA forms, remote destinations and incremental updates are "
+             "reported. Image filters are excluded: they carry pixels, never dictionaries.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.23 Makefile (.mk .mak .make, Makefile*, GNUmakefile*)",
+        ".mk, .mak, .make, Makefile",
+        "Recipe lines are shell, and $(shell ...) runs when make merely reads the file, before any "
+        "target: a hostile Makefile does not need to be built to act. Assignments are unquoted "
+        "(PASSWORD = hunter2), so the universal credential rule cannot see them. The dangerous "
+        "commands look almost identical to ordinary ones, so the rules are narrow: rm -rf only "
+        "counts when the target is exactly /, ~ or $HOME; a download only counts when it is piped "
+        "into a shell. 88 real Makefiles produce no finding of any kind. There is deliberately no "
+        "rule for a bare $(eval ...): it fired on 7 of 88 as ordinary metaprogramming.",
+        [
+            ("Remote execution",
+             "A download piped into a shell, a parse-time fetch ($(shell curl ...)), a base64-decoded "
+             "payload executed, a reverse shell.",
+             "FAIL"),
+            ("Credentials and TLS",
+             "A hardcoded credential assignment; TLS verification disabled.",
+             "FAIL"),
+            ("Persistence and destruction",
+             "A setuid/setgid bit, cron or authorized_keys persistence, rm -rf of / or $HOME.",
+             "FAIL"),
+            ("Ordinary but reviewable",
+             "sudo in a recipe, chmod 777, a plaintext http:// download, clone-and-build from a remote.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.24 HTML (.html .htm .xhtml)",
+        ".html, .htm, .xhtml",
+        "Inline script is entirely ordinary, so the rules target constructs with no innocent "
+        "explanation. Every rule was counted against 388 real HTML files; two results changed the "
+        "design: a bare unescape( appeared only as unescape(encodeURIComponent(x)), so the rule "
+        "requires a percent-encoded blob, and innerHTML appeared in 8 of 388, so it warns. "
+        "After calibration 2 of 388 fail, both genuine eval() calls in the bundled Go trace viewer "
+        "(vendoring it needs a .transit-allow.json entry rather than a weaker rule).",
+        [
+            ("Code execution",
+             "eval(), a percent-encoded payload passed to unescape(), document.write() fed from a "
+             "decoder.",
+             "FAIL"),
+            ("Remote and hidden content",
+             "<script src=\"http://...\">, a hidden iframe (display:none, visibility:hidden, zero size), "
+             "<base href=\"http://...\">, <form action=\"http://...\">.",
+             "FAIL"),
+            ("Credentials and exfiltration",
+             "A credential in a name/value attribute pair or a <meta content>; a cookie read wired to a "
+             "network sink, matched in both orders and bounded to one statement.",
+             "FAIL"),
+            ("Reviewable",
+             "innerHTML / outerHTML / insertAdjacentHTML, new Function(, a bare atob(, a "
+             "protocol-relative <script src=\"//...\">, an external meta refresh, a javascript: URI.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.25 CMake (.cmake, CMakeLists.txt)",
+        ".cmake, CMakeLists.txt",
+        "file(DOWNLOAD ...) and execute_process(...) run at configure time: cmake . is enough, there "
+        "is no build step to decline. set(NAME \"value\") is a function call, not an assignment, so the "
+        "universal credential rule cannot see a credential in it. CMakeLists.txt ends in .txt and "
+        "would otherwise be routed to the plain-text scanner. Calibration over 1116 real CMake files: "
+        "execute_process appears in 106, so it cannot be a finding by itself, and URL is overloaded "
+        "(a project homepage), so the download rule needs file(DOWNLOAD) or an archive extension. "
+        "1 of 1116 fails: a plaintext archive URL in CMake's own ExternalProject documentation.",
+        [
+            ("Credentials",
+             "A credential in set().",
+             "FAIL"),
+            ("Insecure download",
+             "A plaintext http:// download, TLS_VERIFY OFF, or a download piped into a shell.",
+             "FAIL"),
+            ("Hardening removed and implants",
+             "-fno-stack-protector, _FORTIFY_SOURCE=0, execstack; file(WRITE ...) into /etc, ~/.ssh "
+             "or cron.",
+             "FAIL"),
+            ("Reviewable",
+             "A build step that fetches, COMMAND sh -c, install(CODE|SCRIPT), GIT_TAG on a moving branch.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.26 setup.py and conanfile.py",
+        "setup.py, conanfile.py (matched by name)",
+        "setup.py runs on a source pip install and a Conan recipe on conan install: both are "
+        "install-time code. They are routed here, not to the generic Python scanner, because the "
+        "risk model differs: os.system and subprocess are ordinary build tools in a setup script, and "
+        "fetching-then-executing is the thing that is not. The generic rules failed 4 of 36 real "
+        "setup.py files, three of them idioms. Trade-off: bandit and the generic eval/exec/os.system "
+        "FAILs no longer run on these two filenames.",
+        [
+            ("Fetch then execute",
+             "A download piped into a shell, exec/eval of a network response, a blob decoded and "
+             "executed in the same file (whole-file test).",
+             "FAIL"),
+            ("Implants",
+             "A socket handed to a shell, or a pty; writing authorized_keys, a crontab or a systemd unit.",
+             "FAIL"),
+            ("Reviewable",
+             "Overriding install / develop / egg_info, downloading at install time, running a program.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.27 Gradle (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties)",
+        "matched by name",
+        "A Gradle script is a program, not a declarative file: it is evaluated in full at "
+        "configuration time (gradle tasks, --dry-run, an IDE import), with no read-only mode. "
+        "settings.gradle runs first of all. *.gradle.kts is matched by name because its extension "
+        "would otherwise send it to the Kotlin source scanner. No rule keys on a URL scheme: bare "
+        "http:// is 341 of 6249 real scripts, almost all licence and homepage URLs, and Gradle 7+ "
+        "refuses an http:// repository unless allowInsecureProtocol is set, which is the reliable tell. "
+        "Calibration: 6413 files, 99.6% pass; the 26 real FAILs are literal credentials in Gradle's "
+        "own documentation and tests, one documentation snippet, and two genuine process spawns.",
+        [
+            ("Build scripts",
+             "apply from: 'http(s)://...', allowInsecureProtocol = true, a process started from a "
+             "literal or list, a ProcessBuilder (matched without new, so Kotlin is covered), "
+             "Runtime.exec.",
+             "FAIL"),
+            ("gradle.properties",
+             "A literal *.password / *.secret / *.apiKey; org.gradle.dependency.verification=off or "
+             "lenient; -javaagent / -agentpath in org.gradle.jvmargs.",
+             "FAIL"),
+            ("gradle-wrapper.properties",
+             "A plaintext distributionUrl.",
+             "FAIL"),
+            ("Reviewable",
+             "A configuration-time remote fetch, exec / commandLine / javaexec, a trustStore override, "
+             "validateDistributionUrl=false. A missing distributionSha256Sum is deliberately not "
+             "reported: 20 of 26 real wrappers omit it.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.28 Package manifests (package.json, composer.json, requirements*.txt, constraints*.txt)",
+        "matched by name",
+        "These were only credential-checked (or, for requirements, sent to the documentation "
+        "scanner), so the thing that matters, code that runs when dependencies are installed, was "
+        "never examined. JSON is parsed, not grepped: a key can be written \"post\\u0069nstall\", which "
+        "npm reads as postinstall and a pattern never sees. Invalid JSON falls back to patterns with a "
+        "WARN. Calibration is weak and said to be: 0 of 1193 real package.json fail, but the corpus "
+        "is mostly published packages, so it says little about an application's own manifest. "
+        "Lockfiles, go.mod and meson_options.txt are not covered.",
+        [
+            ("npm lifecycle hooks",
+             "preinstall / install / postinstall (and prepare) that pipe a download into a shell, decode "
+             "base64, open a /dev/tcp socket or use nc -e.",
+             "FAIL"),
+            ("Insecure sources",
+             "A dependency on http://, git:// or git+http://; in Composer, secure-http false or an "
+             "http:// repository; in pip, an index, -f or requirement over http:// or git://, or "
+             "credentials embedded in a URL.",
+             "FAIL"),
+            ("Reviewable",
+             "An install-time hook being present, a non-lifecycle script that pipes or fetches, a git or "
+             "tarball dependency, --trusted-host, --extra-index-url (dependency confusion), a VCS "
+             "requirement not pinned to a commit.",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.29 Java archives (.jar .war .ear .aar)",
+        ".jar, .war, .ear, .aar",
+        "A .jar used to have no handler and was recorded PASS whatever it held. A jar is a ZIP of "
+        "compiled code: executable code a reviewer cannot read, a container that can lie, and (for "
+        "gradle-wrapper.jar) the first thing ./gradlew runs. The archive is never extracted to disk: "
+        "a standard-library helper reads entries with bounded reads, the way the JVM and unzip do "
+        "(a bad CRC, a mismatched local name or a too-small declared size do not hide an entry). "
+        "Every limit is reported when reached (JAR_MAX_ENTRIES 50000, JAR_READ_BUDGET_MB 64, "
+        "JAR_VIEW_MB 32, JAR_MAX_UNCOMPRESSED_MB 1024, JAR_TIME_BUDGET_S 90, nesting two levels), "
+        "because an archive that was not fully read must not look like one that was. Class files "
+        "are parsed: string constants are read from the constant pool, not grepped. Calibration: "
+        "365 real jars and 24 build-tool wrappers; no structural FAIL rule fires; one jar fails "
+        "correctly (google-http-client embeds a real PEM test key). .war, .ear and .aar are routed "
+        "but unmeasured. Bytecode is not decompiled, so what the code does is not examined.",
+        [
+            ("Container attacks",
+             "An entry path with .., a leading / or a drive letter (zip-slip); a symlink entry pointing "
+             "outside the archive or whose target cannot be read; a local file record the central "
+             "directory does not list; a file named .jar that is not an archive.",
+             "FAIL"),
+            ("Content that is not what its name says",
+             "A .class entry that is not bytecode; a PE, ELF or Mach-O stored under a non-native name "
+             "(logo.png) or prepended to a valid archive; a manifest Class-Path naming an http(s):// "
+             "or ftp:// jar.",
+             "FAIL"),
+            ("Hostile strings and secrets",
+             "curl | sh, a reverse shell, encoded PowerShell or certutil -urlcache in a resource, a "
+             "UTF-16 resource, a class constant or a class attribute; a PEM private key at any line "
+             "width; any of the 18 known credential formats.",
+             "FAIL"),
+            ("Build-tool wrappers",
+             "A gradle-wrapper.jar or maven-wrapper.jar with anything outside the expected tree and "
+             "the META-INF entries real wrappers carry (Multi-Release plus META-INF/versions runs a "
+             "smuggled main class), a missing GradleWrapperMain / MavenWrapperMain, or over 100 "
+             "entries. Every wrapper also warns: its shape is checked, not its contents, because the "
+             "official checksums are not embedded; compare its SHA-256 with gradle.org/release-checksums.",
+             "FAIL"),
+            ("Reviewable",
+             "Every jar (bytecode is not reviewed), Java agents, native libraries, scripts, nested "
+             "archives, symlinks, duplicate entry names, encrypted or unreadable entries, a shell "
+             "launch script before the archive, an absolute Class-Path, and every limit reached. "
+             "Padding a jar past the read budget therefore yields a WARN, not a FAIL: treat "
+             "jar:inspection_incomplete as 'not inspected'.",
+             "WARN"),
         ]
     ),
 ]
@@ -1485,8 +1915,9 @@ success_rows = [
     ("pip-audit / safety",          "L3", "0 vulnerabilities in requirements*.txt",       "Tool absent",                               "≥1 CVE in Python dependency",                          "OWASP A06"),
     ("npm audit",                   "L3", "0 vulnerabilities in package-lock.json",       "Tool absent",                               "≥1 vulnerable npm package",                            "OWASP A06"),
     ("Hardcoded credentials (grep)","L4", "No password/secret/token literal found",       "—",                                         "Credential literal in source code",                    "CWE-798, CWE-259"),
-    ("Hardcoded crypto key (grep)", "L4", "No PEM/private key block found",               "—",                                         "BEGIN RSA/EC/OPENSSH PRIVATE KEY found",               "CWE-321"),
-    ("Path traversal (grep)",       "L4", "No ../ pattern found",                         "—",                                         "../ or %2e%2e%2f found in code",                       "CWE-22"),
+    ("Hardcoded crypto key (grep)", "L4", "No PEM private key with a body found",       "Public certificate embedded",               "PRIVATE KEY header followed by a base64 body",         "CWE-321"),
+    ("Path traversal (grep)",       "L4", "No encoded, sensitive-path or composed ../",   "—",                                         "%2e%2e, ../etc/passwd, or ../ joined with input",      "CWE-22"),
+    ("Known credential formats",    "L4", "No provider-shaped token in any file",         "JWT embedded",                              "AWS / GitHub / Stripe / Slack / Google / Anthropic ... token", "CWE-798"),
     ("Potential SSRF (grep)",       "L4", "—",                                             "URL parameter passed to HTTP client",        "—",                                                    "CWE-918"),
     ("Weak crypto algorithm (grep)","L4", "—",                                             "MD5/SHA1/DES/RC4 usage found",              "—",                                                    "CWE-327"),
     ("Weak PRNG (grep)",            "L4", "—",                                             "Math.random() / rand() used",               "—",                                                    "CWE-338"),
@@ -1518,7 +1949,7 @@ success_rows = [
     ("system/exec (Ruby)",          "L5", "Not present",                                   "—",                                         "system() / exec() / backtick found",                   "CWE-78"),
     ("fmt.Sprintf SQL (Go)",        "L5", "Not present",                                   "—",                                         "fmt.Sprintf with SELECT/INSERT/UPDATE",                "CWE-89"),
     ("math/rand (Go)",              "L5", "Not present",                                   "—",                                         "\"math/rand\" import found",                           "CWE-338"),
-    ("DOCTYPE/ENTITY (XML)",        "L5", "Not present",                                   "—",                                         "<!DOCTYPE or <!ENTITY declaration",                    "CWE-611"),
+    ("Entity with a target (XML)",  "L5", "No external entity, no bomb",                  "Relative SYSTEM include / PUBLIC DTD",       "<!ENTITY SYSTEM file:/http:/absolute, or 4+ nested refs", "CWE-611"),
     ("hadolint (Dockerfile)",       "L5", "0 findings",                                    "Tool absent",                               "Any hadolint lint error",                              "OWASP A05"),
     (":latest tag (Dockerfile)",    "L5", "Not present",                                   "—",                                         "FROM image:latest used",                               "OWASP A05"),
     ("ENV secrets (Dockerfile)",    "L5", "Not present",                                   "—",                                         "ENV PASSWORD= or ENV TOKEN=",                          "CWE-798, CWE-250"),
@@ -1528,6 +1959,18 @@ success_rows = [
     ("privileged:true (YAML)",      "L5", "Not present",                                   "—",                                         "privileged: true in pod spec",                         "OWASP A05"),
     ("Binary file (.so/.exe/.elf)", "L5", "—",                                             "—",                                         "Any binary present → always FAIL",                     "CWE-494"),
     ("Archive (.zip/.tar.gz)",      "L5", "—",                                             "—",                                         "Any archive → always FAIL (rescan needed)",            "CWE-22"),
+    ("Java archive scanner",       "L5", "—",                                             "Any jar (bytecode not reviewed), agent, native lib, nested archive, wrapper, limit reached", "../ entry, non-bytecode .class, PE/ELF as logo.png, remote Class-Path, curl|sh, PEM key, token", "CWE-22, CWE-506, CWE-829"),
+    ("PDF scanner",                 "L5", "No active content",                             "Encrypted / undecodable stream",            "JavaScript, auto-action, Launch, embedded exe",        "CWE-94, CWE-78, CWE-506"),
+    ("Makefile scanner",            "L5", "No remote exec, no secrets",                    "sudo, chmod 777, plaintext http",           "curl|sh, reverse shell, credential, persistence",      "CWE-78, CWE-798"),
+    ("HTML scanner",                "L5", "No active content, no credentials",             "innerHTML, atob, new Function",             "eval, http:// script, hidden iframe, cookie exfil",    "CWE-94, CWE-79"),
+    ("CMake scanner",               "L5", "No configure-time fetch, no secrets in set()",  "install(CODE), shell -c, moving GIT_TAG",   "Plaintext download, credential, hardening off",        "CWE-494, CWE-798"),
+    ("PowerShell scanner",          "L5", "No fetch-and-execute, no encoded command",      "Invoke-Expression alone, Start-Process, policy bypass", "irm|iex, -enc, AMSI bypass, persistence, literal $Password", "CWE-78, CWE-506"),
+    ("Batch scanner",               "L5", "No certutil/bitsadmin fetch, no encoded command","net user /add, schtasks, ExecutionPolicy Bypass", "certutil -urlcache, curl|start, Run key, UAC off, rd C:\\", "CWE-78, CWE-912"),
+    ("setup.py scanner",            "L5", "No fetch-and-execute at install time",          "Overrides install, downloads, runs a program", "curl|sh, exec of a download or decoded blob, reverse shell", "CWE-78, CWE-94"),
+    ("Gradle scanner",              "L5", "No remote apply, no insecure repo, no spawn",   "exec / commandLine, configuration-time fetch", "apply from http, allowInsecureProtocol, spawn",     "CWE-494, CWE-78"),
+    ("Package manifests",           "L5", "No hostile install hook, no plaintext source",  "Install hook, --trusted-host, git dependency", "curl|sh hook, http:// dependency or index, URL credential", "CWE-494, CWE-798"),
+    ("Maven / Ant (XML)",           "L5", "No http repository, no shell exec",             "exec/antrun plugin present, system scope",  "http repository, exec of a shell, <get> over http",    "CWE-494, CWE-78"),
+    ("Rust / Kotlin / C#",          "L5", "No unsafe, no process spawn, no weak hash",     "—",                                         "unsafe block, Command / Runtime.exec / Process.Start, MD5, literal credential", "CWE-119, CWE-78, CWE-327"),
     ("xp_cmdshell (SQL)",           "L5", "Not present",                                   "—",                                         "xp_cmdshell or sp_OACreate",                           "CWE-78"),
     ("UNION SELECT (SQL)",          "L5", "Not present",                                   "—",                                         "UNION SELECT payload found",                           "CWE-89"),
 ]
@@ -1748,7 +2191,12 @@ para(doc, (
     "(without network connection) and presents findings in a color-coded table "
     "with OWASP, CWE, and CERT standard badges. "
     "Reports are stored in ${WORK_DIR}/reports/ with a unique timestamp "
-    "to build an audit history."
+    "to build an audit history. Everything the report prints about a file (its path and the text "
+    "of each finding) comes from the repository being scanned, so it is HTML-escaped: a file "
+    "named <img src=x onerror=...> or a hostile archive entry name is shown as text and cannot "
+    "run script in the reviewer's browser. The console output is likewise written through "
+    "printf, never echo -e, and control bytes in a name (including a real ESC byte) are replaced "
+    "before printing, so a file name cannot retitle or otherwise drive the reviewer's terminal."
 ))
 
 page_break(doc)
@@ -1974,8 +2422,8 @@ qa_rows = [
     ("D - artifacts",   "JSON validity and verdict field, HTML report, archive paths, "
                         "Excel Findings tab, clean output when redirected"),
     ("E - diff mode",   "--since scans exactly the changed files"),
-    ("F - static",      "Parse checks, shellcheck, and lint rules for two defect classes "
-                        "that have previously shipped"),
+    ("F - static",      "Parse checks, shellcheck, and lint rules for six defect classes "
+                        "that have previously shipped (each a rule or script that failed silently)"),
 ]
 for row in qa_rows:
     add_row(t, row, bold_first=True)

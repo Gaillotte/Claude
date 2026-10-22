@@ -49,6 +49,7 @@ Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantin
 | `SINCE_COMMIT` | _(unset)_ | Diff mode: only scan files changed since this commit SHA |
 | `OFFLINE` | `false` | Air-gapped: no scanner attempts a network call |
 | `OFFLINE_CACHE` | `$WORK_DIR/offline-cache` | Staged Semgrep rules, trivy DB, ClamAV signatures |
+| `JAR_MAX_ENTRIES`, `JAR_READ_BUDGET_MB`, `JAR_VIEW_MB`, `JAR_MAX_UNCOMPRESSED_MB`, `JAR_TIME_BUDGET_S` | `50000`, `64`, `32`, `1024`, `90` | Limits of the Java archive scanner; each one reached is reported (see "Java archives") |
 
 ## Allowlist and exclusions
 
@@ -724,7 +725,9 @@ went quadratic (a 2.3 KB jar took the pipeline 98 s); UTF-16 resources evaded ev
 bodies wrapped under 60 characters evaded the key rule; the shell-pipe rule had a 160-character
 window and did not accept `| /bin/sh`; a PE header past 4 KB and a fat Mach-O were not recognised;
 a payload in a class file's attribute area was not read; and the console helpers used `echo -e`,
-which turns a literal `\033` in a file or entry name into a real escape byte. False positives it
+which turns a literal `\033` in a file or entry name into a real escape byte (and fixing that
+exposed a second hole, a name containing the raw ESC byte: see "Reports and console output"). False
+positives it
 found: AppleDouble `._Name.class` forks, `wait-for-it.sh` (a `/dev/tcp` port probe), and
 extensionless native helpers, `.pyd` and `.o`.
 
@@ -1014,7 +1017,9 @@ case in the test suite.
 `FAKE`, a run of six `x`, ten zeros, or ten of any one character, and the canonical
 GitHub documentation token. Each pattern is bounded on both sides, so a token inside
 a longer identifier or a base64 blob does not count. Binary files are skipped (`grep
--I`), which is a limit: a token inside an image or a jar is not seen.
+-I`), which is a limit: a token inside an image is not seen. Jars are the exception: `scan_jar`
+extracts a text view of the archive (text resources, class-file string constants) and runs this
+same rule on it, through the shared `_known_cred_check`.
 
 **Not matched, by design:** providers whose secrets are bare hex or base64 with no
 prefix (Heroku, Mailgun, Twilio and the like). Nothing distinguishes them from a hash,
@@ -1041,7 +1046,9 @@ alongside the other two. A pattern beginning with a dash —
 2 with "unrecognized option". `if` reads 2 as false, so the rule never fires
 and never complains. `-e` ends the ambiguity.
 
-## The HTML report must not trust the repository
+## Reports and console output must not trust the repository
+
+### HTML report
 
 Everything the HTML report prints about a file comes from the repository being scanned. A
 file can be *named* `<img src=x onerror=…>`, and a finding message can carry text from inside
@@ -1055,6 +1062,21 @@ The JSON report was never affected (it is built with Python's `json`).
 `tests/run_tests.sh` (Layer D) scans a repository containing a file with that name and a jar
 with a `<script>` entry name, and asserts the report shows both escaped; the escaping order
 (`&` first) and each character were mutation-tested.
+
+### Console output
+
+The same text reaches the terminal, through two separate holes that were found one after the other.
+The helpers (`info`, `warn`, `ok`, `fail`, `fail_f`) used `echo -e`, which expands a **literal**
+`\033` in a file or archive-entry name into a real escape byte; they now print through
+`printf '%s'`. That fix was **incomplete**, and the test written for it only used the literal
+form: a name that really **contains** the ESC byte is printed raw by `%s`, so a file called
+`$'raw\033]0;pwned\007.txt'` still retitled the terminal. The helpers now replace every control
+byte (`[[:cntrl:]]`, which also stops a CR overwriting the line) in `_san` before printing, and
+`ai_transit.sh` filters the findings summary it prints through `jq` the same way (`jq -r` decodes
+the JSON's `\u001b` back into a raw byte). Two Layer D tests cover the two forms and a lint
+(`scan_pipeline.sh never passes $* through echo -e`) keeps `echo -e` from coming back. `fetch_repo.sh`,
+`docker-run.sh` and the `prepare_*`/`verify_*` scripts still use `echo -e`, but only on constant text
+and on values the operator supplies, never on a name taken from the scanned repository.
 
 ## Files with unknown extensions
 
@@ -1097,8 +1119,9 @@ python3 selfcheck.py --write-manifest
 
 ### Bug classes that have already shipped — lint enforces each
 
-All six are the same kind of defect: a rule or a script that fails *silently*,
-so nothing in a normal run shows it is broken.
+The first six are the same kind of defect: a rule or a script that fails *silently*,
+so nothing in a normal run shows it is broken. The seventh is the same discipline applied to
+output rather than to rules.
 
 - **Multi-character `IFS`.** `IFS=':::'` is a character *set*, silently identical to
   `IFS=':'`. This broke the allowlist and the semgrep result parser.
@@ -1122,6 +1145,10 @@ so nothing in a normal run shows it is broken.
   reproduces it). `ai_transit.sh` clears stale sidecars and defaults a missing
   verdict to `FAIL`, so it failed *closed* — wrong, but not unsafe. Use
   `sed -n '1,Np'`, which reads its whole input.
+- **`echo -e` on text from the repository.** File names, archive entry names and finding
+  messages are attacker-controlled; `echo -e` expands a literal `\033` in them into a real escape
+  byte. Print through `printf '%s'` after replacing control bytes (see "Reports and console output"
+  above). Linted: `scan_pipeline.sh` may not pass `$*` through `echo -e`.
 
 ## Tests
 

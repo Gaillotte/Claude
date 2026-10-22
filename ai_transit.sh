@@ -232,9 +232,9 @@ else
               "",
               "  Findings:",
               (.findings | to_entries[] | "    - " + .key + " → " + .value)
-            ' "$LATEST_REPORT" >&2
+            ' "$LATEST_REPORT" | tr '\001-\011\013-\037\177' '?' >&2
         else
-            cat "$LATEST_REPORT" >&2
+            tr '\001-\011\013-\037\177' '?' < "$LATEST_REPORT" >&2
         fi
     fi
 
