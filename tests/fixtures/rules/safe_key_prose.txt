@@ -1,0 +1,13 @@
+Writing about keys is not the same as committing one. Every line below failed
+the repository before the rule required a PEM header.
+
+  Store the PRIVATE KEY in a hardware security module, never in the repo.
+  The CERTIFICATE chain must be complete before deployment.
+  Pass BEGIN RSA to openssl to start the block.
+
+A public certificate is published by design and is not a secret, so it is
+worth noting rather than blocking:
+
+-----BEGIN CERTIFICATE-----
+MIIBkTCB+wIJAKZfixtureonlynotarealcertificatefixtureonlynotareal
+-----END CERTIFICATE-----

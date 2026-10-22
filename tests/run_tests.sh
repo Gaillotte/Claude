@@ -270,6 +270,15 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for tracker.htm)" "html_hidden_iframe" \
             ".htm is routed to the HTML scanner as well as .html"
 
+        # ── Universal layer: traversal and key material ──────────────────────
+        # Both of these rules run on EVERY file, and neither had any test
+        # coverage at all until now — while between them they quarantined 65%
+        # of real HTML and 30% of real Makefiles.
+        assert_contains "$(line_for traversal.txt)" "CWE-22:path_traversal" \
+            "encoded, sensitive-target and input-composed traversal is flagged"
+        assert_contains "$(line_for private_key.txt)" "CWE-321:hardcoded_private_key" \
+            "a PEM private key block is flagged"
+
         # ── False-positive guards: these must NOT be flagged ─────────────────
         # Regression guard for the P8 fix: the parameterised query form is the
         # correct, safe pattern and must never be reported as an injection.
@@ -299,6 +308,21 @@ for p,i in d.get('file_results',{}).items():
         # found in most bundled JS — an https script pinned with SRI, a
         # visible iframe with real dimensions, a relative form action, and a
         # cookie read in a different statement from its fetch().
+        # A literal "../" is a relative path, not an attack. This is the guard
+        # for the worst false positive the pipeline has had: -I../include and
+        # href="../commands" quarantined the repository.
+        SAFE_PATHS=$(echo "$F" | grep 'safe_relative_paths.txt' || true)
+        assert_not_contains "$SAFE_PATHS" "CWE-22" \
+            "does NOT flag an ordinary relative path such as -I../include"
+
+        # Writing about keys is not committing one, and a public certificate is
+        # published by design.
+        SAFE_KEY=$(echo "$F" | grep 'safe_key_prose.txt' || true)
+        assert_not_contains "$SAFE_KEY" "CWE-321" \
+            "does NOT flag the words PRIVATE KEY or CERTIFICATE in prose"
+        assert_contains "$SAFE_KEY" "crypto:public_certificate_embedded" \
+            "a public certificate is reported, but does not block"
+
         SAFE_HTML=$(echo "$F" | grep 'safe.html' || true)
         assert_not_contains "$SAFE_HTML" "CWE-95" \
             "does NOT flag unescape(encodeURIComponent(x)) as a payload"
@@ -671,6 +695,19 @@ if ! _skipping; then
             fail_test "${f} has no multi-character IFS" "$BAD"
         fi
     done
+
+    # grep_check must pass its pattern after -e. Without it a pattern that
+    # begins with a dash — "-----BEGIN RSA PRIVATE KEY-----" being the one that
+    # matters — is parsed as options, and grep exits 2 with "unrecognized
+    # option". `if` reads 2 as false, so the rule is silently inert: it never
+    # fires and never complains. Same family as the two bugs above.
+    BAD=$(grep -nE '^grep_check(_i)?\(\)' "${ROOT_DIR}/scan_pipeline.sh" \
+          | grep -v -- '-e ' || true)
+    if [[ -z "$BAD" ]]; then
+        ok_test "grep_check helpers pass their pattern after -e"
+    else
+        fail_test "grep_check helpers pass their pattern after -e" "$BAD"
+    fi
 
     # A RETURN trap is not scoped to the function that installs it: it keeps
     # firing as later functions return. If its body defers expansion — single

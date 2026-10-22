@@ -312,30 +312,60 @@ There is deliberately **no rule for a bare `$(eval …)`**: it fired on 7 of tho
 88 as ordinary metaprogramming, and the dangerous composition
 `$(eval $(shell curl …))` is already a FAIL under the parse-time fetch rule.
 
-## Known false positives in the universal layer (L4)
+## Traversal and key material in the universal layer (L4)
 
-`scan_universal_patterns()` runs on **every** file, and two of its rules fire
-heavily on ordinary content. Measured against the two real-world corpora used to
-validate `scan_html` and `scan_makefile`:
+`scan_universal_patterns()` runs on **every** file, so a loose rule here
+quarantines repositories wholesale. Two of its rules did exactly that until they
+were narrowed, and both now carry fixtures in each direction — neither had any
+test coverage at all before.
 
-| Rule | Real Makefiles | Real HTML | What it actually matched |
-|------|---------------|-----------|--------------------------|
-| `CWE-22:path_traversal_pattern` | 27 of 88 (30%) | 254 of 388 (65%) | `-I../include`, `VPATH = ../src`, `href="../commands"` |
-| `CWE-321:hardcoded_crypto_key` | — | 3 of 388 | the words `CERTIFICATE` and `PRIVATE KEY` in prose |
+| Rule | Real Makefiles | Real HTML |
+|------|---------------|-----------|
+| old `CWE-22:path_traversal_pattern` | 27 of 88 (30%) | 254 of 388 (65%) |
+| **narrowed** | **0 of 88** | **0 of 388** |
 
-Both are **FAIL**, so they quarantine the repository. This matters more than the
-percentages suggest: a repo whose only HTML is ordinary generated documentation
-is blocked regardless of what `scan_html` concludes, which makes the per-type
-verdict largely moot for those file types.
+A literal `../` is a relative path, not an attack: the old rule was failing
+`-I../include`, `VPATH = ../src` and `href="../commands"`. Traversal is now
+reported only in the three contexts that actually indicate it, each a separate
+finding:
 
-Neither is fixed yet, because both rules apply to every file type and narrowing
-them needs its own fixtures plus a check of what real traversal would stop being
-caught. The shape of the fix in each case:
+- `CWE-22:path_traversal_encoded` — `%2e%2e`, `..%2f`, `%252e%252e`. Encoding a
+  `..` has no innocent reading.
+- `CWE-22:path_traversal_to_sensitive_path` — traversal arriving at
+  `/etc/passwd`, `~/.ssh`, `~/.aws`, `id_rsa`, `system32`, `/proc/self`.
+- `CWE-22:path_traversal_composed_with_input` — traversal concatenated or
+  interpolated with something else (`"../" + name`, `f"{dir}/../{f}"`,
+  `$_GET['p'] . '../'`), which is the shape the vulnerability takes.
 
-- `CWE-22` should require a traversal *context* — a path joined to input, or
-  `%2e%2e` encoding — rather than any literal `../`.
-- `CWE-321` should require a full PEM header (`-----BEGIN … KEY-----`) rather
-  than the bare words.
+In the composed rule the quote **and** the slash are both required. Leaving
+either optional makes an ellipsis (`"..."`) match, which is how an earlier cut
+of this appeared to leave 14 hits on the HTML corpus.
+
+`CWE-321` now requires a real PEM header, `-----BEGIN … PRIVATE KEY-----`, and
+a public certificate is reported without blocking:
+
+- `CWE-321:hardcoded_private_key` — **FAIL**
+- `crypto:public_certificate_embedded` — **WARN**; a certificate is the public
+  half of the pair and is published by design, so it is not a leaked key.
+
+The old rule matched the bare words `PRIVATE KEY`, `CERTIFICATE` and
+`BEGIN RSA`, so prose such as "store the PRIVATE KEY in an HSM" failed the
+repository. Note that this was a *latent* false positive rather than a measured
+one: on the 388-file HTML corpus the old and new rules flag the same 3 files,
+and those 3 genuinely embed `-----BEGIN PRIVATE KEY-----` in an example TLS
+config. They are true positives.
+
+**After narrowing, 5 of 388 real HTML files fail and all 5 are true positives**
+(3 embedded private keys, 2 genuine `eval()` calls in the bundled Go trace
+viewer); the whole 88-file Makefile corpus passes.
+
+### grep_check must pass its pattern after `-e`
+
+A third silent-inert-rule bug, found while writing the PEM rule and now linted
+alongside the other two. A pattern beginning with a dash —
+`-----BEGIN RSA PRIVATE KEY-----` — is parsed by grep as options, so grep exits
+2 with "unrecognized option". `if` reads 2 as false, so the rule never fires
+and never complains. `-e` ends the ambiguity.
 
 ## Files with unknown extensions
 

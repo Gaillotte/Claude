@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 102/102 passed
+./tests/run_tests.sh          # Expected: ✔ 108/108 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 102/102 passed
+# Expected: ✔ 108/108 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1683,12 +1683,13 @@ like that is what `.transit-allow.json` is for:
   "reason": "vendored Go trace viewer; eval is inherent to the tool"}]
 ```
 
-> **Note.** On that same corpus the universal Layer 4 rules failed 254 of the
-> 388 files on `CWE-22:path_traversal_pattern`, matching ordinary relative links
-> such as `href="../commands"`. That is independent of `scan_html` and is
-> recorded under "Known false positives in the universal layer" in CLAUDE.md.
-> Until it is narrowed, expect repositories containing generated HTML
-> documentation to be quarantined for that reason rather than this one.
+> **Note.** On that same corpus the universal Layer 4 traversal rule used to
+> fail 254 of the 388 files, matching ordinary relative links such as
+> `href="../commands"`. It has since been narrowed to require an encoded `..`,
+> a sensitive target, or traversal composed with input, and now flags none of
+> them. After that change 5 of the 388 fail in total, and all 5 are true
+> positives: three embed a private key in an example TLS config, two are the Go
+> trace viewer's genuine `eval()`. See §11.2.4.
 
 ### 11.2.3 PDF scanning — no staging, and why that matters
 
@@ -1749,6 +1750,56 @@ WORK_DIR=/tmp/pdfcheck bash scan_pipeline.sh /tmp/ownpdfs --quiet
 **Not covered:** an encrypted PDF is reported but not decrypted, so its streams
 go uninspected. Treat a `pdf:encrypted_content_could_not_be_inspected` WARN as a
 file needing manual review, not a clean result.
+
+### 11.2.4 Traversal and key material — the rules that run on every file
+
+Most rules are chosen by file type. Two are not: path traversal and private key
+material are checked on **every** file by the Layer 4 universal patterns. That
+reach is why both were narrowed, and why both are worth understanding before you
+read a report.
+
+**Path traversal.** A literal `../` is a relative path, not an attack. The
+original rule matched any occurrence, which failed 254 of 388 real HTML files on
+links like `href="../commands"` and 27 of 88 real Makefiles on `-I../include` —
+quarantining repositories for containing documentation. Traversal is now
+reported only in the three contexts that indicate it:
+
+| Finding | Fires on |
+|---------|----------|
+| `CWE-22:path_traversal_encoded` | `%2e%2e`, `..%2f`, `%252e%252e` |
+| `CWE-22:path_traversal_to_sensitive_path` | `../../etc/passwd`, `..\\windows\\system32`, `../.ssh/`, `id_rsa` |
+| `CWE-22:path_traversal_composed_with_input` | `"../" + name`, `f"{dir}/../{f}"`, `$_GET['p'] . '../'` |
+
+So these are **not** reported, and should not be:
+
+```
+CFLAGS += -I../include                     VPATH = ../src
+<a href="../commands/index.html">…</a>     from ..models import User
+require('../package.json')                 #include "../common/defs.h"
+```
+
+**Key material.** `CWE-321:hardcoded_private_key` requires a real PEM header,
+`-----BEGIN … PRIVATE KEY-----`. The original rule matched the bare words
+`PRIVATE KEY`, `CERTIFICATE` and `BEGIN RSA`, so a document that merely
+*discussed* keys failed the repository.
+
+A public certificate is reported as `crypto:public_certificate_embedded`, a
+**WARN** rather than a FAIL: a certificate is the public half of the pair and is
+published by design, so it is not a leaked secret.
+
+Verify both directions:
+
+```bash
+WORK_DIR=/tmp/univcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected: traversal.txt and private_key.txt FAIL;
+#           safe_relative_paths.txt and safe_key_prose.txt do not
+#           (safe_key_prose.txt carries only the public-certificate WARN).
+```
+
+After narrowing, **5 of those 388 real HTML files fail in total and all 5 are
+true positives** — three embed a private key in an example TLS config, two are
+the bundled Go trace viewer's genuine `eval()`. The entire 88-file Makefile
+corpus passes.
 
 ### 11.3 Environment variables
 
@@ -2026,7 +2077,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 102/102 passed
+# Expected: ✔ 108/108 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2465,7 +2516,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  102/102 passed
+  ✔  108/108 passed
 ```
 
 ### 17.1 What each layer covers

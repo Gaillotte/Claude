@@ -239,11 +239,16 @@ record_fail() {
 }
 
 # grep helper: returns 0 if pattern found, never fails the script
-grep_check() { grep -qE "$1" "$2" 2>/dev/null; }
+# -e is not optional here. A pattern beginning with a dash — "-----BEGIN RSA
+# PRIVATE KEY-----" is the one that matters — is otherwise parsed as options,
+# and grep exits 2 with "unrecognized option". `if` reads 2 as false, so the
+# rule becomes silently inert: it never fires and never complains. -e marks the
+# argument as the pattern and ends the ambiguity.
+grep_check() { grep -qE -e "$1" "$2" 2>/dev/null; }
 # Case-insensitive variant. Needed where a convention fixes the case of the
 # thing being matched rather than the rule: Makefile variables are upper-case by
 # convention, so a lower-case PASSWORD pattern would never fire on one.
-grep_check_i() { grep -qiE "$1" "$2" 2>/dev/null; }
+grep_check_i() { grep -qiE -e "$1" "$2" 2>/dev/null; }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 1 — GLOBAL (malware, secrets, AV)
@@ -565,19 +570,51 @@ scan_universal_patterns() {
         triggered=true
     fi
 
-    # CWE-321 — Hardcoded cryptographic key
-    if grep_check \
-        '(PRIVATE KEY|CERTIFICATE|BEGIN RSA|BEGIN EC|BEGIN DSA|BEGIN OPENSSH)' \
-        "$f"; then
-        record_fail "$f" "CWE-321:hardcoded_crypto_key"
+    # CWE-321 — private key material committed to the repository.
+    #
+    # Requires a real PEM header. The previous rule matched the bare words
+    # PRIVATE KEY, CERTIFICATE, BEGIN RSA and friends, so any document that
+    # merely *discussed* keys failed the repository — and a public certificate,
+    # which is published by design and is not a secret, was reported as a
+    # leaked key. tests/fixtures/rules/safe_key_prose.txt guards both.
+    if grep_check '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----' "$f"; then
+        record_fail "$f" "CWE-321:hardcoded_private_key"
         triggered=true
     fi
+    # Reported, not blocked: a certificate is the public half of the pair.
+    if grep_check '-----BEGIN CERTIFICATE-----' "$f"; then
+        record_warn "$f" "crypto:public_certificate_embedded"
+    fi
 
-    # CWE-22 — Path traversal
-    if grep_check \
-        '(\.\./|\.\.\\|%2e%2e%2f|%252e%252e)' \
+    # CWE-22 — Path traversal.
+    #
+    # A literal "../" is a relative path, not an attack. Matching it failed 254
+    # of 388 real HTML files on href="../commands" and 27 of 88 real Makefiles
+    # on -I../include, quarantining repositories for containing ordinary
+    # documentation and build rules. The rule therefore requires one of the
+    # three contexts that do indicate traversal, and
+    # tests/fixtures/rules/safe_relative_paths.txt guards the distinction.
+    #
+    # Encoded: percent-encoded ".." has no innocent reading.
+    if grep_check_i '(%2e%2e|%252e%252e|\.\.%2f|\.\.%5c|%2f\.\.|%5c\.\.)' "$f"; then
+        record_fail "$f" "CWE-22:path_traversal_encoded"
+        triggered=true
+    fi
+    # Target: traversal that arrives somewhere it has no business reaching.
+    if grep_check_i \
+        '\.\.[/\\][^[:space:]"'"'"'`]*((etc/)?(passwd|shadow)|\.ssh/|\.aws/|id_rsa|system32|proc/self)' \
         "$f"; then
-        record_fail "$f" "CWE-22:path_traversal_pattern"
+        record_fail "$f" "CWE-22:path_traversal_to_sensitive_path"
+        triggered=true
+    fi
+    # Composed: traversal concatenated or interpolated with something else,
+    # which is the shape the vulnerability actually takes. The quote and the
+    # slash are both required — leaving either optional made an ellipsis
+    # ("...") match, which is how this first read as clean on the corpora.
+    if grep_check_i \
+        '(["'"'"'`]\.\.[/\\]["'"'"'`][[:space:]]*[+.][[:space:]]*|[+.][[:space:]]*["'"'"'`]/?\.\.[/\\]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[/\\]\.\.[/\\]|\.\.[/\\]\$\{?[A-Za-z_]|\{[a-z_]+\}[/\\]\.\.[/\\])' \
+        "$f"; then
+        record_fail "$f" "CWE-22:path_traversal_composed_with_input"
         triggered=true
     fi
 

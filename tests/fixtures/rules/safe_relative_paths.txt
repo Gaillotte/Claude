@@ -1,0 +1,13 @@
+Ordinary relative paths. A literal "../" is a relative path, not an attack,
+and before this was narrowed it failed 254 of 388 real HTML files and 27 of 88
+real Makefiles -- quarantining a repository for containing documentation.
+
+  CFLAGS += -I../include
+  VPATH = ../src
+  <a href="../commands/index.html">Commands</a>
+  <link rel="stylesheet" href="../_static/style.css">
+  from ..models import User
+  require('../package.json')
+  #include "../common/defs.h"
+  cd .. && make
+  sys.path.insert(0, os.path.dirname(__file__) + "/..")
