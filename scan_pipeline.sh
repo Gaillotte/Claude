@@ -1789,6 +1789,80 @@ scan_gradle() {
     $failed || record_pass "$f"
 }
 
+# ── setup.py and conanfile.py ────────────────────────────────────────────────
+# setup.py runs on a source `pip install`, and a Conan recipe runs on `conan
+# install` / `conan create`: both are install-time code, so everything in them
+# fires before the package is imported by anything. That gives them a risk model
+# of their own, and the generic Python rules fit it badly. os.system and
+# subprocess are ordinary build tools here; what is not ordinary is fetching and
+# then executing.
+#
+# The generic rules failed 4 of 36 real setup.py files on this host, and 3 of
+# the 4 were idioms rather than attacks: `exec(fp.read(), version)` — loading a
+# LOCAL version file into a namespace, in two files — and a literal
+# `os.system('pip install .')`, which the "command injection" rule flagged even
+# though a literal command cannot be injected into.
+#
+# This REPLACES scan_python for these two filenames, and that is a trade-off, not
+# a free win: bandit and the generic eval/exec/os.system FAILs no longer run on
+# them. The attacks those rules would have caught here are covered by the
+# explicit rules below (decode-and-execute, execute-a-network-response, pipe to a
+# shell, reverse shell, persistence). All install-time FAIL rules measured 0 of
+# 36 real setup.py.
+scan_setup_py() {
+    local f="$1"
+    local failed=false
+
+    # CWE-78 — a download piped into a shell.
+    if grep_check '(curl|wget)[^"'"'"']*\|[[:space:]]*(sudo[[:space:]]+)?(ba|z)?sh' "$f"; then
+        record_fail "$f" "CWE-78:setup_py_fetches_and_executes"
+        failed=true
+    fi
+    # CWE-95 — exec/eval applied to something fetched, on one line.
+    if grep_check '(exec|eval)[[:space:]]*\([^)]*(urlopen|urlretrieve|requests\.(get|post)|urllib|https?://)' "$f"; then
+        record_fail "$f" "CWE-95:setup_py_executes_a_network_response"
+        failed=true
+    fi
+    # CWE-95 — a decoded blob that is then executed. The two usually sit on
+    # different lines (payload = b64decode(...) ; exec(payload)), so this is a
+    # whole-file test: decoding AND executing in one setup script has no
+    # ordinary reading.
+    if grep_check '(exec|eval)[[:space:]]*\([[:space:]]*(base64\.[a-z0-9_]*decode|codecs\.decode|zlib\.decompress|bytes\.fromhex|binascii\.[a-z]*)' "$f" \
+       || { grep_check '(b64decode|a85decode|b32decode|bytes\.fromhex|zlib\.decompress|binascii\.unhexlify)' "$f" \
+            && grep_check '(^|[^[:alnum:]_.])(exec|eval)[[:space:]]*\(' "$f"; }; then
+        record_fail "$f" "CWE-95:setup_py_decodes_and_executes"
+        failed=true
+    fi
+    # CWE-78 — a socket handed to a shell, or a pty.
+    if grep_check '(pty\.spawn|/dev/tcp/|nc[[:space:]]+-[a-z]*e[[:space:]])' "$f" \
+       || { grep_check 'socket\.socket[[:space:]]*\(' "$f" \
+            && grep_check '(/bin/(ba)?sh|cmd\.exe|dup2[[:space:]]*\()' "$f"; }; then
+        record_fail "$f" "CWE-78:setup_py_reverse_shell"
+        failed=true
+    fi
+    # CWE-912 — an installer that writes into somewhere that runs later.
+    if grep_check '(authorized_keys|crontab|/etc/cron\.|\.ssh/id_|/etc/systemd/system)' "$f"; then
+        record_fail "$f" "CWE-912:setup_py_persistence"
+        failed=true
+    fi
+
+    # ── Reported, not blocked ────────────────────────────────────────────
+    # Overriding install/develop/egg_info means the package runs its own code
+    # during installation. 0 of 36 real files (build_ext / build_py are common
+    # and are not reported).
+    if grep_check 'cmdclass[[:space:]]*=[^#]*['"'"'"](install|develop|egg_info)['"'"'"]' "$f"; then
+        record_warn "$f" "setup:overrides_install_command_runs_package_code_at_install_time"
+    fi
+    if grep_check '(urlretrieve|urlopen|requests\.(get|post)|[^[:alnum:]_](wget|curl)[[:space:]])' "$f"; then
+        record_warn "$f" "setup:downloads_something_at_install_time"
+    fi
+    if grep_check '(os\.system|subprocess\.(call|run|check_call|check_output|Popen))' "$f"; then
+        record_warn "$f" "setup:runs_a_program_at_install_time"
+    fi
+
+    $failed || record_pass "$f"
+}
+
 # ── CMake ────────────────────────────────────────────────────────────────────
 # Two things make CMake worth its own scanner.
 #
@@ -2762,6 +2836,10 @@ classify_file() {
         # send it to scan_kotlin, which knows Kotlin source and not Gradle.
         gradle.properties|gradle-wrapper.properties|*.gradle|*.gradle.kts)
                                               scan_gradle   "$f"; return ;;
+        # install-time Python: setup.py on `pip install`, a Conan recipe on
+        # `conan install`. Matched by name because the extension is just .py and
+        # would route to scan_python, whose rules fit these files badly.
+        setup.py|conanfile.py)                scan_setup_py "$f"; return ;;
     esac
 
     case ".$ext" in
@@ -3057,7 +3135,7 @@ report = {
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
                      "PDF-Active-Content", "Build-Script-Hardening",
-                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening"],
+                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},

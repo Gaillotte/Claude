@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -353,6 +353,46 @@ WORK_DIR=/tmp/mkcheck bash scan_pipeline.sh /tmp/realmk --quiet
 There is deliberately **no rule for a bare `$(eval …)`**: it fired on 7 of those
 88 as ordinary metaprogramming, and the dangerous composition
 `$(eval $(shell curl …))` is already a FAIL under the parse-time fetch rule.
+
+## setup.py and conanfile.py
+
+`scan_setup_py()` handles `setup.py` and `conanfile.py` **by basename**. `setup.py`
+runs on a source `pip install`, and a Conan recipe on `conan install`: both are
+install-time code, so everything in them fires before the package is imported by
+anything. They route here rather than to `scan_python` because the risk model is
+different — `os.system` and `subprocess` are ordinary build tools in a setup script,
+and fetching-then-executing is the thing that is not.
+
+The generic Python rules failed **4 of 36** real `setup.py` files, and three of the
+four were idioms rather than attacks:
+
+- `exec(fp.read(), version)` — loading a **local** version file into a namespace
+  (two files). The generic `exec(` rule cannot tell it from `exec(payload)`.
+- `os.system('pip install .')` / `os.system("twine upload dist/*")` — a **literal**
+  command, which the "command injection" rule flagged although a literal cannot be
+  injected into.
+
+**FAIL** — a download piped into a shell · `exec`/`eval` of a network response ·
+decoding a blob **and** executing in one file · a socket handed to a shell, or a
+`pty` · writing `authorized_keys`, a crontab or a systemd unit.
+**WARN** — overriding `install`/`develop`/`egg_info` · downloading at install time ·
+running a program.
+
+The decode and reverse-shell rules each have a **whole-file arm**, because the
+pieces sit on different lines (`payload = b64decode(…)` … `exec(payload)`). Both arms
+were mutation-tested: delete one and exactly its own assertion goes red.
+
+> **This replaces `scan_python` for these two filenames, and that is a trade-off, not
+> a free win.** `bandit` and the generic `eval`/`exec`/`os.system` FAILs no longer run
+> on them. The attacks those rules would have caught in a setup script are covered by
+> the explicit rules above, and every install-time FAIL rule measured **0 of 36**.
+
+Result: 36 real `setup.py` go from 4 FAIL to **0 FAIL, 3 WARN**. `build.rs` was
+considered and **not** extended: this host has no `build.rs` to measure against, and
+`std::process::Command` in one is ordinary (it is how `pkg-config` and `cc` are
+invoked), so a rule written without a corpus would only guess. It still reaches
+`scan_rust`, whose `unsafe` and `Command` FAILs will over-fire on legitimate build
+scripts; that is a known gap, not a covered case.
 
 ## Gradle scanning
 

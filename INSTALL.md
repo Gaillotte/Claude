@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 170/170 passed
+./tests/run_tests.sh          # Expected: ✔ 177/177 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 170/170 passed
+# Expected: ✔ 177/177 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1564,6 +1564,7 @@ tool; nothing to stage, no flags required.
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
+| `setup.py` / `conanfile.py` (`scan_setup_py`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Gradle (`scan_gradle`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Package manifests (`scan_package_json`, `scan_requirements`) | L5 | Built in; needs `python3` (standard library) to parse JSON, otherwise falls back to patterns with a WARN |
 | XML / Maven / Ant (`scan_xml`) | L5 | Built in; pattern matching, plus `python3` to strip comments — falls back to scanning the raw file without it |
@@ -1991,6 +1992,45 @@ any code the repository declares (`.jar` is in neither the binary nor the archiv
 extension list, so it is recorded PASS); version catalogs; and `-SNAPSHOT` versions,
 which are dependency hygiene rather than an execution vector.
 
+### 11.2.9 `setup.py` and `conanfile.py`
+
+Matched by name. `setup.py` runs on a source `pip install` and a Conan recipe on
+`conan install`, so both execute before the package is used. Pure pattern matching;
+nothing to stage.
+
+They are scanned on their own rules instead of the generic Python ones because the
+risk differs: in a setup script `os.system` and `subprocess` are ordinary build
+tools, and what is not ordinary is fetching and then executing. The generic rules
+failed 4 of 36 real `setup.py` files, three on idioms:
+
+| Ordinary — not reported | Reported |
+|-------------------------|----------|
+| `exec(fp.read(), version)` — loading a local version file | `exec(urlopen(url).read())` |
+| `os.system("twine upload dist/*")` — a literal command | `os.system("curl … \| bash")` |
+| `subprocess.check_output(["git", "describe"])` | `exec(payload)` after `b64decode(…)` in the same file |
+| a `build_ext` subclass | a socket handed to `/bin/sh`; a write to `authorized_keys` |
+
+Reported as **FAIL**: a download piped into a shell; `exec`/`eval` of a network
+response; decoding a blob and executing in one file; a socket handed to a shell, or a
+`pty`; writing `authorized_keys`, a crontab or a systemd unit. Reported as **WARN**:
+overriding `install` / `develop` / `egg_info`, downloading at install time, and running
+a program at all.
+
+**This replaces the generic Python scan for these two filenames.** `bandit` and the
+generic `eval` / `exec` / `os.system` rules no longer run on them; the attacks they
+would catch in a setup script are covered by the explicit rules, which measured zero
+hits on 36 real files. On those files the result moves from 4 FAIL to 0 FAIL, 3 WARN.
+
+`build.rs` is not extended: there is nothing on the reference host to measure against,
+and `std::process::Command` is how a build script legitimately calls `pkg-config`. It
+still reaches the Rust scanner, whose `unsafe` and `Command` rules will over-fire on
+build scripts — a known gap.
+
+```bash
+WORK_DIR=/tmp/setupcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected FAIL: setup_evil/setup.py   Expected PASS (WARN): setup_safe/setup.py
+```
+
 ### 11.3 Environment variables
 
 | Variable | Default | Purpose |
@@ -2267,7 +2307,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 170/170 passed
+# Expected: ✔ 177/177 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2706,7 +2746,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  170/170 passed
+  ✔  177/177 passed
 ```
 
 ### 17.1 What each layer covers

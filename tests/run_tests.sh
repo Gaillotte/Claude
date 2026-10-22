@@ -270,6 +270,22 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for tracker.htm)" "html_hidden_iframe" \
             ".htm is routed to the HTML scanner as well as .html"
 
+        # ── setup.py ─────────────────────────────────────────────────────────
+        # setup.py runs on a source `pip install`, so it is install-time code with
+        # its own risk model: os.system and subprocess are ordinary build tools
+        # there, and fetching-then-executing is the thing that is not. The generic
+        # Python rules failed 4 of 36 real setup.py files on ordinary idioms.
+        assert_contains "$(line_for setup_evil/setup.py)" "CWE-78:setup_py_fetches_and_executes" \
+            "setup.py piping a download into a shell is flagged"
+        assert_contains "$(line_for setup_evil/setup.py)" "CWE-95:setup_py_executes_a_network_response" \
+            "setup.py exec()-ing a network response is flagged"
+        assert_contains "$(line_for setup_evil/setup.py)" "CWE-95:setup_py_decodes_and_executes" \
+            "setup.py decoding a blob and exec()-ing it is flagged"
+        assert_contains "$(line_for setup_evil/setup.py)" "CWE-78:setup_py_reverse_shell" \
+            "setup.py opening a socket to a shell is flagged"
+        assert_contains "$(line_for setup_evil/setup.py)" "CWE-912:setup_py_persistence" \
+            "setup.py writing authorized_keys is flagged"
+
         # ── Gradle ───────────────────────────────────────────────────────────
         # A .gradle script is not a declarative file with a few dangerous
         # constructs in it: it is a program, compiled and evaluated in full at
@@ -435,6 +451,15 @@ for p,i in d.get('file_results',{}).items():
             "does NOT fail an ordinary package.json (husky, node -e, file: link)"
         assert_contains "$SAFE_PKG" "npm:install_time_hook_present" \
             "an install-time hook is reported, but does not block"
+        # The near-misses, each from a real setup.py: exec of a local version
+        # file, a literal os.system (requests, ruamel.yaml), a git subprocess and
+        # a build_ext subclass. Reported as a program being run; none may FAIL.
+        SAFE_SETUP=$(echo "$F" | grep 'setup_safe/setup.py' || true)
+        assert_not_contains "$SAFE_SETUP" "[FAIL]" \
+            "does NOT fail exec(fp.read(), ns), a literal os.system or a git subprocess"
+        assert_contains "$SAFE_SETUP" "setup:runs_a_program_at_install_time" \
+            "setup.py running a program is reported, but does not block"
+
         # The measured near-misses. POM metadata over http:// matched 21 of 6249
         # real build scripts; query.execute() is a Gradle API call (2 of the 3
         # real .execute() hits); commandLineIncludePatterns is a property whose
