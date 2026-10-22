@@ -108,7 +108,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L1 | `~line 75–360` | betterleaks, detect-secrets, ClamAV, YARA |
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
-| L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09) |
+| L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09), plus known credential formats (18 providers) |
 | L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
@@ -638,6 +638,63 @@ headers push the body down.
 **After narrowing, 2 of 388 real HTML files fail**, both genuine `eval()` calls
 in the bundled Go trace viewer; the whole 88-file Makefile corpus, the 3362-file
 XML corpus and the 1116-file CMake corpus have no `CWE-321` finding at all.
+
+### Known credential formats
+
+Providers issue tokens with a fixed, distinctive shape: a literal prefix plus a
+body of known length and alphabet. Matching the **shape** is a different and much
+more precise test than matching a *name* such as `password`, and it works in any
+file type, quoted or not — `export GITHUB_TOKEN=ghp_…`, a TOML value, a URL, a
+comment. The per-type credential rules cannot do that: they expect `key = "value"`,
+so an unquoted value in a Makefile, a `.properties` file, a CMake `set()` or an HTML
+attribute is invisible to them, and the same gap had to be patched separately in
+`scan_makefile`, `scan_cmake`, `scan_html` and `scan_gradle`.
+
+`CWE-798:known_credential_format_<provider>` is **FAIL** for: AWS access key ids and
+secret keys (`AKIA…`, `aws_secret_access_key`), GitHub (`ghp_`/`gho_`/`ghu_`/`ghs_`/
+`ghr_` and `github_pat_`), GitLab `glpat-`, Stripe live keys (`sk_live_`/`rk_live_` —
+test keys are deliberately not matched), Slack `xox[bpars]-`, Google API keys
+(`AIza…`) and OAuth tokens (`ya29.`), SendGrid `SG.`, npm `npm_`, PyPI `pypi-AgEIcHlw…`,
+Hugging Face `hf_`, Anthropic `sk-ant-`, OpenAI `sk-proj-` and legacy `sk-`, Shopify
+`shpat_`, and DigitalOcean `dop_v1_`. A **JWT** is a **WARN**: it is a signed token
+and not necessarily a secret (Supabase's anon key is one and is public by design).
+
+**This is deliberately not a generic `name = value` rule.** That was measured and
+rejected: it fires on **34 of 800** real `.py` files (`token = tokens.pop(0)`),
+because in a programming language `name = expr` is an expression. A fixed prefix and
+length has no such reading. It is also why the existing universal credential rule
+requires a quote.
+
+**Calibration.** Over 100,052 files of source, docs and tests (gradle, spring-boot,
+kafka, elasticsearch), the ~6,600 other real files collected here, and the host's
+`/usr /opt /etc /var /mnt`: no false positive on a real file. The only matches were
+AWS's own documentation key (18 times, removed by the `EXAMPLE` exclusion) and three
+genuine Google API keys hardcoded in `gcloud` and `gsutil`. What the host *cannot*
+test is recall — it holds almost no real tokens — so every provider has a positive
+case in the test suite.
+
+**Placeholders are excluded:** `EXAMPLE`, `SAMPLE`, `DUMMY`, `YOUR`, `REDACTED`,
+`FAKE`, a run of six `x`, ten zeros, or ten of any one character, and the canonical
+GitHub documentation token. Each pattern is bounded on both sides, so a token inside
+a longer identifier or a base64 blob does not count. Binary files are skipped (`grep
+-I`), which is a limit: a token inside an image or a jar is not seen.
+
+**Not matched, by design:** providers whose secrets are bare hex or base64 with no
+prefix (Heroku, Mailgun, Twilio and the like). Nothing distinguishes them from a hash,
+and a rule for them would be a guess.
+
+**The tests build every token at run time.** `tests/run_tests.sh` assembles each one
+from a context, a prefix and two halves of a body held in separate quoted strings, so
+the file never contains a contiguous token. Two reasons: this pipeline run over its own
+repository would otherwise flag its own test suite, and a secret scanner on the remote
+may refuse a push containing provider-shaped strings. The near-miss file carries the
+AWS example key, a placeholder body, a repeated character, the GitHub documentation
+token, a Stripe *test* key, a git SHA, and a token embedded mid-identifier; the
+exclusion, the word boundary and the repeated-character rule were each mutation-tested.
+
+Cost: one extra `grep` per file — about **9%** on the 1116-file CMake corpus (69.1 s
+against 63.3 s) — because a single alternation decides whether any provider is present
+before each is named.
 
 ### grep_check must pass its pattern after `-e`
 

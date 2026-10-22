@@ -625,6 +625,96 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Known credential formats, built at run time
+# ═════════════════════════════════════════════════════════════════════════════
+# Each token below is assembled from a context, a prefix and two halves of a
+# body that sit in separate quoted strings, so this file never holds a
+# contiguous token. Two reasons: this pipeline run over its own repository
+# would otherwise flag its own test suite, and a secret scanner on the remote
+# may refuse a push that contains provider-shaped strings.
+SECR="${SCRATCH}/known_secrets"
+mkdir -p "$SECR"
+put_secret() { printf '%s\n' "$2" > "${SECR}/known_$1.txt"; }
+put_secret aws_access_key_id "aws_access_key_id = ""AKIA""WSLDPOPA""8IDMMTGM"
+put_secret aws_secret_access_key "aws_secret_access_key = ""toB5aoVsS8hhss6inCQm""w31l26fqXAhjVmMyamjX"
+put_secret github_token "export GITHUB_TOKEN=""ghp_""oKFEOeVI2WdxcX4L8y""aUEcp4bWTkt2HGVHQx"
+put_secret github_fine_grained_pat "token: ""github_pat_""Uc2tDa29hb5sLLd6cUGXayGrBbDUvQ""mSuP4MJ5SQGUH7FrVQ2quG8z1YJ0Kw"
+put_secret gitlab_pat "GITLAB_TOKEN=""glpat-""Twtt7L5tbe""6IDp_3st9F"
+put_secret stripe_live_key "STRIPE_KEY=""sk_live_""KUbMBGKxflzvZd""u34gMRmaUrUwyM"
+put_secret slack_token "SLACK_BOT_TOKEN=""xoxb-""871990237361-137326652659""-tZddgPODHoEidsYlVEEBxzud"
+put_secret google_api_key "key = ""AIza""CrCX6iZlxlj7fDNuR""GwJSfhIENqKTTiqt2x"
+put_secret google_oauth_token "access = ""ya29.""N5OXzzezpSWT9SqRzG9l""Up--cLLpQJa3WIeMosrs"
+put_secret sendgrid_key "SENDGRID=""SG.""mhSJnHLwAXcUnTf6MvPTVg.QU9gnSsHUU""FRleDJAlNhCYlhQupaD70ahgOQ0TvJDK5"
+put_secret npm_token "//registry.npmjs.org/:_authToken=""npm_""NMNGQAItkyWqEc3VQh""aX31ke6Uu53X2ohd5c"
+put_secret pypi_token "password = ""pypi-AgEIcHlwaS5vcmc""8dNKdzVHlw6s5wWOroxjtBhYeNvuvg""lFU9leuBZHYyEBrxKbg2Ir6zOKRuhl"
+put_secret huggingface_token "HF_TOKEN=""hf_""HyqmHLPFDUi4OOEit""j59FfZTWuE7xVAuwQ"
+put_secret anthropic_key "ANTHROPIC_API_KEY=""sk-ant-api03-""DRlCCy2XaflpZPEIkEosNeLJvFZJX_ucvqIDITZFgE0_F""bvIY3nXCZY72Co5fzjVj-zG5eISJVAG7_rr0xKBvwNsmJ"
+put_secret openai_project_key "OPENAI_API_KEY=""sk-proj-""8VpoAuXnm-sMkbiTANEBhAxQ""FknjLLlzjkXnHlNfyeG6hf9q"
+put_secret openai_legacy_key "OPENAI_API_KEY=""sk-""WXrSZrLEeoS7bCDUC64yhrYq""zb3joq4YDtfomwplf3LZ3cws"
+put_secret shopify_token "SHOPIFY=""shpat_""cd7701ff77976566""445ff51d43c0a76f"
+put_secret digitalocean_token "DO_TOKEN=""dop_v1_""81e402f19126284c122a510e2ed5e81d""a5487e8579f405b60532147c46e01bfa"
+put_secret jwt "session = ""eyJlCIxr89LcspvfiHbtwjH_j3Db0BtCH9sY"".""eyJFsvZc6Xjc3Gy4Orwd""naWW-iTRnXvaZtm9eaygGWI"".""3r90T2kmsR95izWTG1E3s9nE_5jG_f34X5FPbxph9y5"
+# Near-misses: every line here is something a naive pattern flags.
+{
+    echo "aws_access_key_id = ""AKIAIOSFODNN7""EXAMPLE"      # AWS's own documentation key
+    echo "token = ""ghp_""$(printf 'x%.0s' $(seq 1 36))"    # placeholder body
+    echo "token = ""ghp_""$(printf 'A%.0s' $(seq 1 36))"    # one repeated character
+    echo "token = ""ghp_16C7e42F""292c6912E7710c838347Ae178B4a"  # GitHub's documentation example
+    echo "STRIPE_KEY=""sk_test_""PP7tbgUZLQPJww5wQMMyBQQn5zpG"           # test mode, harmless
+    echo "x = hf_config_value_that_is_long_enough_to_look_real"   # underscores end the token
+    echo "commit 3a7bd3e2360a3d29eea436fcfb7e44c735d117c4"        # a git sha
+    echo "id = zzAKIA""Z961ELEFI1I64MFQ""zz"             # token embedded mid-identifier
+} > "${SECR}/known_safe.txt"
+run_pipeline "$SECR" --quiet
+FK=""
+[[ -n "$RUN_JSON" ]] && FK=$(json_findings "$RUN_JSON")
+kline() { echo "$FK" | grep "/$1 " || true; }
+
+assert_contains "$(kline known_aws_access_key_id.txt)" "CWE-798:known_credential_format_aws_access_key_id" \
+    "an AWS access key id is flagged"
+assert_contains "$(kline known_aws_secret_access_key.txt)" "CWE-798:known_credential_format_aws_secret_access_key" \
+    "an AWS secret access key is flagged"
+assert_contains "$(kline known_github_token.txt)" "CWE-798:known_credential_format_github_token" \
+    "a GitHub personal access token is flagged"
+assert_contains "$(kline known_github_fine_grained_pat.txt)" "CWE-798:known_credential_format_github_fine_grained_pat" \
+    "a GitHub fine-grained token is flagged"
+assert_contains "$(kline known_gitlab_pat.txt)" "CWE-798:known_credential_format_gitlab_pat" \
+    "a GitLab access token is flagged"
+assert_contains "$(kline known_stripe_live_key.txt)" "CWE-798:known_credential_format_stripe_live_key" \
+    "a Stripe live secret key is flagged"
+assert_contains "$(kline known_slack_token.txt)" "CWE-798:known_credential_format_slack_token" \
+    "a Slack token is flagged"
+assert_contains "$(kline known_google_api_key.txt)" "CWE-798:known_credential_format_google_api_key" \
+    "a Google API key is flagged"
+assert_contains "$(kline known_google_oauth_token.txt)" "CWE-798:known_credential_format_google_oauth_token" \
+    "a Google OAuth token is flagged"
+assert_contains "$(kline known_sendgrid_key.txt)" "CWE-798:known_credential_format_sendgrid_key" \
+    "a SendGrid key is flagged"
+assert_contains "$(kline known_npm_token.txt)" "CWE-798:known_credential_format_npm_token" \
+    "an npm token is flagged"
+assert_contains "$(kline known_pypi_token.txt)" "CWE-798:known_credential_format_pypi_token" \
+    "a PyPI token is flagged"
+assert_contains "$(kline known_huggingface_token.txt)" "CWE-798:known_credential_format_huggingface_token" \
+    "a Hugging Face token is flagged"
+assert_contains "$(kline known_anthropic_key.txt)" "CWE-798:known_credential_format_anthropic_key" \
+    "an Anthropic API key is flagged"
+assert_contains "$(kline known_openai_project_key.txt)" "CWE-798:known_credential_format_openai_project_key" \
+    "an OpenAI project key is flagged"
+assert_contains "$(kline known_openai_legacy_key.txt)" "CWE-798:known_credential_format_openai_legacy_key" \
+    "a legacy OpenAI key is flagged"
+assert_contains "$(kline known_shopify_token.txt)" "CWE-798:known_credential_format_shopify_token" \
+    "a Shopify token is flagged"
+assert_contains "$(kline known_digitalocean_token.txt)" "CWE-798:known_credential_format_digitalocean_token" \
+    "a DigitalOcean token is flagged"
+assert_contains "$(kline known_jwt.txt)" "jwt_embedded" \
+    "a JWT is reported, but does not block"
+assert_not_contains "$(kline known_jwt.txt)" "[FAIL]" \
+    "a JWT alone does NOT fail the file"
+assert_not_contains "$(kline known_safe.txt)" "[FAIL]" \
+    "does NOT flag documentation keys, placeholders, test keys or mid-identifier matches"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LAYER C — Flags and features
 # ═════════════════════════════════════════════════════════════════════════════
 group "Layer C — flags and features"

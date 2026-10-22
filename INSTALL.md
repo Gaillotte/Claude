@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 177/177 passed
+./tests/run_tests.sh          # Expected: ✔ 198/198 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 177/177 passed
+# Expected: ✔ 198/198 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1564,6 +1564,7 @@ tool; nothing to stage, no flags required.
 | Makefile scanner (`scan_makefile`) | L5 | Built in; pure pattern matching, nothing to stage |
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
+| Known credential formats (Layer 4, every file) | L4 | Built in; pure pattern matching, nothing to stage |
 | `setup.py` / `conanfile.py` (`scan_setup_py`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Gradle (`scan_gradle`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Package manifests (`scan_package_json`, `scan_requirements`) | L5 | Built in; needs `python3` (standard library) to parse JSON, otherwise falls back to patterns with a WARN |
@@ -2031,6 +2032,52 @@ WORK_DIR=/tmp/setupcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 # Expected FAIL: setup_evil/setup.py   Expected PASS (WARN): setup_safe/setup.py
 ```
 
+### 11.2.10 Known credential formats — the rule that runs on every file
+
+Providers issue tokens with a fixed shape: a literal prefix, then a body of known
+length and alphabet. Matching that shape works in **any** file type, quoted or not —
+`export GITHUB_TOKEN=ghp_…`, a TOML value, a URL, a comment — which the per-type
+credential rules cannot do, since they expect `key = "value"`. Pure pattern matching;
+nothing to stage, identical offline.
+
+| Provider | Matched on | | Provider | Matched on |
+|---|---|---|---|---|
+| AWS | `AKIA…`, `aws_secret_access_key` | | npm | `npm_…` |
+| GitHub | `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_` | | PyPI | `pypi-AgEIcHlw…` |
+| GitLab | `glpat-` | | Hugging Face | `hf_` |
+| Stripe | `sk_live_`, `rk_live_` | | Anthropic | `sk-ant-` |
+| Slack | `xoxb-`, `xoxp-`, `xoxa-`, `xoxr-`, `xoxs-` | | OpenAI | `sk-proj-`, legacy `sk-` |
+| Google | `AIza…`, `ya29.` | | Shopify | `shpat_` and relatives |
+| SendGrid | `SG.…` | | DigitalOcean | `dop_v1_` |
+
+Each is a **FAIL** (`CWE-798:known_credential_format_<provider>`). A **JWT** is only
+a **WARN**: it is a signed token rather than necessarily a secret, and Supabase's
+anon key is one and is public by design.
+
+**What it does not do.** It is deliberately not a generic `name = value` rule — that
+fires on 34 of 800 real Python files, because `token = tokens.pop(0)` is an expression.
+Stripe *test* keys are not matched. Providers whose secrets are bare hex or base64 with
+no prefix (Heroku, Mailgun, Twilio) are not matched either, since nothing distinguishes
+them from a hash. Binary files are skipped, so a token inside an image or a jar is not
+seen.
+
+**False positives.** Documentation is full of example keys, so placeholders are
+excluded: anything containing `EXAMPLE`, `SAMPLE`, `DUMMY`, `YOUR` or `REDACTED`, a
+run of `x` or `0`, any ten identical characters, and GitHub's documentation token.
+Each pattern is bounded on both sides, so a token inside a longer identifier does not
+count. Over 100,052 files of real source, docs and tests plus the host's system
+directories, the only matches were AWS's own documentation key (18 times, excluded)
+and three genuine Google API keys hardcoded in `gcloud` and `gsutil`.
+
+Cost: roughly 9% extra scan time, from one additional `grep` per file.
+
+```bash
+WORK_DIR=/tmp/credcheck bash tests/run_tests.sh credential   # builds every token at run time
+```
+
+If a vendored file legitimately contains a key (a public Google client key, say), use
+`.transit-allow.json` with rule `CWE-798` and the file's path.
+
 ### 11.3 Environment variables
 
 | Variable | Default | Purpose |
@@ -2307,7 +2354,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 177/177 passed
+# Expected: ✔ 198/198 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2746,7 +2793,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  177/177 passed
+  ✔  198/198 passed
 ```
 
 ### 17.1 What each layer covers

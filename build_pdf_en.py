@@ -1591,6 +1591,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("Credential formats", "L4", True,
+     "No provider-shaped token in any file",
+     "AWS / GitHub / Stripe / Slack / Google / Anthropic … token → FAIL",
+     "JWT embedded → WARN"),
     ("setup.py scanner",  "L5", True,
      "No fetch-and-execute at install time",
      "curl|sh, exec of a download or decoded blob, reverse shell → FAIL",
@@ -1744,7 +1748,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "177 assertions", [
+    ("Test suite", "198 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

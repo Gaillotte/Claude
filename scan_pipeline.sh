@@ -268,6 +268,71 @@ grep_flat() {
     tr '\r\n\t' '   ' < "$2" | grep -iE -e "$1" >/dev/null
 }
 
+# ── Known credential formats ─────────────────────────────────────────────────
+# Providers issue tokens with a fixed, distinctive shape — a literal prefix plus a
+# body of known length and alphabet. Matching the shape is a different and much
+# more precise test than matching a *name* such as `password`, and it works in any
+# file type, quoted or not: `export GITHUB_TOKEN=ghp_…`, a TOML value, a URL, a
+# comment. That is what the per-type credential rules cannot do. Those expect
+# `key = "value"`, so an unquoted value in a Makefile, a .properties file, a CMake
+# set() call or an HTML attribute is invisible to them, and the same gap had to be
+# patched separately in each scanner.
+#
+# This is deliberately NOT a generic `name = value` rule. That one was measured
+# and rejected: it fires on 34 of 800 real .py files (`token = tokens.pop(0)`),
+# because in a programming language `name = expr` is an expression. A fixed
+# prefix and length has no such reading.
+#
+# Calibration. Across 100,052 files of source, docs and tests (gradle, spring-boot,
+# kafka, elasticsearch), the 6,600 other real files collected here, and the host's
+# /usr /opt /etc /var /mnt, the only matches were: AWS's own documentation key
+# AKIAIOSFODNN7EXAMPLE (18, removed by the EXAMPLE exclusion), and three genuine
+# Google API keys hardcoded in gcloud and gsutil. No false positive on a real
+# file. What the host cannot test is recall — it holds almost no real tokens — so
+# every format has a positive case in the test suite, built at run time.
+#
+# Formats chosen are the ones with a distinctive prefix. Heroku, Mailgun, Twilio
+# and the like are bare hex or base64 with no prefix and are not matched; that is
+# a limit, not an oversight, since nothing distinguishes them from a hash.
+KNOWN_CRED_NAMES=(
+    aws_access_key_id aws_secret_access_key github_token github_fine_grained_pat
+    gitlab_pat stripe_live_key slack_token google_api_key google_oauth_token
+    sendgrid_key npm_token pypi_token huggingface_token anthropic_key
+    openai_project_key openai_legacy_key shopify_token digitalocean_token
+)
+KNOWN_CRED_PATS=(
+    '(AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[0-9A-Z]{16}'
+    '[Aa][Ww][Ss]_[Ss][Ee][Cc][Rr][Ee][Tt]_[Aa][Cc][Cc][Ee][Ss][Ss]_[Kk][Ee][Yy][[:space:]]*["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9/+=]{40}'
+    'gh[pousr]_[A-Za-z0-9]{36,255}'
+    'github_pat_[A-Za-z0-9_]{50,}'
+    'glpat-[A-Za-z0-9_-]{20,}'
+    '[sr]k_live_[A-Za-z0-9]{24,}'
+    'xox[bpars]-[0-9]{8,14}-[0-9]{8,14}(-[0-9]{8,14})?-[A-Za-z0-9]{20,}'
+    'AIza[0-9A-Za-z_-]{35}'
+    'ya29\.[0-9A-Za-z_-]{30,}'
+    'SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}'
+    'npm_[A-Za-z0-9]{36}'
+    'pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}'
+    'hf_[A-Za-z0-9]{34,}'
+    'sk-ant-(api|admin)[0-9]{2}-[A-Za-z0-9_-]{60,}'
+    'sk-proj-[A-Za-z0-9_-]{40,}'
+    'sk-[A-Za-z0-9]{48}'
+    'shp(at|ca|pa|ss)_[a-f0-9]{32}'
+    'dop_v1_[a-f0-9]{64}'
+)
+# One alternation for the cheap pre-check, so a file with no credential costs a
+# single grep rather than eighteen. Each pattern is bounded on both sides so a
+# token embedded in a longer identifier or a base64 blob does not count.
+KNOWN_CRED_ALL=""
+for _i in "${!KNOWN_CRED_PATS[@]}"; do
+    KNOWN_CRED_ALL+="${KNOWN_CRED_ALL:+|}(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_i]})([^A-Za-z0-9]|\$)"
+done
+unset _i
+# Documentation tokens and placeholders. The first run of the rule over the host
+# found AWS's example key 18 times; the GitHub documentation example is split so
+# this file never holds the whole string.
+KNOWN_CRED_EXCL='EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\*{3,}|\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\1{9,}|ghp_16C7e42F''292c6912E7710c838347Ae178B4a'
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 1 — GLOBAL (malware, secrets, AV)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -617,6 +682,27 @@ scan_universal_patterns() {
          >/dev/null; then
         record_fail "$f" "CWE-321:hardcoded_private_key"
         triggered=true
+    fi
+
+    # Known credential formats. -I skips binary files: a fixed-shape token in an
+    # image or a jar is noise, and the base64 inside one is the only realistic
+    # source of a false match. One alternation decides whether any provider is
+    # present; only then is each named, so an ordinary file costs a single grep.
+    if grep -qIE -e "$KNOWN_CRED_ALL" "$f" 2>/dev/null; then
+        local _k
+        for _k in "${!KNOWN_CRED_NAMES[@]}"; do
+            if grep -ohIE -e "(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_k]})([^A-Za-z0-9]|\$)" "$f" 2>/dev/null \
+                 | grep -viE -e "$KNOWN_CRED_EXCL" >/dev/null; then
+                record_fail "$f" "CWE-798:known_credential_format_${KNOWN_CRED_NAMES[$_k]}"
+                triggered=true
+            fi
+        done
+    fi
+    # A JWT is a signed token, not necessarily a secret: Supabase's anon key is
+    # one and is public by design. Common in tests and documentation (3 in
+    # 100,052 files here), so it warns.
+    if grep -qIE -e '(^|[^A-Za-z0-9])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}([^A-Za-z0-9]|$)' "$f" 2>/dev/null; then
+        record_warn "$f" "CWE-798:jwt_embedded_review_whether_it_is_a_live_credential"
     fi
     # Reported, not blocked: a certificate is the public half of the pair.
     if grep_check '-----BEGIN CERTIFICATE-----' "$f"; then
@@ -3135,7 +3221,7 @@ report = {
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
                      "PDF-Active-Content", "Build-Script-Hardening",
-                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python"],
+                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python", "Known-Credential-Formats"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},
