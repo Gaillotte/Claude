@@ -643,6 +643,36 @@ print(d.get('metadata',{}).get('vulnerabilities',{}).get('total', 0))
     fi
 }
 
+# ── Shared by scan_universal_patterns and scan_jar ───────────────────────────
+# $1 is the file a finding is recorded against; $2 is the file that is searched.
+# They are the same for an ordinary file. For an archive, scan_jar writes the
+# text of the entries to a view and searches that, while the finding must still
+# land on the archive. Returns 0 only if it recorded a FAIL.
+
+# Known credential formats. -I skips binary files: a fixed-shape token in an
+# image is noise, and the base64 inside one is the only realistic source of a
+# false match. One alternation decides whether any provider is present; only
+# then is each named, so an ordinary file costs a single grep.
+_known_cred_check() {
+    local report="$1" target="$2" hit=1 _k
+    if grep -qIE -e "$KNOWN_CRED_ALL" "$target" 2>/dev/null; then
+        for _k in "${!KNOWN_CRED_NAMES[@]}"; do
+            if grep -ohIE -e "(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_k]})([^A-Za-z0-9]|\$)" "$target" 2>/dev/null \
+                 | grep -viE -e "$KNOWN_CRED_EXCL" >/dev/null; then
+                record_fail "$report" "CWE-798:known_credential_format_${KNOWN_CRED_NAMES[$_k]}"
+                hit=0
+            fi
+        done
+    fi
+    # A JWT is a signed token, not necessarily a secret: Supabase's anon key is
+    # one and is public by design. Common in tests and documentation (3 in
+    # 100,052 files here), so it warns.
+    if grep -qIE -e '(^|[^A-Za-z0-9])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}([^A-Za-z0-9]|$)' "$target" 2>/dev/null; then
+        record_warn "$report" "CWE-798:jwt_embedded_review_whether_it_is_a_live_credential"
+    fi
+    return $hit
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 4 — Universal security patterns (all file types)
 # Covers: CWE-259, CWE-321, CWE-798, CWE-22, CWE-918, CWE-327, CWE-338
@@ -692,25 +722,9 @@ scan_universal_patterns() {
         triggered=true
     fi
 
-    # Known credential formats. -I skips binary files: a fixed-shape token in an
-    # image or a jar is noise, and the base64 inside one is the only realistic
-    # source of a false match. One alternation decides whether any provider is
-    # present; only then is each named, so an ordinary file costs a single grep.
-    if grep -qIE -e "$KNOWN_CRED_ALL" "$f" 2>/dev/null; then
-        local _k
-        for _k in "${!KNOWN_CRED_NAMES[@]}"; do
-            if grep -ohIE -e "(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_k]})([^A-Za-z0-9]|\$)" "$f" 2>/dev/null \
-                 | grep -viE -e "$KNOWN_CRED_EXCL" >/dev/null; then
-                record_fail "$f" "CWE-798:known_credential_format_${KNOWN_CRED_NAMES[$_k]}"
-                triggered=true
-            fi
-        done
-    fi
-    # A JWT is a signed token, not necessarily a secret: Supabase's anon key is
-    # one and is public by design. Common in tests and documentation (3 in
-    # 100,052 files here), so it warns.
-    if grep -qIE -e '(^|[^A-Za-z0-9])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}([^A-Za-z0-9]|$)' "$f" 2>/dev/null; then
-        record_warn "$f" "CWE-798:jwt_embedded_review_whether_it_is_a_live_credential"
+    # Known credential formats and the JWT warning: see _known_cred_check.
+    if _known_cred_check "$f" "$f"; then
+        triggered=true
     fi
     # Reported, not blocked: a certificate is the public half of the pair.
     if grep_check '-----BEGIN CERTIFICATE-----' "$f"; then
@@ -1528,6 +1542,499 @@ scan_archive() {
             record_fail "$f" "CWE-22:zip_slip_path_traversal_in_archive"
         fi
     fi
+}
+
+# ── Java archives (.jar .war .ear .aar) ─────────────────────────────────────
+# Before this scanner a .jar had no handler, fell through to scan_unknown and was
+# recorded PASS. A jar is a ZIP of compiled code, which makes it three problems
+# at once:
+#
+#   * It is executable code that a reviewer cannot read, so it is never silently
+#     passed: a clean jar is a WARN ("vendored compiled code"), never a PASS.
+#   * The container can lie. An entry named ../../etc/cron.d/x escapes the
+#     extraction directory (zip-slip); a ".class" entry need not be bytecode; a
+#     Windows executable can be stored as "logo.png"; a native binary can be
+#     glued in front of a valid archive.
+#   * gradle-wrapper.jar, committed to nearly every Gradle repository, is run by
+#     ./gradlew before any code the repository declares.
+#
+# The archive is never extracted to disk. The helper reads entries through the
+# standard library with bounded reads, so a decompression bomb costs a capped
+# read and not the disk. Each limit is reported when it is reached, because an
+# archive that was not fully read must not look like one that was:
+#   JAR_MAX_ENTRIES (50000)         entries whose bytes are read
+#   JAR_READ_BUDGET_MB (64)         bytes read across all entries
+#   JAR_VIEW_MB (32)                text handed to the credential rules
+#   JAR_MAX_UNCOMPRESSED_MB (1024)  declared size above which a WARN is raised
+#   JAR_TIME_BUDGET_S (90)          wall-clock limit for one archive
+# Entry NAMES are checked for every entry regardless: that needs only the
+# central directory. Nested archives are opened two levels deep.
+#
+# Calibration: 365 real jars on this host (Gradle and Maven distributions,
+# Kotlin, Groovy, the native-platform family) and 24 build-tool wrappers. None of
+# the FAIL rules fires on any of them. What is reported: 17 jars bundle native
+# libraries, 2 are Java agents, 1 nests another archive, and 1 exceeds the read
+# budget (kotlin-compiler-embeddable, 150 MB uncompressed). That corpus is
+# libraries from two toolchains; it says nothing about how often a hostile jar
+# looks like a real one, so recall rests on fixtures. Only .jar was measured:
+# .war, .ear and .aar are routed to the same scanner because they are the same
+# container, and none exists on this host.
+#
+# Not covered, deliberately: bytecode semantics (no decompilation, so a
+# Runtime.exec(userInput) in a class is not found), JSP web shells inside a .war,
+# and the contents of gradle-wrapper.jar beyond its shape (the official
+# checksums are not embedded, so that file always asks for a manual check).
+_jar_facts() {
+    python3 - "$1" "$2" <<'PYEOF' 2>/dev/null
+import io, os, re, struct, sys, time, zipfile, zlib
+
+# argv: <archive> <view file: the text of the entries, for the credential rules>
+path, view_path = sys.argv[1], sys.argv[2]
+
+
+def _knob(name, default):
+    try:
+        v = float(os.environ.get(name, ""))
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+MAX_ENTRIES = int(_knob("JAR_MAX_ENTRIES", 50000))  # entries whose bytes are read
+BUDGET = int(_knob("JAR_READ_BUDGET_MB", 64) * 1048576)  # bytes read across all entries
+MAX_UNCOMP = int(_knob("JAR_MAX_UNCOMPRESSED_MB", 1024) * 1048576)
+DEADLINE = time.monotonic() + _knob("JAR_TIME_BUDGET_S", 90)
+ENTRY_CAP = 4 * 1048576   # most that is read from one entry
+NEST_CAP = 16 * 1048576   # largest nested archive that is opened
+VIEW_CAP = int(_knob("JAR_VIEW_MB", 32) * 1048576)  # most text handed to the credential rules
+MAX_DEPTH = 2             # the archive itself, and one level inside it
+HEAD = 4096
+
+facts = {}
+state = {"entries": 0, "budget": BUDGET, "declared": 0, "view": 0}
+
+
+def emit(tag, detail=""):
+    detail = re.sub(r"[^\x20-\x7e]|\|", "?", str(detail))[:110]
+    n, ex = facts.get(tag, (0, []))
+    if len(ex) < 3 and detail not in ex:
+        ex.append(detail)
+    facts[tag] = (n + 1, ex)
+
+
+NATIVE_NAME = re.compile(r"\.(so(\.\d+)*|dll|dylib|jnilib|exe|sys|ocx|node)$", re.I)
+SCRIPT_NAME = re.compile(r"\.(sh|bat|cmd|ps1|vbs|hta|scr|msi)$", re.I)
+ARCHIVE_NAME = re.compile(r"\.(jar|war|ear|aar|zip|tar|tgz|gz|bz2|xz|7z|rar)$", re.I)
+CONTENT_NAME = re.compile(
+    r"\.(class|properties|xml|json|txt|sh|bat|cmd|ps1|vbs|js|py|jsp|jspx|html?|ya?ml|conf|cfg|ini|"
+    r"gradle|kts|md|toml|env|sql|groovy|java|pem|key)$|(^|/)(MANIFEST\.MF)$", re.I)
+MACHO = (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
+         b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca")
+# 0xCAFEBABE is deliberately absent: it is the Java class magic, and also the
+# Mach-O *fat* magic. kotlinx-coroutines ships a class stored as DebugProbesKt.bin.
+CLASS_MAGIC = b"\xca\xfe\xba\xbe"
+READ_ERRORS = (RuntimeError, NotImplementedError, zipfile.BadZipFile, EOFError, zlib.error, OSError, ValueError)
+
+HOSTILE = [
+    ("shell_pipe", re.compile(r"(?i)\b(curl|wget)\b[^\n|]{0,160}\|\s*(sudo\s+)?(ba|z|da)?sh\b")),
+    ("reverse_shell", re.compile(r"(/dev/tcp/|\bnc\s+-[a-z]*e\s|bash\s+-i\s+>&)")),
+    ("encoded_powershell", re.compile(r"(?i)powershell[^\n]{0,80}\s-(e|enc|encodedcommand)[a-z]*\s+[A-Za-z0-9+/=]{20,}")),
+    ("lolbin_download", re.compile(r"(?i)(certutil[^\n]{0,60}-urlcache|bitsadmin[^\n]{0,60}/transfer)")),
+    ("offensive_tool_name", re.compile(r"(?i)(mimikatz|sekurlsa|meterpreter|cobalt\s?strike)")),
+]
+
+
+def native_kind(head):
+    """ELF, thin Mach-O, or a PE whose e_lfanew really points at PE\\0\\0 (not just an MZ prefix)."""
+    if head[:4] == b"\x7fELF":
+        return "ELF"
+    if head[:4] in MACHO:
+        return "Mach-O"
+    if head[:2] == b"MZ" and len(head) >= 0x40:
+        e = struct.unpack_from("<I", head, 0x3C)[0]
+        if e + 4 <= len(head) and head[e:e + 4] == b"PE\x00\x00":
+            return "PE"
+    return ""
+
+
+def texty(head):
+    """True for a head that reads as text: no NUL, and almost all printable."""
+    if not head or b"\x00" in head:
+        return False
+    return sum(1 for b in head if b >= 0x20 or b in (9, 10, 13)) / len(head) > 0.95
+
+
+def class_strings(data):
+    """UTF-8 constants of a class file's constant pool, or None if it does not parse."""
+    try:
+        if data[:4] != CLASS_MAGIC or len(data) < 10:
+            return None
+        count = struct.unpack_from(">H", data, 8)[0]
+        i, pos, out = 1, 10, []
+        while i < count:
+            tag = data[pos]
+            pos += 1
+            if tag == 1:
+                ln = struct.unpack_from(">H", data, pos)[0]
+                out.append(data[pos + 2:pos + 2 + ln].decode("utf-8", "replace"))
+                pos += 2 + ln
+            elif tag in (3, 4, 9, 10, 11, 12, 17, 18):
+                pos += 4
+            elif tag in (5, 6):
+                pos += 8
+                i += 1
+            elif tag in (7, 8, 16, 19, 20):
+                pos += 2
+            elif tag == 15:
+                pos += 3
+            else:
+                return None
+            i += 1
+        return out
+    except (IndexError, struct.error):
+        return None
+
+
+def parse_manifest(raw):
+    text = raw.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n ", "", text)  # a line continues on the next one that starts with a space
+    attrs = {}
+    for line in text.split("\n"):
+        if not line.strip():
+            break  # the main section ends at the first blank line
+        k, _, v = line.partition(":")
+        attrs[k.strip().lower()] = v.strip()
+    return attrs
+
+
+view = open(view_path, "w", encoding="utf-8", errors="replace")
+
+
+def to_view(label, text):
+    if state["view"] >= VIEW_CAP:
+        emit("incomplete", "text handed to the credential rules is capped at %d MB" % (VIEW_CAP >> 20))
+        return
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", text)
+    view.write("== " + label + "\n" + text + "\n")
+    state["view"] += len(text)
+
+
+def hostile(label, text):
+    for tag, rx in HOSTILE:
+        if rx.search(text):
+            emit("hostile_" + tag, label)
+
+
+PEM_HEAD = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----")
+PEM_BODY = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}")
+
+
+def private_key(label, unit):
+    """A PEM header followed, within about five lines, by 60+ base64 characters.
+
+    Judged inside ONE string, never across neighbours. A class file keeps each
+    constant on its own line of the view, and a class path such as
+    org/apache/sshd/common/config/keys/loader/openssh/OpenSSHKeyPairResourceParser
+    is 78 characters of [A-Za-z0-9/], which the body test reads as base64: the
+    header constant followed by that path failed sshd-common-2.12.1.jar.
+    """
+    for m in PEM_HEAD.finditer(unit):
+        flat = re.sub(r"(?:\\[nrt]|[\r\n\t])+", " ", unit[m.start():m.start() + 700])
+        if PEM_BODY.match(flat):
+            emit("private_key", label)
+            return
+
+
+def name_checks(infos, label, top):
+    """Everything that needs only the central directory. Unbounded by the read limits: it costs nothing."""
+    names = [i.filename for i in infos]
+    if top and len(set(names)) != len(names):
+        emit("duplicate_names", "%d repeated" % (len(names) - len(set(names))))
+    for info in infos:
+        n, full = info.filename, label + info.filename
+        state["declared"] += info.file_size
+        parts = n.replace("\\", "/").split("/")
+        if ".." in parts or n.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", n):
+            emit("zip_slip", full)
+        if SCRIPT_NAME.search(n):
+            emit("script_entry", full)
+        if info.flag_bits & 0x1 and not info.is_dir():
+            emit("encrypted", full)
+    return names
+
+
+def walk(z, label, depth, top):
+    infos = z.infolist()
+    names = name_checks(infos, label, top)
+    room = MAX_ENTRIES - state["entries"]
+    if len(infos) > room:
+        emit("incomplete", "more than %d entries, the rest were not read" % MAX_ENTRIES)
+        infos = infos[:max(room, 0)]
+    state["entries"] += len(infos)
+    for info in infos:
+        n = info.filename
+        full = label + n
+        if info.is_dir() or info.flag_bits & 0x1:
+            continue
+        if time.monotonic() > DEADLINE:
+            emit("incomplete", "time budget exceeded")
+            break
+        # A symlink entry is a zip-slip with one more step: it is created on
+        # extraction and the next entry is written through it.
+        if info.create_system == 3 and (info.external_attr >> 16) & 0o170000 == 0o120000:
+            try:
+                with z.open(info) as fh:
+                    target = fh.read(HEAD).decode("utf-8", "replace")
+            except READ_ERRORS:
+                target = ""
+            t = target.replace("\\", "/")
+            if t.startswith("/") or ".." in t.split("/") or re.match(r"^[A-Za-z]:", t):
+                emit("symlink_escape", "%s -> %s" % (full, target))
+            else:
+                emit("symlink", full)
+            continue
+        wants_content = bool(CONTENT_NAME.search(n))
+        try:
+            with z.open(info) as fh:
+                data = fh.read(min(ENTRY_CAP, max(info.file_size, HEAD)) if wants_content and state["budget"] > 0 else HEAD)
+        except READ_ERRORS:
+            emit("unreadable", full)
+            continue
+        head = data[:HEAD]
+        # Entries with no recognised name (LICENSE, services files, .cert, .dat)
+        # are read as text when they look like text; binary ones are not.
+        if not wants_content and texty(head):
+            if state["budget"] > 0:
+                try:
+                    with z.open(info) as fh:
+                        data = fh.read(min(ENTRY_CAP, max(info.file_size, HEAD)))
+                    wants_content = True
+                except READ_ERRORS:
+                    pass
+            else:
+                emit("incomplete", "read budget of %d MB exhausted" % (BUDGET >> 20))
+        if wants_content:
+            if state["budget"] <= 0:
+                emit("incomplete", "read budget of %d MB exhausted" % (BUDGET >> 20))
+                wants_content = False
+            else:
+                state["budget"] -= len(data)
+        if wants_content and info.file_size > ENTRY_CAP:
+            emit("incomplete", "an entry larger than %d MB was read only in part" % (ENTRY_CAP >> 20))
+        is_class = n.endswith(".class")
+        if is_class and len(head) >= 4 and head[:4] != CLASS_MAGIC:
+            emit("class_not_bytecode", full)
+        kind = native_kind(head)
+        if NATIVE_NAME.search(n):
+            if kind:
+                emit("native_library", full)
+        elif kind and not is_class:
+            emit("hidden_native", "%s %s" % (kind, full))
+        if n.upper() == "META-INF/MANIFEST.MF":
+            a = parse_manifest(data)
+            if depth == 1 and any(k in a for k in ("premain-class", "agent-class", "launcher-agent-class")):
+                emit("agent", a.get("premain-class") or a.get("agent-class") or a.get("launcher-agent-class"))
+            for tok in a.get("class-path", "").split():
+                if re.match(r"^(https?|ftp)://", tok, re.I):
+                    emit("classpath_remote", tok)
+                elif depth == 1 and (tok.startswith(("/", "\\")) or re.match(r"^([A-Za-z]:|file:)", tok, re.I)):
+                    emit("classpath_absolute", tok)
+        if not is_class and (head[:4] == b"PK\x03\x04" or ARCHIVE_NAME.search(n)):
+            emit("nested_archive", full)
+            if depth >= MAX_DEPTH:
+                emit("incomplete", "archives nested deeper than %d levels were not opened" % MAX_DEPTH)
+            elif info.file_size > NEST_CAP or state["budget"] <= 0:
+                emit("incomplete", "a nested archive was not opened: " + full)
+            else:
+                try:
+                    with z.open(info) as fh:
+                        raw = fh.read(NEST_CAP)
+                    state["budget"] -= len(raw)
+                    walk(zipfile.ZipFile(io.BytesIO(raw)), full + "!/", depth + 1, False)
+                except READ_ERRORS:
+                    emit("nested_unparseable", full)
+            continue
+        if not wants_content:
+            continue
+        if is_class:
+            units = class_strings(data)
+            if units is None:
+                units = re.sub(r"[^\x20-\x7e\n]+", "\n", data.decode("latin-1")).split("\n")
+        else:
+            units = [data.decode("utf-8", "replace")]
+        text = "\n".join(units)
+        to_view(full, text)
+        hostile(full, text)
+        for u in units:
+            private_key(full, u)
+    return names
+
+
+# ── Whole-file shape ────────────────────────────────────────────────────
+try:
+    with open(path, "rb") as fh:
+        first = fh.read(4096)
+except OSError:
+    first = None
+    emit("unreadable_file")
+
+zf = None
+if first is not None:
+    try:
+        zf = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError, ValueError):
+        if not first:
+            emit("empty_file")
+        elif first[:2] == b"PK":
+            emit("unparseable")
+        else:
+            emit("not_an_archive", native_kind(first) or first[:8].hex())
+
+if zf is not None:
+    k = native_kind(first)
+    if first[:2] != b"PK":
+        if k:
+            emit("prepended_native", k)
+        elif first[:2] == b"#!":
+            emit("prepended_script")
+        else:
+            emit("prepended_data", first[:8].hex())
+    names = walk(zf, "", 1, True)
+    if state["declared"] > MAX_UNCOMP:
+        emit("oversize", "%d MB declared" % (state["declared"] >> 20))
+    # gradle-wrapper.jar runs on ./gradlew before any code the repository
+    # declares. Its shape is checkable; its contents are not (the official
+    # checksums are not embedded here), so it always also asks for a manual check.
+    spec = {
+        "gradle-wrapper.jar": ("gradle", ("org/gradle/", "META-INF/"), "org/gradle/wrapper/GradleWrapperMain.class"),
+        "maven-wrapper.jar": ("maven", ("org/apache/maven/", "META-INF/"), "org/apache/maven/wrapper/MavenWrapperMain.class"),
+    }.get(os.path.basename(path).lower())
+    if spec:
+        kind, prefixes, must = spec
+        files = [x for x in names if not x.endswith("/")]
+        for x in [x for x in files if not x.startswith(prefixes)][:3]:
+            emit("wrapper_unexpected", "unexpected entry " + x)
+        if must not in files:
+            emit("wrapper_unexpected", "missing " + must)
+        if len(files) > 100:
+            emit("wrapper_unexpected", "%d entries" % len(files))
+        emit("wrapper", kind)
+view.close()
+for tag, (n, ex) in facts.items():
+    print("FACT %s %d %s" % (tag, n, "; ".join(ex)))
+print("FACT done")
+PYEOF
+}
+
+scan_jar() {
+    local f="$1"
+    local failed=false view="" facts="" line tag count detail entry msg
+    local -A fact_n=() fact_d=()
+
+    if ! has_cmd python3; then
+        record_warn "$f" "jar:not_inspected(install python3 so scan_jar can read the archive)"
+        return 0
+    fi
+    view=$(mktemp "${TMPDIR:-/tmp}/aitransit_jar_XXXXXX" 2>/dev/null) || view=""
+    if [[ -z "$view" ]]; then
+        record_warn "$f" "jar:not_inspected(could not create a temporary file)"
+        return 0
+    fi
+    # Removed explicitly at the single exit point below, not by a RETURN trap
+    # (see scan_pdf for why).
+    facts=$(_jar_facts "$f" "$view") || facts=""
+
+    while IFS= read -r line; do
+        [[ "$line" == "FACT "* ]] || continue
+        line="${line#FACT }"
+        tag="${line%% *}"
+        line="${line#"$tag"}"; line="${line# }"
+        count="${line%% *}"
+        detail="${line#"$count"}"; detail="${detail# }"
+        fact_n["$tag"]="$count"
+        fact_d["$tag"]="$detail"
+    done <<< "$facts"
+
+    if [[ -z "${fact_n[done]+x}" ]]; then
+        # The helper died before finishing. Say so: no facts is not a clean jar.
+        record_warn "$f" "jar:inspection_failed(the archive could not be read; treat as not inspected)"
+        rm -f "$view"
+        return 0
+    fi
+
+    # FAIL: tag|message. Each has no innocent reading in a repository, and each
+    # measured 0 of 365 real jars.
+    local -a fail_map=(
+        "zip_slip|CWE-22:jar_entry_path_traversal_zip_slip"
+        "class_not_bytecode|CWE-506:jar_class_entry_is_not_bytecode"
+        "hidden_native|CWE-506:jar_native_executable_hidden_under_a_non_native_name"
+        "private_key|CWE-321:hardcoded_private_key"
+        "classpath_remote|CWE-829:jar_manifest_class_path_names_a_remote_url"
+        "prepended_native|CWE-506:jar_native_executable_prepended_to_archive"
+        "not_an_archive|jar:file_is_not_an_archive_despite_its_extension"
+        "symlink_escape|CWE-22:jar_symlink_entry_points_outside_the_archive"
+        "wrapper_unexpected|CWE-494:wrapper_jar_has_unexpected_content"
+        "hostile_shell_pipe|CWE-78:jar_embeds_download_piped_to_shell"
+        "hostile_reverse_shell|CWE-78:jar_embeds_reverse_shell"
+        "hostile_encoded_powershell|CWE-78:jar_embeds_encoded_powershell"
+        "hostile_lolbin_download|CWE-494:jar_embeds_certutil_or_bitsadmin_download"
+    )
+    for entry in "${fail_map[@]}"; do
+        tag="${entry%%|*}"; msg="${entry#*|}"
+        if [[ -n "${fact_n[$tag]+x}" ]]; then
+            record_fail "$f" "${msg}(${fact_n[$tag]}${fact_d[$tag]:+: ${fact_d[$tag]}})"
+            failed=true
+        fi
+    done
+
+    # WARN: ordinary in some jars (native libraries 17 of 365, agents 2 of 365),
+    # or a statement that something was not looked at.
+    local -a warn_map=(
+        "agent|jar:java_agent_in_manifest"
+        "native_library|jar:bundles_native_library"
+        "script_entry|jar:bundles_script_file"
+        "symlink|jar:contains_symlink_entry"
+        "nested_archive|jar:contains_nested_archive"
+        "nested_unparseable|jar:nested_archive_could_not_be_opened"
+        "classpath_absolute|jar:manifest_class_path_is_absolute"
+        "duplicate_names|jar:duplicate_entry_names_readers_may_disagree_about_which_is_used"
+        "encrypted|jar:encrypted_entries_not_inspected"
+        "unreadable|jar:entries_could_not_be_read"
+        "incomplete|jar:inspection_incomplete"
+        "oversize|jar:declared_uncompressed_size_over_limit"
+        "unparseable|jar:unparseable_archive_not_inspected"
+        "unreadable_file|jar:file_could_not_be_read"
+        "empty_file|jar:empty_file"
+        "prepended_script|jar:launch_script_prepended_to_archive"
+        "prepended_data|jar:data_before_archive_start"
+        "hostile_offensive_tool_name|jar:offensive_tool_name_in_content"
+    )
+    for entry in "${warn_map[@]}"; do
+        tag="${entry%%|*}"; msg="${entry#*|}"
+        if [[ -n "${fact_n[$tag]+x}" ]]; then
+            record_warn "$f" "${msg}(${fact_n[$tag]}${fact_d[$tag]:+: ${fact_d[$tag]}})"
+        fi
+    done
+    if [[ -n "${fact_n[wrapper]+x}" ]]; then
+        record_warn "$f" \
+            "jar:wrapper_checksum_must_be_verified(${fact_d[wrapper]} wrapper jar runs before any code the repository declares; its shape is checked but not its contents)"
+    fi
+
+    # Credentials in the text of the entries. Class files are searched through
+    # their constant pools, where string constants live. Private keys are judged
+    # per string inside the helper, not here: see private_key().
+    if [[ -s "$view" ]]; then
+        _known_cred_check "$f" "$view" && failed=true
+    fi
+
+    # Bytecode is not reviewed. A jar with nothing wrong with its structure is
+    # still opaque executable code, and says so.
+    if [[ "$failed" != true ]]; then
+        record_warn "$f" "jar:vendored_compiled_code_not_reviewable"
+    fi
+
+    rm -f "$view"
+    return 0
 }
 
 # ── Package manifests ────────────────────────────────────────────────────────
@@ -3361,6 +3868,8 @@ classify_file() {
         .tf|.tfvars|.hcl)               scan_terraform   "$f" ;;
         .so|.dll|.dylib|.exe|.elf|.bin)  scan_binary     "$f" ;;
         .zip|.tar|.gz|.tgz|.bz2|.xz)    scan_archive    "$f" ;;
+        # A jar is a ZIP of compiled code. The extension is already lower-cased.
+        .jar|.war|.ear|.aar)             scan_jar         "$f" ;;
         .pdf)                             scan_pdf         "$f" ;;
         .mk|.mak|.make)                 scan_makefile    "$f" ;;
         .html|.htm|.xhtml)              scan_html        "$f" ;;
@@ -3636,7 +4145,7 @@ report = {
     "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
                      "SCA-CVE", "ScanCode-Licence-Copyright",
                      "PDF-Active-Content", "Build-Script-Hardening",
-                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python", "Known-Credential-Formats", "PowerShell-Hardening", "Windows-Batch-Hardening"],
+                     "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python", "Known-Credential-Formats", "PowerShell-Hardening", "Windows-Batch-Hardening", "Java-Archive-Hardening"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},
@@ -3649,8 +4158,27 @@ with open(os.environ["REPORT_OUT"], "w", encoding="utf-8") as fh:
 PYEOF
 }
 
+# HTML-escape $1 into ESC (a variable, not command substitution: this runs once
+# per file, and a subshell per file adds up on a large repository).
+#
+# Everything the report prints about a file comes from the repository being
+# scanned. A file can be NAMED <img src=x onerror=…>, and a finding message can
+# carry text from inside a file or an archive entry; written as markup, either
+# runs in the browser of whoever opens the report to review the scan. patsub_
+# replacement is switched off because bash 5.2 otherwise reads an & in the
+# replacement as "the matched text", which would make &amp; expand to itself.
+_html_esc() {
+    shopt -u patsub_replacement 2>/dev/null || true
+    ESC="$1"
+    ESC="${ESC//&/&amp;}"
+    ESC="${ESC//</&lt;}"
+    ESC="${ESC//>/&gt;}"
+    ESC="${ESC//\"/&quot;}"
+    ESC="${ESC//\'/&#39;}"
+}
+
 generate_report_html() {
-    local color
+    local color ESC
     [[ "$GLOBAL_VERDICT" == "PASS" ]] && color="#2ecc71" || color="#e74c3c"
     {
         echo "<!DOCTYPE html><html><head><meta charset='utf-8'>"
@@ -3667,7 +4195,8 @@ tr:nth-child(even){background:#16213e}
 .owasp{background:#c0392b} .cwe{background:#2980b9} .cert{background:#27ae60}
 </style></head><body>"
         echo "<h1>Verdict: ${GLOBAL_VERDICT}</h1>"
-        echo "<p>Directory: <code>${SCAN_DIR}</code> | Date: ${TIMESTAMP}</p>"
+        _html_esc "$SCAN_DIR"
+        echo "<p>Directory: <code>${ESC}</code> | Date: ${TIMESTAMP}</p>"
         echo "<p>Standards: <span class='tag owasp'>OWASP Top 10 2021</span>
               <span class='tag cwe'>CWE Top 25</span>
               <span class='tag cert'>CERT Secure Coding</span>
@@ -3682,7 +4211,9 @@ tr:nth-child(even){background:#16213e}
             local msg="${FILE_MSG[$path]:-}"
             local cls
             case "$status" in PASS) cls="pass";; FAIL) cls="fail";; *) cls="warn";; esac
-            echo "<tr><td><code>${path}</code></td><td class='${cls}'>${status}</td><td>${msg}</td></tr>"
+            _html_esc "$path"; local path_html="$ESC"
+            _html_esc "$msg";  local msg_html="$ESC"
+            echo "<tr><td><code>${path_html}</code></td><td class='${cls}'>${status}</td><td>${msg_html}</td></tr>"
         done
         echo "</table></body></html>"
     } > "$REPORT_HTML"

@@ -437,6 +437,148 @@ for p,i in d.get('file_results',{}).items():
         assert_not_contains "$SAFE_FETCH" "[FAIL]" \
             "does NOT fail an https download that is not run, or certutil -decode to a .cer"
 
+        # ── Java archives (.jar, .war, .ear, .aar) ───────────────────────────
+        # A .jar is a ZIP of compiled code, and it had no handler: it fell through
+        # to scan_unknown and was recorded PASS. Three things make it worth a
+        # scanner of its own. It is executable code a reviewer cannot read. The
+        # container format can carry paths that escape the extraction directory
+        # (zip-slip) and bytes that are not what the entry name says. And
+        # gradle-wrapper.jar, committed to nearly every Gradle repository, is run
+        # by ./gradlew before any code the repository declares. Calibration is 365
+        # real jars on this host: none of the FAIL rules below fires on any of them.
+        JSAFE=$(line_for jar_safe.jar)
+        assert_not_contains "$JSAFE" "[FAIL]" \
+            "does NOT fail an ordinary jar (Main-Class, relative Class-Path, curl in prose, MZ-prefixed text, a class stored as .bin)"
+        assert_contains "$JSAFE" "jar:vendored_compiled_code_not_reviewable" \
+            "an ordinary jar is reported, never silently passed: bytecode is not reviewed"
+        assert_not_contains "$JSAFE" "hidden_under_a_non_native_name" \
+            "a class stored as .bin (0xCAFEBABE is also the Mach-O fat magic) is not a hidden executable"
+        assert_not_contains "$JSAFE" "jar:wrapper" \
+            "an ordinary jar does not get the build-wrapper message"
+
+        assert_contains "$(line_for jar_zipslip.jar)" "CWE-22:jar_entry_path_traversal_zip_slip" \
+            "a jar entry named ../../… or /etc/… is flagged as zip-slip"
+        assert_contains "$(line_for jar_fake_class.jar)" "CWE-506:jar_class_entry_is_not_bytecode" \
+            "a .class entry that does not begin 0xCAFEBABE is flagged"
+        JHID=$(line_for jar_hidden_exe.jar)
+        assert_contains "$JHID" "CWE-506:jar_native_executable_hidden_under_a_non_native_name" \
+            "a Windows executable stored as logo.png is flagged"
+        assert_contains "$JHID" "data/blob.dat" \
+            "an ELF binary stored as blob.dat is flagged"
+        assert_contains "$JHID" "res/icon.gif" \
+            "a Mach-O binary stored as icon.gif is flagged"
+        assert_contains "$(line_for jar_remote_classpath.jar)" "CWE-829:jar_manifest_class_path_names_a_remote_url" \
+            "a manifest Class-Path naming an http:// jar is flagged"
+        assert_contains "$(line_for jar_remote_classpath.jar)" "jar:manifest_class_path_is_absolute" \
+            "an absolute Class-Path entry is reported"
+        assert_contains "$(line_for jar_nested_evil.jar)" "lib/inner.jar!/../escape.txt" \
+            "a zip-slip entry inside a jar nested in the jar is found"
+        assert_contains "$(line_for jar_nested_evil.jar)" "jar:contains_nested_archive" \
+            "a nested archive is reported"
+
+        assert_contains "$(line_for jar_symlink.jar)" "CWE-22:jar_symlink_entry_points_outside_the_archive" \
+            "a symlink entry pointing at ../../etc is flagged"
+        assert_contains "$(line_for jar_symlink.jar)" "jar:contains_symlink_entry" \
+            "an ordinary relative symlink entry is reported"
+        JTU=$(line_for jar_text_unlisted.jar)
+        assert_contains "$JTU" "jar_embeds_download_piped_to_shell(1: res/payload.dat)" \
+            "text in an entry with no recognised extension is read"
+        assert_not_contains "$JTU" "res/binary.dat" \
+            "…while a binary entry holding the same string is not (it would be noise)"
+        assert_contains "$(line_for jar_private_key.jar)" "CWE-321:hardcoded_private_key" \
+            "a PEM private key stored as a resource is flagged"
+        assert_contains "$(line_for jar_private_key.jar)" "Keys.class" \
+            "a PEM private key held as one string constant in a class file is flagged"
+        assert_not_contains "$JSAFE" "hardcoded_private_key" \
+            "a PEM header constant next to a long class path (sshd-common) is not a private key"
+
+        # The limit is stated, not hidden: depth 3 is not opened, and the jar says so.
+        JDEEP=$(line_for jar_nested_deep.jar)
+        assert_contains "$JDEEP" "jar:inspection_incomplete" \
+            "archives nested beyond the depth limit report that they were not fully inspected"
+        assert_not_contains "$JDEEP" "[FAIL]" \
+            "…and the fixture documents the gap honestly: the payload at depth 3 is not seen"
+
+        JHT=$(line_for jar_hostile_text.jar)
+        assert_contains "$JHT" "CWE-78:jar_embeds_download_piped_to_shell" \
+            "curl … | sh inside a jar resource is flagged"
+        assert_contains "$JHT" "CWE-78:jar_embeds_reverse_shell" \
+            "/dev/tcp reverse shell inside a jar resource is flagged"
+        assert_contains "$JHT" "CWE-78:jar_embeds_encoded_powershell" \
+            "powershell -enc <base64> inside a jar resource is flagged"
+        assert_contains "$JHT" "CWE-494:jar_embeds_certutil_or_bitsadmin_download" \
+            "certutil -urlcache inside a jar resource is flagged"
+        # These strings sit inside the class file's constant pool, between binary
+        # length fields: they are found by parsing the pool, not by grepping bytes.
+        JHC=$(line_for jar_hostile_class.jar)
+        assert_contains "$JHC" "CWE-78:jar_embeds_download_piped_to_shell" \
+            "curl … | sh in a class file's constant pool is flagged"
+        assert_contains "$JHC" "[WARN] jar:offensive_tool_name_in_content" \
+            "an offensive-tool name in a class file is reported, as a warning only: security libraries name these tools"
+
+        assert_contains "$(line_for jar_not_zip.jar)" "jar:file_is_not_an_archive_despite_its_extension" \
+            "an ELF binary named .jar is flagged"
+        assert_contains "$(line_for jar_prepended_pe.jar)" "CWE-506:jar_native_executable_prepended_to_archive" \
+            "a Windows executable glued in front of a valid archive is flagged"
+        assert_contains "$(line_for jar_prepended_script.jar)" "jar:launch_script_prepended_to_archive" \
+            "a shell launch script before the archive (Spring Boot style) is reported"
+        assert_not_contains "$(line_for jar_prepended_script.jar)" "[FAIL]" \
+            "…but is not a failure"
+        assert_contains "$(line_for jar_truncated.jar)" "jar:unparseable_archive_not_inspected" \
+            "a truncated jar is reported as not inspected"
+        assert_not_contains "$(line_for jar_truncated.jar)" "[FAIL]" \
+            "a truncated jar does not block"
+        assert_contains "$(line_for jar_empty.jar)" "jar:empty_file" \
+            "a zero-byte jar is reported"
+        assert_contains "$(line_for jar_prepended_data.jar)" "jar:data_before_archive_start" \
+            "arbitrary bytes before the archive are reported"
+        assert_contains "$(line_for jar_nested_broken.jar)" "jar:nested_archive_could_not_be_opened" \
+            "a nested 'archive' that does not parse is reported"
+        assert_contains "$(line_for jar_unreadable.jar)" "jar:entries_could_not_be_read" \
+            "an entry stored with an unsupported compression method is reported as unreadable"
+
+        assert_contains "$(line_for jar_agent.jar)" "jar:java_agent_in_manifest" \
+            "Premain-Class in a manifest (a Java agent) is reported"
+        assert_not_contains "$(line_for jar_agent.jar)" "[FAIL]" \
+            "…and is not a failure: 2 of 365 real jars are legitimate agents"
+        assert_contains "$(line_for jar_native.jar)" "jar:bundles_native_library" \
+            "native libraries named .so/.dll/.dylib are reported"
+        assert_not_contains "$(line_for jar_native.jar)" "[FAIL]" \
+            "…and are not failures: 17 of 365 real jars bundle them"
+        assert_contains "$(line_for jar_scripts.jar)" "jar:bundles_script_file" \
+            "a .sh or .bat entry inside a jar is reported"
+        assert_contains "$(line_for jar_duplicates.jar)" "jar:duplicate_entry_names" \
+            "two entries with the same name are reported"
+        assert_contains "$(line_for jar_encrypted.jar)" "jar:encrypted_entries_not_inspected" \
+            "encrypted entries are reported as not inspected"
+        assert_not_contains "$(line_for jar_big.jar)" "jar:inspection_incomplete" \
+            "a 3 MB text entry is within the default limits"
+
+        assert_contains "$(line_for jar_routing.war)" "CWE-22:jar_entry_path_traversal_zip_slip" \
+            ".war is routed to the jar scanner"
+        assert_contains "$(line_for jar_routing.ear)" "CWE-22:jar_entry_path_traversal_zip_slip" \
+            ".ear is routed to the jar scanner"
+        assert_contains "$(line_for jar_routing.aar)" "CWE-22:jar_entry_path_traversal_zip_slip" \
+            ".aar is routed to the jar scanner"
+        assert_contains "$(line_for case_UPPER.JAR)" "CWE-22:jar_entry_path_traversal_zip_slip" \
+            "an upper-case .JAR extension is routed to the jar scanner"
+
+        # gradle-wrapper.jar runs on ./gradlew before any code the repository
+        # declares. Its shape is checked; its contents cannot be: the official
+        # checksums are not embedded here.
+        assert_contains "$(line_for wrapper_good/gradle-wrapper.jar)" "jar:wrapper_checksum_must_be_verified" \
+            "a structurally normal gradle-wrapper.jar still asks for a checksum check"
+        assert_not_contains "$(line_for wrapper_good/gradle-wrapper.jar)" "[FAIL]" \
+            "a structurally normal gradle-wrapper.jar does not fail"
+        assert_contains "$(line_for wrapper_evil/gradle-wrapper.jar)" "CWE-494:wrapper_jar_has_unexpected_content" \
+            "a gradle-wrapper.jar carrying classes outside org/gradle is flagged"
+        assert_contains "$(line_for wrapper_evil/gradle-wrapper.jar)" "install.sh" \
+            "the finding names the stray entry"
+        assert_contains "$(line_for wrapper_hollow/gradle-wrapper.jar)" "missing org/gradle/wrapper/GradleWrapperMain.class" \
+            "a gradle-wrapper.jar without GradleWrapperMain is flagged"
+        assert_contains "$(line_for wrapper_maven/maven-wrapper.jar)" "jar:wrapper_checksum_must_be_verified" \
+            "maven-wrapper.jar is held to the same shape check"
+
         # ── setup.py ─────────────────────────────────────────────────────────
         # setup.py runs on a source `pip install`, so it is install-time code with
         # its own risk model: os.system and subprocess are ordinary build tools
@@ -744,6 +886,54 @@ fi
 # ═════════════════════════════════════════════════════════════════════════════
 # LAYER B — End-to-end verdicts
 # ═════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# Java archive limits
+# ═════════════════════════════════════════════════════════════════════════════
+# scan_jar() never extracts to disk and bounds every read, so a decompression
+# bomb costs a capped read. Each limit has to be REPORTED when it is reached: an
+# archive that was not fully read must not look like one that was. The limits
+# are environment knobs so the paths can be exercised on a 11 KB fixture.
+group "Java archive limits"
+if ! _skipping; then
+    JARLIM="${SCRATCH}/jar_limits"
+    mkdir -p "$JARLIM"
+    cp "${FIXTURES}/rules/jar_big.jar" "$JARLIM/"
+    cp "${FIXTURES}/rules/jar_late_slip.jar" "$JARLIM/"
+    jar_with() {   # jar_with <file> VAR=value … ; prints the findings for that file
+        local name="$1"; shift
+        (
+            export "$@"
+            run_pipeline "$JARLIM" --quiet
+            [[ -n "$RUN_JSON" ]] && json_findings "$RUN_JSON" | grep "/${name} " || true
+        )
+    }
+    assert_contains "$(jar_with jar_big.jar JAR_MAX_ENTRIES=1)" "more than 1 entries" \
+        "JAR_MAX_ENTRIES: entries beyond the limit are reported as not read"
+    assert_contains "$(jar_with jar_late_slip.jar JAR_MAX_ENTRIES=1)" "CWE-22:jar_entry_path_traversal_zip_slip" \
+        "JAR_MAX_ENTRIES does not limit the name check: a zip-slip entry past the limit is still found"
+    assert_contains "$(jar_with jar_big.jar JAR_READ_BUDGET_MB=1)" "read budget of 1 MB exhausted" \
+        "JAR_READ_BUDGET_MB: an exhausted read budget is reported"
+    assert_contains "$(jar_with jar_big.jar JAR_VIEW_MB=1)" "capped at 1 MB" \
+        "JAR_VIEW_MB: text beyond the credential-rule cap is reported"
+    assert_contains "$(jar_with jar_big.jar JAR_MAX_UNCOMPRESSED_MB=1)" "jar:declared_uncompressed_size_over_limit" \
+        "JAR_MAX_UNCOMPRESSED_MB: a declared size over the limit is reported"
+    assert_contains "$(jar_with jar_big.jar JAR_TIME_BUDGET_S=0.001)" "time budget exceeded" \
+        "JAR_TIME_BUDGET_S: an exceeded time budget is reported"
+
+    # The helper must report a file it cannot open, not die: no facts at all would
+    # read as "nothing found". Run as root a real permission error cannot be
+    # produced, so the helper is extracted from the scanner and given a path that
+    # is not there.
+    JARPY="${SCRATCH}/jar_facts.py"
+    awk '/^_jar_facts\(\) \{/{f=1;next} f&&/<<.PYEOF.*/{g=1;next} g&&/^PYEOF$/{exit} g{print}' \
+        "${ROOT_DIR}/scan_pipeline.sh" > "$JARPY"
+    JARGONE=$(python3 -I "$JARPY" "${SCRATCH}/no_such.jar" "${SCRATCH}/view.txt" 2>&1 || true)
+    assert_contains "$JARGONE" "FACT unreadable_file" \
+        "a file that cannot be opened is reported as unreadable"
+    assert_contains "$JARGONE" "FACT done" \
+        "…and the helper still finishes, so the scanner can tell it from a crash"
+fi
+
 group "Layer B — end-to-end verdicts"
 if ! _skipping; then
     run_pipeline "${FIXTURES}/clean" --quiet
@@ -832,6 +1022,10 @@ put_secret jwt "session = ""eyJlCIxr89LcspvfiHbtwjH_j3Db0BtCH9sY"".""eyJFsvZc6Xj
     echo "commit 3a7bd3e2360a3d29eea436fcfb7e44c735d117c4"        # a git sha
     echo "id = zzAKIA""Z961ELEFI1I64MFQ""zz"             # token embedded mid-identifier
 } > "${SECR}/known_safe.txt"
+# The same token inside a jar: once as a text resource, once as a string constant
+# in a class file's constant pool, where it sits between binary length fields.
+AITRANSIT_TEST_TOKEN="ghp_""oKFEOeVI2WdxcX4L8y""aUEcp4bWTkt2HGVHQx" \
+    python3 "${FIXTURES}/make_jar_fixtures.py" --credential-jars "$SECR"
 run_pipeline "$SECR" --quiet
 FK=""
 [[ -n "$RUN_JSON" ]] && FK=$(json_findings "$RUN_JSON")
@@ -873,6 +1067,10 @@ assert_contains "$(kline known_shopify_token.txt)" "CWE-798:known_credential_for
     "a Shopify token is flagged"
 assert_contains "$(kline known_digitalocean_token.txt)" "CWE-798:known_credential_format_digitalocean_token" \
     "a DigitalOcean token is flagged"
+assert_contains "$(kline jar_cred_text.jar)" "CWE-798:known_credential_format_github_token" \
+    "a GitHub token in a jar's text resource is flagged"
+assert_contains "$(kline jar_cred_class.jar)" "CWE-798:known_credential_format_github_token" \
+    "a GitHub token in a class file's constant pool is flagged"
 assert_contains "$(kline known_jwt.txt)" "jwt_embedded" \
     "a JWT is reported, but does not block"
 assert_not_contains "$(kline known_jwt.txt)" "[FAIL]" \
@@ -1104,6 +1302,27 @@ print(','.join(load_workbook('$XLSX').sheetnames))")
     else
         ok_test "no erase-line escape codes when output is redirected"
     fi
+
+    # The HTML report embeds file paths and finding text, and both come from the
+    # repository being scanned: a file can be NAMED <img src=x onerror=…>, and a
+    # jar entry can carry the same text into a finding message. Written
+    # unescaped, either runs in the reviewer's browser when they open the report.
+    XSS="${SCRATCH}/xss_repo"
+    mkdir -p "$XSS"
+    echo hello > "$XSS/<img src=x onerror=alert(1)>.txt"
+    python3 - "$XSS/hostile.jar" <<'PYEOF'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("../<script>alert(2)</script>.sh", "x")
+PYEOF
+    run_pipeline "$XSS" --quiet
+    XSS_HTML=$(cat "${RUN_JSON%.json}.html" 2>/dev/null || true)
+    assert_not_contains "$XSS_HTML" "<img src=x onerror" \
+        "HTML report: a hostile file name is not written as markup"
+    assert_not_contains "$XSS_HTML" "<script>alert(2)" \
+        "HTML report: a hostile jar entry name in a finding is not written as markup"
+    assert_contains "$XSS_HTML" "&lt;img src=x onerror" \
+        "HTML report: the hostile file name is shown escaped, not dropped"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════

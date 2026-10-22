@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 257/257 passed
+./tests/run_tests.sh          # Expected: ✔ 326/326 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 257/257 passed
+# Expected: ✔ 326/326 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1565,6 +1565,7 @@ tool; nothing to stage, no flags required.
 | HTML scanner (`scan_html`) | L5 | Built in; pure pattern matching, nothing to stage |
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Windows batch (`scan_bat`) | L5 | Built in; pure pattern matching, nothing to stage |
+| Java archives (`scan_jar`) | L5 | Built in; needs `python3` (standard library only), reads the archive in place — no extraction, no network, nothing to stage |
 | PowerShell (`scan_powershell`, `scan_powershell_xml`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Known credential formats (Layer 4, every file) | L4 | Built in; pure pattern matching, nothing to stage |
 | `setup.py` / `conanfile.py` (`scan_setup_py`) | L5 | Built in; pure pattern matching, nothing to stage |
@@ -1993,10 +1994,10 @@ from gradle/gradle, spring-boot, kafka and elasticsearch, because the reference 
 has no `.gradle` file — so it measures what real projects write, not what an
 AI-generated one does.
 
-**Not covered:** `gradle-wrapper.jar`, a committed binary that `./gradlew` runs before
-any code the repository declares (`.jar` is in neither the binary nor the archive
-extension list, so it is recorded PASS); version catalogs; and `-SNAPSHOT` versions,
-which are dependency hygiene rather than an execution vector.
+**Not covered:** version catalogs, and `-SNAPSHOT` versions, which are dependency hygiene
+rather than an execution vector. `gradle-wrapper.jar` — a committed binary that `./gradlew`
+runs before any code the repository declares — is handled by the Java archive scanner,
+§11.2.13.
 
 ### 11.2.9 `setup.py` and `conanfile.py`
 
@@ -2199,6 +2200,72 @@ follow; `.btm` (Take Command) and the 4DOS family are not routed.
 WORK_DIR=/tmp/batcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 # Expected FAIL: bat_certutil_dl.bat, bat_continued.bat, bat_UPPER.BAT, bat_ps_cradle.cmd, …
 # Expected PASS: bat_safe_real.cmd (WARN: ExecutionPolicy), bat_safe_fetch.bat (WARN: certutil -decode)
+```
+
+### 11.2.13 Java archives — `.jar`, `.war`, `.ear`, `.aar`
+
+Needs only `python3` and its standard library; identical offline. Before this, a `.jar` had no
+handler, fell through to the unknown-file scanner and was recorded **PASS** whatever it held.
+
+A jar is a ZIP of compiled code. The scanner **never extracts it to disk**: entries are read in
+place with bounded reads, so a decompression bomb costs a capped read, not the disk. A jar with
+nothing wrong with it is a **WARN** (`jar:vendored_compiled_code_not_reviewable`) and the verdict
+stays PASS: bytecode is not decompiled, so what the code *does* is not examined, and a clean
+result must not read as a review.
+
+| Blocks (FAIL) | Reported (WARN) |
+|---|---|
+| an entry path with `..`, a leading `/` or `\`, or a drive letter (zip-slip) | native libraries named `.so` / `.dll` / `.dylib` |
+| a symlink entry pointing outside the archive | a Java agent (`Premain-Class`, `Agent-Class`) |
+| a `.class` entry that does not begin `0xCAFEBABE` | a `.sh` / `.bat` / `.ps1` / `.exe` entry |
+| a PE / ELF / Mach-O stored as `logo.png` | a nested archive, a symlink, duplicate entry names |
+| a native executable glued in front of a valid archive | encrypted or unreadable entries |
+| a file named `.jar` that is not an archive | a shell launch script before the archive |
+| a manifest `Class-Path` naming an `http(s)://` jar | an absolute `Class-Path` |
+| `curl \| sh`, `/dev/tcp`, `powershell -enc`, `certutil -urlcache` in a resource or class constant | an offensive-tool name |
+| a PEM private key, or any of the 18 known credential formats | every wrapper jar: verify its checksum |
+| a wrapper jar with extra entries or no `GradleWrapperMain` | |
+
+Every limit is reported when reached — an archive that was not fully read must not look like one
+that was — and each has an environment knob:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `JAR_MAX_ENTRIES` | 50000 | entries whose bytes are read (entry *names* are always all checked) |
+| `JAR_READ_BUDGET_MB` | 64 | bytes read across all entries |
+| `JAR_VIEW_MB` | 32 | text handed to the credential rules |
+| `JAR_MAX_UNCOMPRESSED_MB` | 1024 | declared size above which a WARN is raised |
+| `JAR_TIME_BUDGET_S` | 90 | wall-clock limit per archive |
+
+Nested archives are opened two levels deep; anything deeper is reported, not opened.
+
+**Calibration.** 365 real jars (Gradle and Maven distributions, Kotlin, Groovy, native-platform) and
+the 24 build-tool wrappers (5 distinct) on the reference host. No structural FAIL rule fires on any
+of them. Reported: 17 bundle native libraries, 2 are agents, 1 nests another archive, 1 exceeds the
+read budget (`kotlin-compiler-embeddable`, 150 MB uncompressed). One FAILs, correctly:
+`google-http-client-1.42.2.jar` embeds a real PEM private key. About 0.1 s per jar.
+
+Two real cases shaped it. `0xCAFEBABE` is both the Java class magic and the Mach-O *fat* magic, and
+`kotlinx-coroutines` ships a class stored as `DebugProbesKt.bin`, so that value is not treated as
+native. And a PEM check run over one text view, a constant per line, failed `sshd-common-2.12.1.jar`
+because a 78-character class path looks like a base64 body; it now runs on each string separately.
+
+> **What this does not establish.** The corpus is libraries from two toolchains: it shows the rules do
+> not misfire on real, well-formed jars and says almost nothing about how a hostile one looks, so
+> recall rests on fixtures. `.war`, `.ear` and `.aar` are routed to the same scanner but **none exists
+> on the host** and they are unmeasured. For `gradle-wrapper.jar` the scanner checks *shape*, not
+> contents — the official checksums are not embedded, so a trojaned jar that keeps the `org/gradle/`
+> layout is not detected. That is why every wrapper jar warns: compare its SHA-256 with
+> `https://gradle.org/release-checksums/` before trusting `./gradlew`.
+
+Not covered: bytecode semantics; code in a non-`.class` entry loaded by a custom classloader; JSP web
+shells inside a `.war`; obfuscated strings; `.hpi`, `.apk`, `.whl`, `.nupkg` and other ZIP containers.
+
+```bash
+WORK_DIR=/tmp/jarcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected FAIL: jar_zipslip.jar, jar_fake_class.jar, jar_hidden_exe.jar, jar_remote_classpath.jar,
+#                jar_hostile_text.jar, wrapper_evil/gradle-wrapper.jar, …
+# Expected WARN (no FAIL): jar_safe.jar, jar_agent.jar, jar_native.jar, wrapper_good/gradle-wrapper.jar
 ```
 
 ### 11.3 Environment variables
@@ -2477,7 +2544,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 257/257 passed
+# Expected: ✔ 326/326 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2916,7 +2983,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  257/257 passed
+  ✔  326/326 passed
 ```
 
 ### 17.1 What each layer covers

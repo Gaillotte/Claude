@@ -70,7 +70,7 @@ python3 build_install_pdf.py OFFLINE_RUNBOOK.md AI_Transit_Pipeline_OFFLINE_RUNB
 # French slides PDF
 python3 build_pdf.py
 
-# English slides PDF  (41 pages, 16 tool slides + summary)
+# English slides PDF  (45 pages, 16 tool slides + a 2-page summary table)
 python3 build_pdf_en.py
 
 # French Word doc
@@ -109,7 +109,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09), plus known credential formats (18 providers) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_bat** (bat/cmd), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_bat** (bat/cmd), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_jar** (jar/war/ear/aar — structure, constant pools, wrapper shape), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -593,11 +593,113 @@ That last group was **2 before the bracket fix** (`[^…\s]` had hidden every va
 `.transit-allow.json` is the mechanism for a documentation or test sample. A missing
 `distributionSha256Sum` is deliberately not reported: 20 of 26 real wrappers omit it.
 
-**Not covered:** `gradle-wrapper.jar` (a committed binary that `./gradlew` runs before
-any code the repo declares — `.jar` is in neither the binary nor archive extension
-list, so it reaches `scan_unknown`); version catalogs (`libs.versions.toml`);
-`-SNAPSHOT` and dynamic versions (71 and 33 of 6249 — dependency hygiene for Layer 3,
-not an execution vector).
+**Not covered:** version catalogs (`libs.versions.toml`); `-SNAPSHOT` and dynamic
+versions (71 and 33 of 6249 — dependency hygiene for Layer 3, not an execution
+vector). `gradle-wrapper.jar` — the committed binary that `./gradlew` runs before any
+code the repo declares — was in this list until `scan_jar` (next sections) took it.
+
+## Java archives (`.jar`, `.war`, `.ear`, `.aar`)
+
+`scan_jar()` handles all four by extension (compared in lower case). A `.jar` used to have
+no handler: it fell through to `scan_unknown` and was recorded **PASS**, whatever it
+contained. A jar is a ZIP of compiled code, which makes it three problems at once:
+
+- **It is executable code a reviewer cannot read.** So a jar is never silently passed: one
+  with nothing wrong is a **WARN** (`jar:vendored_compiled_code_not_reviewable`), and the
+  verdict stays PASS. Bytecode is not decompiled, so `Runtime.exec(userInput)` inside a class
+  is not found — this scanner inspects the container and what is in it as text, not what the
+  code does.
+- **The container can lie.** An entry named `../../etc/cron.d/x` escapes the extraction
+  directory (zip-slip); a `.class` entry need not be bytecode; a Windows executable can be
+  stored as `logo.png`; a native binary can be glued in front of a valid archive.
+- **`gradle-wrapper.jar` runs first.** It is committed to nearly every Gradle repository and
+  `./gradlew` executes it before any code the repository declares.
+
+The archive is **never extracted to disk**. A helper reads entries through the standard
+library (`zipfile`, nothing installed, identical offline) with bounded reads, so a
+decompression bomb costs a capped read and not the disk. Every limit is *reported* when it is
+reached, because an archive that was not fully read must not look like one that was:
+
+| Limit (env knob) | Default | When reached |
+|---|---|---|
+| `JAR_MAX_ENTRIES` | 50000 | entries beyond it are not read (WARN) |
+| `JAR_READ_BUDGET_MB` | 64 | content beyond it is not read (WARN) |
+| `JAR_VIEW_MB` | 32 | text beyond it is not given to the credential rules (WARN) |
+| `JAR_MAX_UNCOMPRESSED_MB` | 1024 | a declared size over it is a WARN |
+| `JAR_TIME_BUDGET_S` | 90 | the rest of the archive is not read (WARN) |
+| nesting | 2 levels | a deeper archive is not opened (WARN) |
+
+Entry **names** are checked for every entry regardless of the first limit, since that needs
+only the central directory: padding an archive with 50000 junk entries does not hide a
+`../` that follows them (`jar_late_slip.jar`).
+
+**FAIL** — an entry path with `..`, a leading `/` or `\`, or a drive letter · a **symlink** entry
+pointing outside the archive · a `.class` entry that does not begin `0xCAFEBABE` · a PE, ELF
+or Mach-O executable stored **under a non-native name** · a native executable **prepended** to a
+valid archive · a file named `.jar` that is not an archive at all · a manifest `Class-Path`
+naming an `http(s)://` or `ftp://` jar · `curl|sh`, a `/dev/tcp` reverse shell, encoded
+PowerShell or `certutil -urlcache` in a resource or **class-file string constant** · a PEM
+private key · any known credential format (the same 18 providers as Layer 4) · and, for a
+file named `gradle-wrapper.jar` or `maven-wrapper.jar`, anything outside the expected
+`org/gradle/` (`org/apache/maven/`) and `META-INF/` trees, a missing `GradleWrapperMain`
+(`MavenWrapperMain`) class, or more than 100 entries.
+
+**WARN** — native libraries named `.so`/`.dll`/`.dylib` · a Java agent (`Premain-Class`,
+`Agent-Class`, `Launcher-Agent-Class`) · a `.sh`/`.bat`/`.ps1`/`.exe` entry · a nested
+archive · a symlink · an absolute `Class-Path` · duplicate entry names (readers disagree about
+which one is used) · encrypted or unreadable entries · a shell launch script before the archive
+(Spring Boot's "executable jar") · an offensive-tool name (`mimikatz`…) · and, for **every**
+wrapper jar, `jar:wrapper_checksum_must_be_verified`.
+
+Three details exist because a real case or a failed attempt forced them:
+
+- **`0xCAFEBABE` is two things.** It is the Java class magic and also the Mach-O *fat* magic.
+  `kotlinx-coroutines-core` ships a class stored as `DebugProbesKt.bin`, so a "native binary
+  under a non-native name" rule that counts it flags a legitimate library. The native-magic
+  list therefore omits it (`jar_safe.jar` carries the same shape). A PE is recognised by
+  `e_lfanew` really pointing at `PE\0\0`, not by an `MZ` prefix — `jar_safe.jar` has a text file
+  that merely starts with `MZ`.
+- **Class files are parsed, not grepped.** String constants sit between binary length fields,
+  and a constant's length byte is often a printable letter: a 65-byte string is preceded by `A`,
+  and `Acurl …` has no word boundary in front of `curl`. `class_strings()` reads the constant
+  pool as structure and falls back to printable runs only if it does not parse. `jar_hostile_class.jar`
+  is built so only the parser finds it (mutation: parser off → red).
+- **Key material is judged per string, not per view.** The first version handed the credential
+  rules one text view with a constant per line. A PEM check — header, then 60 base64 characters
+  within five lines — matched `-----BEGIN … PRIVATE KEY-----` followed by a class path such as
+  `org/apache/sshd/common/config/keys/loader/openssh/OpenSSHKeyPairResourceParser`, which is 78
+  characters of `[A-Za-z0-9/]` and so looks like a base64 body. It failed `sshd-common-2.12.1.jar`.
+  The PEM test now runs on each string constant, and on each text resource, separately.
+
+**Calibration.** 365 real jars on this host (Gradle and Maven distributions, Kotlin, Groovy, the
+native-platform family — 311 + 51 + a few) and the 24 build-tool wrappers committed in cloned
+Gradle projects (5 distinct). The structural FAIL rules fire on **none** of them. What is
+reported: 17 jars bundle native libraries, 2 are Java agents (Gradle's own instrumentation agent
+and kotlinx-coroutines), 1 nests another archive (`gradle-wrapper-main` contains
+`gradle-wrapper.jar`), and 1 exceeds the read budget (`kotlin-compiler-embeddable`, 150 MB
+uncompressed, 26130 entries). One jar FAILs, rightly: `google-http-client-1.42.2.jar` embeds a
+real PEM private key (a test key, shipped in the production jar) — the same treatment a source
+file with a literal key gets. All 24 wrappers come out WARN only. The cost is about 0.1 s per jar.
+
+> **How far to trust that.** The corpus is libraries from two toolchains. It says the rules do not
+> misfire on real, well-formed jars; it says almost nothing about how a hostile jar looks, so
+> recall rests on fixtures. `.war`, `.ear` and `.aar` are routed to the same scanner because they
+> are the same container, but **none exists on this host** and they are unmeasured. For
+> `gradle-wrapper.jar` the scanner checks *shape*, not contents: the official checksums
+> (`gradle.org/release-checksums`) are not embedded here, so a trojaned jar that keeps the
+> `org/gradle/` layout is not detected, which is why every wrapper jar asks for a manual
+> checksum check.
+
+**Not covered:** bytecode semantics (no decompiler) · code hidden in an entry that is not named
+`.class` and loaded by a custom classloader · JSP web shells inside a `.war` · archives nested
+more than two deep, or `.tar.gz`/`.7z` inside a jar (reported, not opened) · obfuscated strings
+(base64, XOR) in constants · `.hpi`, `.apk`, `.whl`, `.nupkg` and other ZIP containers, which are
+not routed.
+
+Tests: `tests/fixtures/make_jar_fixtures.py` regenerates the 35 fixtures byte-for-byte
+(`python3 tests/fixtures/make_jar_fixtures.py`). Credential jars are built at run time, so the
+repository never holds a contiguous token. The limits are exercised through the env knobs on an
+11 KB fixture.
 
 ## Package manifests
 
@@ -882,6 +984,21 @@ alongside the other two. A pattern beginning with a dash —
 `-----BEGIN RSA PRIVATE KEY-----` — is parsed by grep as options, so grep exits
 2 with "unrecognized option". `if` reads 2 as false, so the rule never fires
 and never complains. `-e` ends the ambiguity.
+
+## The HTML report must not trust the repository
+
+Everything the HTML report prints about a file comes from the repository being scanned. A
+file can be *named* `<img src=x onerror=…>`, and a finding message can carry text from inside
+a file or an archive entry (`scan_jar` names the offending entry). The report used to write
+both unescaped, so opening it to review a hostile repository could run that repository's
+script in the reviewer's browser. `_html_esc` now escapes `& < > " '` in every path, message
+and the scan directory, into a variable rather than through `$(…)` because it runs once per
+file. `shopt -u patsub_replacement` is required inside it: on bash 5.2 an `&` in a
+replacement string means "the matched text", which would make `&amp;` expand to itself.
+The JSON report was never affected (it is built with Python's `json`).
+`tests/run_tests.sh` (Layer D) scans a repository containing a file with that name and a jar
+with a `<script>` entry name, and asserts the report shows both escaped; the escaping order
+(`&` first) and each character were mutation-tested.
 
 ## Files with unknown extensions
 

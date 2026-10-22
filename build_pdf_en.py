@@ -1523,12 +1523,6 @@ for tool_data in TOOL_CATALOG:
 # ═══════════════════════════════════════════════════════════════════════════════
 # SLIDE — TOOL SUMMARY TABLE (all tools + success/fail rationale)
 # ═══════════════════════════════════════════════════════════════════════════════
-bg(cv)
-rect(cv, 0, H - 72, W, 72, DARK)
-text(cv, "Tool Summary — Acceptance Rationale", 28, H - 48,
-     size=28, color=WHITE, bold=True)
-divider_line(cv, H - 75, ACCENT)
-
 SUMMARY_TOOLS = [
     # (tool, layer, offline, pass_short, fail_short, warn_short)
     ("betterleaks",       "L1", True,
@@ -1591,6 +1585,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("Java archive scanner", "L5", True,
+     "No zip-slip, fake class or hidden executable",
+     "../ entry, non-bytecode .class, PE/ELF as logo.png, remote Class-Path → FAIL",
+     "Any jar (bytecode not reviewed), agent, native lib, wrapper → WARN"),
     ("Batch scanner",     "L5", True,
      "No certutil/bitsadmin fetch, no encoded command",
      "certutil -urlcache, curl|start, Run key, UAC off, rd C:\\ → FAIL",
@@ -1653,56 +1651,68 @@ cols = [
     ("⚠ WARN",     902,  400),
 ]
 
-# Header
-rect(cv, 25, HDR_Y - 4, W - 50, row_h - 2, DARK)
-for hdr, hx, hw in cols:
-    cv.setFillColor(WHITE)
-    cv.setFont("Helvetica-Bold", 9)
-    cv.drawCentredString(hx + hw / 2, HDR_Y + 9, hdr)
+# The table has more rows than one page holds: it overflowed the page once the
+# scanner rows were added, and the rows past the bottom edge were simply not drawn.
+ROWS_PER_PAGE = int((HDR_Y - 40) // row_h)
+n_pages = -(-len(SUMMARY_TOOLS) // ROWS_PER_PAGE)
+for page_i in range(n_pages):
+    bg(cv)
+    rect(cv, 0, H - 72, W, 72, DARK)
+    suffix = f"  ({page_i + 1}/{n_pages})" if n_pages > 1 else ""
+    text(cv, "Tool Summary — Acceptance Rationale" + suffix, 28, H - 48,
+         size=28, color=WHITE, bold=True)
+    divider_line(cv, H - 75, ACCENT)
+    # Header
+    rect(cv, 25, HDR_Y - 4, W - 50, row_h - 2, DARK)
+    for hdr, hx, hw in cols:
+        cv.setFillColor(WHITE)
+        cv.setFont("Helvetica-Bold", 9)
+        cv.drawCentredString(hx + hw / 2, HDR_Y + 9, hdr)
 
-# Rows
-for ri, (tool, layer, offline, pass_s, fail_s, warn_s) in enumerate(SUMMARY_TOOLS):
-    ry = HDR_Y - row_h - ri * row_h
-    row_bg = HexColor("#F5F8FF") if ri % 2 == 0 else WHITE
-    rect(cv, 25, ry, W - 50, row_h - 1, row_bg)
+    # Rows
+    for ri, (tool, layer, offline, pass_s, fail_s, warn_s) in enumerate(
+            SUMMARY_TOOLS[page_i * ROWS_PER_PAGE:(page_i + 1) * ROWS_PER_PAGE]):
+        ry = HDR_Y - row_h - ri * row_h
+        row_bg = HexColor("#F5F8FF") if ri % 2 == 0 else WHITE
+        rect(cv, 25, ry, W - 50, row_h - 1, row_bg)
 
-    lcolor_map = {"L1": L1_COLOR, "L2": L2_COLOR, "L3": L3_COLOR,
-                  "L4": L4_COLOR, "L5": L5_COLOR, "L6": L6_COLOR}
-    lc = lcolor_map.get(layer, DARK)
+        lcolor_map = {"L1": L1_COLOR, "L2": L2_COLOR, "L3": L3_COLOR,
+                      "L4": L4_COLOR, "L5": L5_COLOR, "L6": L6_COLOR}
+        lc = lcolor_map.get(layer, DARK)
 
-    def cell(txt, hx, hw, color=DARK, bold=False, center=False):
-        cv.setFillColor(color)
-        cv.setFont("Helvetica-Bold" if bold else "Helvetica", 8)
-        if center:
-            cv.drawCentredString(hx + hw / 2, ry + 12, txt)
-        else:
-            cv.drawString(hx + 4, ry + 12, txt)
+        def cell(txt, hx, hw, color=DARK, bold=False, center=False):
+            cv.setFillColor(color)
+            cv.setFont("Helvetica-Bold" if bold else "Helvetica", 8)
+            if center:
+                cv.drawCentredString(hx + hw / 2, ry + 12, txt)
+            else:
+                cv.drawString(hx + 4, ry + 12, txt)
 
-    cell(tool,   28,  155, lc, bold=True)
-    # Layer badge
-    rect(cv, 190, ry + 6, 40, 22, lc, radius=4)
-    cv.setFillColor(WHITE)
-    cv.setFont("Helvetica-Bold", 8)
-    cv.drawCentredString(210, ry + 14, layer)
-    # Offline
-    ol_c = HexColor("#1A7A40") if offline else ORANGE
-    cv.setFillColor(ol_c)
-    cv.setFont("Helvetica-Bold", 9)
-    cv.drawCentredString(270, ry + 14, "✔" if offline else "⚠")
-    # Pass
-    cell(pass_s, 308, 270, HexColor("#1A5C30"))
-    # Fail
-    cell(fail_s, 585, 310, HexColor("#7B1818"))
-    # Warn
-    cell(warn_s, 902, 400, HexColor("#7A5800"))
+        cell(tool,   28,  155, lc, bold=True)
+        # Layer badge
+        rect(cv, 190, ry + 6, 40, 22, lc, radius=4)
+        cv.setFillColor(WHITE)
+        cv.setFont("Helvetica-Bold", 8)
+        cv.drawCentredString(210, ry + 14, layer)
+        # Offline
+        ol_c = HexColor("#1A7A40") if offline else ORANGE
+        cv.setFillColor(ol_c)
+        cv.setFont("Helvetica-Bold", 9)
+        cv.drawCentredString(270, ry + 14, "✔" if offline else "⚠")
+        # Pass
+        cell(pass_s, 308, 270, HexColor("#1A5C30"))
+        # Fail
+        cell(fail_s, 585, 310, HexColor("#7B1818"))
+        # Warn
+        cell(warn_s, 902, 400, HexColor("#7A5800"))
 
-# Bottom note
-text(cv,
-     "FAIL = package blocked, moved to quarantine  |  "
-     "WARN = logged, pipeline continues (degraded mode)  |  "
-     "All layers must PASS for the ZIP to be released",
-     W / 2, 18, size=9, color=GRAY, align="center")
-cv.showPage()
+    # Bottom note
+    text(cv,
+         "FAIL = package blocked, moved to quarantine  |  "
+         "WARN = logged, pipeline continues (degraded mode)  |  "
+         "All layers must PASS for the ZIP to be released",
+         W / 2, 18, size=9, color=GRAY, align="center")
+    cv.showPage()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1756,7 +1766,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "257 assertions", [
+    ("Test suite", "326 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",
