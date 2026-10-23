@@ -796,8 +796,30 @@ named `.docx` is a FAIL.
 The document is **never extracted to disk**. A standard-library helper reads parts like Office does
 (offset and size from the central directory, deflate inflated to its end; a bad CRC, a mismatched local
 name or a too-small declared size hides nothing). XML is read through **one linear tokenizer** that is
-aware of `>` inside a quoted attribute, and parts larger than 4 MB are streamed in element-aligned
-slices (a 9 MB workbook with ~100 MB of sheet XML takes 2.6 s). Every limit is *reported* when reached:
+aware of `>` inside a quoted attribute, and parts larger than 4 MB are streamed in slices that end after
+a closing tag (a 9 MB workbook with ~100 MB of sheet XML takes 2.6 s). What the XML says is read the way
+a parser would hand it over, not the way it is spelled:
+
+- **Names are compared without their prefix.** A namespace prefix is arbitrary — only the URI it is bound
+  to means anything — so `x:instrText` is a field instruction exactly as `w:instrText` is. When two
+  attributes share a local name under different prefixes (`Type` and `x:Type`) **both** values are kept:
+  the one a reader uses is among them whichever it is, and a scanner that kept the first or the last
+  could be pointed at the harmless one.
+- **Encoding.** A byte-order mark, the shape of an unmarked UTF-16/32 `<`, or the declaration decides the
+  codec; Office reads UTF-16 parts and a decoder that assumed UTF-8 saw mojibake.
+- **Comments, processing instructions and CDATA** are removed or turned into character data before any
+  rule runs: `DD<!-- x -->EAUTO` and a CDATA-wrapped instruction are the same text to Word.
+- **A part is what the package says it is.** `[Content_Types].xml` and every relationship (internal
+  targets resolved against the source part's folder, absolute `/…` targets from the root) say which part
+  is the main document, a macro sheet, a VBA project, an embedded package or an ActiveX control, so each
+  works wherever it is stored (`doc/main.dat`, `xl/ms/sheet2.xml`, `word/data/macros.dat`). The old
+  name-based test (`word/`, `xl/macrosheets/`, `vbaProject.bin`) is kept as well. An OLE file stored under
+  a name nothing points at is recognised by its magic. A rule applies to a slice that contains what it
+  looks for (a plain substring test gates each one) and not to a part with a particular name.
+
+Flat OPC (a package written out as one XML file, parts inline and binary parts in base64), Word 2003 XML
+and Excel 2003 XML are recognised by their namespace whatever the extension — Word opens them — and read
+with the same rules. Every limit is *reported* when reached:
 
 | Limit (env knob) | Default | When reached |
 |---|---|---|
@@ -807,6 +829,15 @@ slices (a 9 MB workbook with ~100 MB of sheet XML takes 2.6 s). Every limit is *
 | nesting | 3 levels | a deeper object is not opened (WARN) |
 
 Part **names** are checked for every part regardless of the first limit.
+
+The time budget is checked between parts, but one pattern run on one hostile part cannot be interrupted
+by a check. So **both helpers arm an alarm** at the budget plus ten seconds: the regex engine polls for
+signals, the alarm fires inside a pattern that has run away, and what was found before it is printed and
+reported as `inspection_incomplete` ("the analysis was stopped"). The alarm is the backstop and not the
+fix — the tests still require every adversarial input to finish on its own within 20 s — and a test that
+replaces `run()` with a loop checks that the alarm works. Every byte read from a compound file is charged
+to the read budget (several directory entries can share one sector chain), and at most 5000 embedded
+objects of one compound file are examined.
 
 **FAIL** — a VBA macro that starts a program or downloads (`Shell`, `CreateObject("WScript.Shell")`,
 `URLDownloadToFile`, PowerShell, `kernel32` shellcode calls — the finding names the module and any
@@ -902,6 +933,34 @@ legal inside a quoted attribute value, so an attacker can put one before the att
 steps over all groups and jumps between the characters that matter, so an unterminated group at every
 object does not cost the whole file each time.
 
+**Red-team pass.** After the scanner passed its own suite, 187 + 30 real documents and a 97-mutation run, an
+independent agent was asked to break it. Seven defects reproduced, each is fixed with a fixture seen red
+first, and each is a class and not an instance:
+
+1. **Literal prefixes.** `w:instrText`, `xl/` formulas as `f` and `script:event-listener` were compared as
+   text, so renaming the prefix hid a DDE field, a DDE formula and an auto-running ODF macro (the last was
+   confirmed by driving LibreOffice: the macro really ran).
+2. **Literal paths.** The main part, macro sheets and VBA projects were found by file name; OPC lets any
+   name do, so `doc/main.dat` or `xl/ms/sheet2.xml` was never inspected.
+3. **UTF-8 only.** A UTF-16 relationships part (a remote template) and a UTF-16 main part were mojibake.
+4. **Comments and CDATA inside a field** split `DDEAUTO` or hid it.
+5. **XXE window.** The `SYSTEM` keyword was searched in the 2000 characters after `<!ENTITY`, and only the
+   first 100 declarations were examined: whitespace, or a hundred harmless entities, hid an external one.
+6. **CVE-2017-0199** — an RTF `OLE2Link` object stores its URL as UTF-16 inside a URL moniker, which an
+   ASCII search never saw (reported as a WARN). A moniker in a legacy `.doc` object is the same finding.
+7. **Quadratic work.** The auto-run finder (`^\s*` with `re.M`: a 2 KB module of blank lines), the
+   `Lib "kernel32"[^\n]*API` pattern, and the per-storage child lookup in a compound file with 20,000
+   embedded objects (68 s) — which is why the alarm above exists. Declarations were also judged in the
+   wrong order: `Declare Function VirtualAlloc Lib "kernel32"` has the API name *before* `Lib`, which the
+   pattern never matched, and a declaration can continue on the next line. A declaration is now judged as
+   one statement. `RtlMoveMemory` alone is `CopyMemory`, which ordinary code declares, and no longer blocks.
+
+Not on the report but found while fixing it: a tracked-deleted field instruction (`w:delInstrText`)
+returns when the change is rejected, so it is read; the slice-straddling test passed without the code it
+was written for (an instruction with no `begin` is reported anyway) and now splits `DD` from `EAUTO`
+across two 4 MB slices; and a `.docx` that is really Flat OPC, Word 2003 XML or an OLE file under another
+name used to be a "not an office document" WARN.
+
 **Known gaps, stated rather than hidden:**
 
 - **Obfuscated VBA** (string building, `Chr()` chains, `StrReverse`) is not followed; an auto-running macro
@@ -914,7 +973,12 @@ object does not cost the whole file each time.
 - **`.xlsb`** is a ZIP of binary parts: relationships, macros and macro sheets are read, but a DDE formula
   inside `xl/worksheets/*.bin` is not.
 - **Not routed:** `.one` (OneNote), `.pub`, `.vsd`, `.msg`, `.csv`/`.tsv`/`.slk` formula injection, and
-  anything that merely contains a document (a `.zip`, an `.iso`, an `.eml` attachment).
+  anything that merely contains a document (a `.zip`, an `.iso`, an `.eml` attachment). Word also opens
+  HTML and MHT written to a `.doc`; that is read as plain text.
+- **Internal DTD entities** are not expanded: a field instruction written as `&dde;` with the text
+  declared in a `DOCTYPE` is reported as a bare `DOCTYPE` (WARN). Word itself refuses a DOCTYPE; other
+  readers may not.
+- **Excel 2003 XML** is read for `ss:Formula` DDE only; its other constructs are not.
 - Calibration is **libraries and templates**, not a corpus of macro-bearing business documents: none of
   the 217 has a macro, a DDE field or a remote link, so what the rules do on a hostile document rests on
   fixtures.

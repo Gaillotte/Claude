@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 504/504 passed
+./tests/run_tests.sh          # Expected: ✔ 575/575 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 504/504 passed
+# Expected: ✔ 575/575 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -2628,7 +2628,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 504/504 passed
+# Expected: ✔ 575/575 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -3067,7 +3067,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  504/504 passed
+  ✔  575/575 passed
 ```
 
 ### 17.1 What each layer covers

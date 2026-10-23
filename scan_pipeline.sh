@@ -1594,7 +1594,7 @@ scan_archive() {
 # checksums are not embedded, so that file always asks for a manual check).
 _jar_facts() {
     python3 - "$1" "$2" <<'PYEOF' 2>/dev/null
-import io, os, re, struct, sys, time, zipfile, zlib
+import io, os, re, signal, struct, sys, time, zipfile, zlib
 
 # argv: <archive> <view file: the text of the entries, for the credential rules>
 path, view_path = sys.argv[1], sys.argv[2]
@@ -1806,6 +1806,27 @@ def decode_text(data):
 
 
 view = open(view_path, "w", encoding="utf-8", errors="replace")
+
+
+def _alarm(signum, frame):
+    # The time budget is checked between entries, but one pattern run on one hostile entry cannot be
+    # interrupted by a check. When the alarm fires the findings so far are printed and the helper
+    # exits: a document-sized time budget is reported, never a hang with no verdict.
+    emit("incomplete", "time budget exceeded, the analysis was stopped")
+    try:
+        view.close()
+    except Exception:
+        pass
+    for tag, (n, ex) in facts.items():
+        print("FACT %s %d %s" % (tag, n, "; ".join(ex)))
+    print("FACT done")
+    sys.stdout.flush()
+    os._exit(0)
+
+
+if hasattr(signal, "setitimer"):
+    signal.signal(signal.SIGALRM, _alarm)
+    signal.setitimer(signal.ITIMER_REAL, _knob("JAR_TIME_BUDGET_S", 90) + 10)
 
 
 def to_view(label, text):
@@ -2255,7 +2276,7 @@ scan_jar() {
 # these (a .zip, an .iso, an .eml attachment).
 _office_facts() {
     python3 - "$1" "$2" "$3" <<'PYEOF' 2>/dev/null
-import codecs, html, io, os, re, struct, sys, time, zipfile, zlib
+import base64, codecs, html, io, os, re, signal, struct, sys, time, zipfile, zlib
 
 # argv: <document> <view file: text for the credential rules> <lower-case extension>
 path, view_path, ext = sys.argv[1], sys.argv[2], sys.argv[3].lower()
@@ -2271,7 +2292,25 @@ def _knob(name, default):
 
 MAX_ENTRIES = int(_knob("OFFICE_MAX_ENTRIES", 20000))      # parts whose bytes are read
 BUDGET = int(_knob("OFFICE_READ_BUDGET_MB", 256) * 1048576)  # bytes read across all parts
-DEADLINE = time.monotonic() + _knob("OFFICE_TIME_BUDGET_S", 90)
+TIME_BUDGET = _knob("OFFICE_TIME_BUDGET_S", 90)
+DEADLINE = time.monotonic() + TIME_BUDGET
+
+
+class Watchdog(BaseException):
+    """Raised by the alarm when the cooperative time budget was not enough. A BaseException, so no
+    `except Exception` in the analysis code can swallow it and carry on with the slow input."""
+
+
+def _alarm(signum, frame):
+    raise Watchdog()
+
+
+# The time budget is checked between parts, but one pattern run on one hostile part cannot be
+# interrupted by a check: it stops only when the alarm fires (the regex engine polls for signals).
+# Whatever was found before the alarm is kept and the document is reported as not fully read.
+if hasattr(signal, "setitimer"):
+    signal.signal(signal.SIGALRM, _alarm)
+    signal.setitimer(signal.ITIMER_REAL, TIME_BUDGET + 10)
 PART_CAP = 8 * 1048576    # most that is read from one binary part (XML parts are streamed)
 CHUNK = 4 * 1048576       # size of one slice of a streamed XML part
 EMBED_CAP = 32 * 1048576  # largest embedded container that is opened
@@ -2454,28 +2493,114 @@ def iter_bytes(z, info, chunk=CHUNK):
             yield b
 
 
-CUT_AT = {"word/": "</w:p>", "xl/": "</row>", "ppt/": "</a:p>"}
+def xml_codec(head):
+    """The codec an XML part is written in: a byte-order mark, the shape of an unmarked UTF-16/32 '<',
+    or the declaration. Office reads UTF-16 parts; a decoder that assumes UTF-8 sees mojibake."""
+    if head[:4] in (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"):
+        return "utf-32"
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16"
+    if head[:3] == b"\xef\xbb\xbf":
+        return "utf-8-sig"
+    if head[:4] == b"<\x00\x00\x00":
+        return "utf-32-le"
+    if head[:4] == b"\x00\x00\x00<":
+        return "utf-32-be"
+    if head[:2] == b"<\x00":
+        return "utf-16-le"
+    if head[:2] == b"\x00<":
+        return "utf-16-be"
+    m = re.match(rb"\s*<\?xml[^>]{0,200}encoding\s*=\s*[\"']([A-Za-z0-9._-]{1,30})", head)
+    if m:
+        name = m.group(1).decode("ascii", "replace")
+        try:
+            canon = codecs.lookup(name).name
+        except LookupError:
+            return "utf-8"
+        return "utf-8" if canon.startswith(("utf-16", "utf-32", "utf_16", "utf_32")) else name
+    return "utf-8"
+
+
+def decode_xml(data):
+    return data.decode(xml_codec(data[:512]), "replace")
+
+
+XML_OPEN = (("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>"))
+
+
+def xml_normalise(text):
+    """What a parser would hand over: comments and processing instructions gone, CDATA turned into
+    character data. A field instruction written as `DD<!-- x -->EAUTO` or as CDATA is the same text
+    to Word. Every search moves forward only, so the work is linear however many constructs there are."""
+    if not any(o in text for o, _ in XML_OPEN):
+        return text
+    n = len(text)
+    nxt = []
+    for o, _ in XML_OPEN:
+        x = text.find(o)
+        nxt.append(x if x != -1 else n + 1)
+    out, pos = [], 0
+    while True:
+        i = nxt.index(min(nxt))
+        s = nxt[i]
+        if s > n:
+            break
+        out.append(text[pos:s])
+        opener, closer = XML_OPEN[i]
+        e = text.find(closer, s + len(opener))
+        if i == 1:
+            out.append(html.escape(text[s + len(opener):n if e == -1 else e], quote=False))
+        pos = n if e == -1 else e + len(closer)
+        for k, (o, _) in enumerate(XML_OPEN):
+            if nxt[k] < pos:
+                x = text.find(o, pos)
+                nxt[k] = x if x != -1 else n + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def xml_unterminated(buf):
+    """Index where a comment, CDATA section or processing instruction that is still open at the end of
+    `buf` begins (len(buf) if none): a slice must not end inside one."""
+    cut = len(buf)
+    for opener, closer in XML_OPEN:
+        i = buf.rfind(opener)
+        if i != -1 and buf.find(closer, i) == -1:
+            cut = min(cut, i)
+    return cut
 
 
 def iter_text(z, info, name, cap_total):
-    """Decoded text chunks of an XML part, each ending at an element boundary (a paragraph, a row)
-    so that no field instruction or formula is split between two of them. Stops after cap_total bytes."""
-    dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    cut = next((v for k, v in CUT_AT.items() if name.lower().startswith(k)), "</")
-    buf, total = "", 0
+    """Decoded, normalised text chunks of an XML part, each ending after a closing tag so that no
+    field instruction or formula is split between two of them. Stops after cap_total bytes."""
+    dec, buf, total = None, "", 0
     for b in iter_bytes(z, info):
+        if dec is None:
+            dec = codecs.getincrementaldecoder(xml_codec(b[:512]))(errors="replace")
         total += len(b)
         buf += dec.decode(b)
         if len(buf) >= CHUNK:
-            i = buf.rfind(cut)
-            i = i + len(cut) if i != -1 else buf.rfind(">") + 1
-            if i > 0:
-                yield buf[:i]
-                buf = buf[i:]
+            k = xml_unterminated(buf)
+            work, held = xml_normalise(buf[:k]), buf[k:]
+            i = work.rfind("</")
+            j = work.find(">", i) + 1 if i != -1 else 0
+            if j <= 0:
+                j = work.rfind(">") + 1
+            if j > 0 and len(work) < 3 * CHUNK:
+                yield work[:j]
+                buf = work[j:] + held
+            elif j > 0 or len(work) >= 3 * CHUNK:
+                yield work          # no tag boundary in three slices: stop looking for a clean cut
+                buf = held
+            else:
+                buf = work + held
         if total >= cap_total:
             emit("incomplete", "%s was read only in part (read budget)" % name)
             break
+    if dec is None:
+        return
     buf += dec.decode(b"", final=True)
+    buf = xml_normalise(buf)
     if buf:
         yield buf
 
@@ -2532,6 +2657,9 @@ class CFB:
             raise ValueError("no root entry")
         self.paths = {}
         self._walk(0, ())
+        self.children = {}
+        for pth, ent in self.paths.items():
+            self.children.setdefault(pth[:-1], {})[pth[-1]] = ent
         self._mini = None
 
     def _off(self, s):
@@ -2567,6 +2695,14 @@ class CFB:
                 stack.append((e["child"], p))
 
     def read(self, e, limit=PART_CAP):
+        if state["budget"] <= 0:
+            emit("incomplete", "read budget of %d MB exhausted" % (BUDGET >> 20))
+            return b""
+        data = self._read(e, limit)
+        state["budget"] -= len(data)
+        return data
+
+    def _read(self, e, limit):
         size = min(e["size"], limit)
         if e["kind"] == 5:
             return b"".join(self._sector(s) for s in self._chain(e["start"], 1 + size // self.ssize))[:size]
@@ -2652,8 +2788,10 @@ def vba_modules(dirdata):
     return mods
 
 
+# Blanks are [ \t], never \s: with re.M, ^\s* at every line start swallows the following blank lines,
+# so N empty lines cost N*N/2 steps (a 2 KB document took longer than the time budget).
 AUTO_PROC = re.compile(
-    r"(?im)^\s*(?:Public\s+|Private\s+)?(?:Sub|Function)\s+(AutoOpen|Auto_Open|AutoExec|AutoNew|AutoClose|Auto_Close|"
+    r"(?im)^[ \t]*(?:(?:Public|Private|Friend|Static)[ \t]+)*(?:Sub|Function)[ \t]+(AutoOpen|Auto_Open|AutoExec|AutoNew|AutoClose|Auto_Close|"
     r"Document_Open|Document_New|Document_Close|DocumentOpen|DocumentBeforeClose|Workbook_Open|Workbook_Activate|"
     r"Workbook_BeforeClose|Workbook_Close|Auto_Activate|Auto_Deactivate|PresentationOpen)\b")
 # Calls that start a program or fetch from the network. CreateObject alone is not on the list:
@@ -2662,7 +2800,33 @@ VBA_DANGER = re.compile(
     r"(?i)\b(Shell\b\s*\(?|ShellExecute\w*|URLDownloadToFile\w*|DownloadFile|DownloadString|Net\.WebClient|ExecuteExcel4Macro|"
     r"CreateObject\s*\(\s*\"(?:WScript\.Shell|Shell\.Application|MSXML2\.[\w.]*|Microsoft\.XMLHTTP|WinHttp\.WinHttpRequest[\w.]*|ADODB\.Stream)\"|"
     r"GetObject\s*\(\s*\"winmgmts|powershell|mshta|regsvr32|rundll32|certutil|bitsadmin|cscript\.exe|wscript\.exe|"
-    r"cmd(?:\.exe)?\s*/[ck]|Lib\s+\"kernel32\"[^\n]*(?:VirtualAlloc|RtlMoveMemory|CreateThread|WriteProcessMemory))")
+    r"cmd(?:\.exe)?\s*/[ck])")
+# Functions that allocate or run memory: the core of a shellcode loader. RtlMoveMemory alone is
+# CopyMemory, which ordinary code declares, so it is not on the list.
+LOADER_API = re.compile(r"(?i)\b(VirtualAlloc(?:Ex)?|VirtualProtect(?:Ex)?|CreateThread|CreateRemoteThread|WriteProcessMemory|"
+                        r"QueueUserAPC|NtAllocateVirtualMemory|NtCreateThreadEx|RtlCreateUserThread|EnumSystemLocales[AW]|HeapCreate)\b")
+SYSTEM_DLL = re.compile(r'(?i)"(?:kernel32|kernelbase|ntdll)(?:\.dll)?"')
+
+
+def loader_declarations(text):
+    """Names of memory-allocating or thread-starting functions declared from kernel32 or ntdll. One
+    declaration is one statement: it can run over several lines (' _' continues it), and the API's
+    name comes before Lib or after it (Alias), so the whole statement is searched, once."""
+    found, stmt = [], []
+    for ln in text.split("\n"):
+        s = ln.rstrip()
+        stmt.append(s)
+        if s.endswith("_"):
+            continue
+        whole_stmt = " ".join(stmt)
+        stmt = []
+        if "lib" in whole_stmt.lower() and SYSTEM_DLL.search(whole_stmt):
+            found += [m.group(1) for m in LOADER_API.finditer(whole_stmt)]
+    if stmt:
+        whole_stmt = " ".join(stmt)
+        if "lib" in whole_stmt.lower() and SYSTEM_DLL.search(whole_stmt):
+            found += [m.group(1) for m in LOADER_API.finditer(whole_stmt)]
+    return sorted(set(found))
 
 
 def analyze_vba(cf, label):
@@ -2703,9 +2867,10 @@ def analyze_vba(cf, label):
     names = sorted(sources)
     emit("vba_macro", label + " " + ", ".join(names))
     for nm in names:
-        text = sources[nm].decode("cp1252", "replace")
+        text = sources[nm].decode("cp1252", "replace").replace("\r\n", "\n").replace("\r", "\n")
         auto = sorted({m.group(1) for m in AUTO_PROC.finditer(text)})
-        danger = sorted({re.sub(r"\s+", " ", m.group(1))[:24] for m in VBA_DANGER.finditer(text)})
+        danger = sorted({re.sub(r"\s+", " ", m.group(1))[:24] for m in VBA_DANGER.finditer(text)}
+                        | {"Lib kernel32 " + a for a in loader_declarations(text)})
         if danger:
             emit("vba_dangerous", "%s%s: %suses %s" % (label + " " if label else "", nm,
                                                        ("auto-runs " + ", ".join(auto) + "; ") if auto else "", ", ".join(danger[:5])))
@@ -2814,13 +2979,21 @@ def analyze_cfb(data, label, depth):
                 emit("embedded_object", label + "/".join(p))
         elif p[-1] == "Equation Native":
             equation_findings(label + "/".join(p[:-1]), cf.read(e))
+        elif p[-1] == "\x01Ole" and e["size"] < 65536:
+            # the link information of a linked (not embedded) object: a URL moniker names its target
+            ole = cf.read(e)
+            if URL_MONIKER in ole and remote_url(ole):
+                emit("remote_object", label + "/".join(p[:-1]) + " links to a remote URL")
         elif p[-1] in ("Package", "package_stream"):
             # an Office 2007+ (or LibreOffice) document wrapped in an OLE object: open the package
             known = True
             blob(label, "/".join(p), cf.read(e, EMBED_CAP), depth)
     eq_clsid = bytes.fromhex("02CE020000000000C000000000000046")
-    for p, e in storages.items():
-        kids = {q[-1]: ee for q, ee in cf.paths.items() if q[:len(p)] == p and len(q) == len(p) + 1}
+    for k, (p, e) in enumerate(storages.items()):
+        if k >= 5000 or out_of_time():
+            emit("incomplete", "more than 5000 embedded objects, the rest were not read")
+            break
+        kids = cf.children.get(p, {})
         if "\x01Ole10Native" in kids or "Equation Native" in kids:
             continue  # reported above
         if e["clsid"] == eq_clsid:
@@ -2903,8 +3076,27 @@ URI_HANDLERS = {"ms-msdt", "msdt", "mhtml", "search-ms", "search", "ms-officecmd
 REMOTE_OBJ_TYPES = {"oleobject", "frame", "subdocument", "package", "control", "aschunk", "afchunk", "externaldata"}
 
 
+def local(name):
+    """An element or attribute name without its prefix: a prefix is arbitrary, only the URI it is
+    bound to means anything, and a reader that compares the literal text "w:instrText" is blind to
+    the same document written with x:."""
+    return name.rsplit(":", 1)[-1]
+
+
 def attrs(raw):
-    return {k.lower(): (v1 or v2) for k, v1, v2 in ATTR.findall(raw)}
+    """{local name in lower case: [every value]}. Two attributes can share a local name under
+    different prefixes (Type and x:Type); keeping all of them means the one a reader uses is among
+    them, whichever it is."""
+    out = {}
+    for k, v1, v2 in ATTR.findall(raw):
+        lst = out.setdefault(local(k).lower(), [])
+        if len(lst) < 8:
+            lst.append(v1 or v2)
+    return out
+
+
+def av(a, name):
+    return a.get(name) or [""]
 
 
 def tag_text(text, end):
@@ -2914,16 +3106,18 @@ def tag_text(text, end):
 
 
 ENTITY = re.compile(r"(?is)<!ENTITY\b")
+# After the keyword: optional '%', the name, then SYSTEM or PUBLIC. Anchored at the match, so each
+# declaration costs its own length (the whitespace runs are disjoint), however many there are.
+ENTITY_EXTERNAL = re.compile(r"(?is)\s+(?:%\s+)?[^\s>]+\s+(?:SYSTEM|PUBLIC)\b")
 
 
 def entity_findings(text):
-    """'xxe' for an ENTITY that points at SYSTEM or PUBLIC, 'doctype' for any other declaration."""
+    """'xxe' for an ENTITY that points at SYSTEM or PUBLIC, 'doctype' for any other declaration.
+    Every declaration is examined: one behind four hundred harmless ones is still one."""
     kind = ""
-    for k, m in enumerate(ENTITY.finditer(text)):
-        if k >= 100:
-            break
+    for m in ENTITY.finditer(text):
         kind = kind or "doctype"
-        if re.search(r"(?is)\b(SYSTEM|PUBLIC)\b", text[m.end():m.end() + 2000]):
+        if ENTITY_EXTERNAL.match(text, m.end()):
             return "xxe"
     if not kind and "<!doctype" in text[:4096].lower():
         kind = "doctype"
@@ -2960,17 +3154,56 @@ def classify_target(label, kind, tgt, hyperlink=False):
             emit("remote_content", shown)
 
 
-def analyze_rels(label, text):
+def out_of_time():
+    if time.monotonic() > DEADLINE:
+        emit("incomplete", "time budget exceeded")
+        return True
+    return False
+
+
+def resolve_target(source, target):
+    """The part name an internal relationship target points at (OPC: relative to the source part's
+    folder, or absolute when it starts with '/')."""
+    target = html.unescape(target).strip().replace("\\", "/")
+    out = [] if target.startswith("/") else source.split("/")[:-1]
+    for seg in target.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if out:
+                out.pop()
+        else:
+            out.append(seg)
+    return "/".join(out)
+
+
+def rels_source(name):
+    """The part a relationships part belongs to: word/_rels/document.xml.rels -> word/document.xml,
+    _rels/.rels -> '' (the package). None when the part is not where Office looks for relationships."""
+    comps = name.split("/")
+    if len(comps) >= 2 and comps[-2].lower() == "_rels" and comps[-1].lower().endswith(".rels"):
+        return "/".join(comps[:-2] + [comps[-1][:-5]])
+    return None
+
+
+def analyze_rels(label, text, roles=None, source=None):
+    """External relationships are classified; internal ones record what kind of part their target is
+    (roles: {target part name in lower case: {relationship types}}), so a part is recognised by what
+    points at it and not only by what it is called."""
     for m in TAG.finditer(text):
-        if m.group(1) != "Relationship":
+        if local(m.group(1)) != "Relationship":
             continue
         a = attrs(m.group(2))
-        if a.get("targetmode", "").lower() != "external":
-            continue
-        kind = html.unescape(a.get("type", "")).rsplit("/", 1)[-1].lower()
-        classify_target(label, kind, a.get("target", ""), hyperlink=(kind == "hyperlink"))
-        if kind == "hyperlink" and EXEC_EXT.search(html.unescape(a.get("target", "")).split("?")[0].strip()):
-            emit("link_to_program", "%s%s" % (label, html.unescape(a.get("target", ""))[:70]))
+        external = any(v.lower() == "external" for v in av(a, "targetmode"))
+        for ty in av(a, "type")[:4]:
+            kind = html.unescape(ty).rsplit("/", 1)[-1].lower()
+            for tgt in av(a, "target")[:4]:
+                if external:
+                    classify_target(label, kind, tgt, hyperlink=(kind == "hyperlink"))
+                    if kind == "hyperlink" and EXEC_EXT.search(html.unescape(tgt).split("?")[0].strip()):
+                        emit("link_to_program", "%s%s" % (label, html.unescape(tgt)[:70]))
+                elif roles is not None and source is not None:
+                    roles.setdefault(resolve_target(source, tgt).lower(), set()).add(kind)
 
 
 DDE_FIELD = re.compile(r"(?is)^\s*DDE(?:AUTO)?\b")
@@ -2991,43 +3224,86 @@ def field_findings(label, f):
             classify_target(label, "field", v)
 
 
+def tag_text(text, end):
+    """The character data that follows a tag: up to the next '<', at most 8000 characters."""
+    nxt = text.find("<", end, end + 8000)
+    return text[end:nxt if nxt != -1 else end + 8000]
+
+
 def word_fields(label, text, stack):
     """Field instructions, joined across the runs Word splits them into. `stack` carries the
     fields that are still open from one chunk of a large part to the next."""
     for m in TAG.finditer(text):
-        name = m.group(1)
-        if name == "w:fldChar":
-            t = attrs(m.group(2)).get("w:fldchartype")
-            if t == "begin":
-                stack.append([])
-            elif t == "end" and stack:
-                field_findings(label, "".join(stack.pop()))
-        elif name == "w:instrText" and not m.group(3):
+        name = local(m.group(1))
+        if name == "fldChar":
+            for t in av(attrs(m.group(2)), "fldchartype"):
+                if t == "begin":
+                    stack.append([])
+                elif t == "end" and stack:
+                    field_findings(label, "".join(stack.pop()))
+        elif name in ("instrText", "delInstrText") and not m.group(3):
             frag = html.unescape(tag_text(text, m.end()))
             if stack:
                 stack[-1].append(frag)
             else:
                 field_findings(label, frag)  # an instruction with no begin: Word still reads it
-        elif name == "w:fldSimple":
-            field_findings(label, html.unescape(attrs(m.group(2)).get("w:instr", "")))
+        elif name == "fldSimple":
+            for ins in av(attrs(m.group(2)), "instr"):
+                field_findings(label, html.unescape(ins))
 
 
 DDE_FORMULA = re.compile(r"(?i)^\s*[=+@-]?\s*(?:" + SHELLS + r")(?:\.exe)?\s*\|")
 XLM_CALL = re.compile(r"(?i)\b(EXEC|CALL|REGISTER|FOPEN|FWRITE|URLDownloadToFile\w*|RUN)\s*\(")
 
 
-PARA_END = re.compile(r"</(?:w:p|a:p|text:p|text:h|row|si)>|<(?:w:br|text:line-break)\b[^<>]{0,200}/>")
-STRIP_TAGS = re.compile(r"<[^<>]{0,4000}>")
+def xml_rules(label, name, text, stack, macrosheet=False):
+    """Every rule that reads XML, applied to one normalised slice of a part. Which rules apply is
+    decided by what the slice contains, not by what the part is called: a main part can be moved
+    anywhere an OPC relationship says, and a prefix is arbitrary. Each gate is a plain substring
+    test, so a slice with nothing to find costs a handful of scans."""
+    shown = label + name
+    if "instrText" in text or "fldChar" in text or "fldSimple" in text or "delInstrText" in text:
+        word_fields(shown + " ", text, stack)
+    if "ddeLink" in text:
+        for m in TAG.finditer(text):
+            if local(m.group(1)) == "ddeLink":
+                for svc in av(attrs(m.group(2)), "ddeservice"):
+                    svc = html.unescape(svc)
+                    emit("dde" if re.match(r"(?i)^" + SHELLS + r"(\.exe)?$", svc.strip()) else "dde_declared",
+                         "%s service %s" % (shown, svc))
+    if "|" in text or macrosheet or "ormula" in text:
+        for m in TAG.finditer(text):
+            nm = local(m.group(1))
+            if nm == "f" and not m.group(3):
+                f = html.unescape(tag_text(text, m.end()))
+                if DDE_FORMULA.match(f):
+                    emit("dde", "%s %s" % (shown, f.strip()[:60]))
+                elif macrosheet and XLM_CALL.search(f):
+                    emit("xlm_dangerous", "%s %s" % (shown, f.strip()[:60]))
+            else:
+                for fv in attrs(m.group(2)).get("formula", ()):   # Excel 2003 XML: ss:Formula="=cmd|'/c calc'!A0"
+                    if DDE_FORMULA.match(html.unescape(fv)):
+                        emit("dde", "%s %s" % (shown, html.unescape(fv).strip()[:60]))
+    if "ppaction://" in text:
+        for m in TAG.finditer(text):
+            for act in av(attrs(m.group(2)), "action"):
+                act = html.unescape(act).lower()
+                if act.startswith("ppaction://program"):
+                    emit("ppt_program_action", shown)
+                elif act.startswith("ppaction://macro"):
+                    emit("ppt_macro_action", "%s %s" % (shown, act[:50]))
+    if "webPr" in text:
+        for m in TAG.finditer(text):
+            if local(m.group(1)) == "webPr":
+                for u in av(attrs(m.group(2)), "url"):
+                    classify_target(shown + " ", "webquery", u)
+    if "hidden" in text.lower():
+        if re.search(r"(?i)\bstate\s*=\s*[\"'](?:very)?hidden[\"']", text):
+            state["wb_hidden"] = True
+    to_view(shown, text_of(text))
 
 
-def text_of(xml):
-    """Visible text. A paragraph or row ends a line: a PEM key pasted into a document has one
-    paragraph per line, and the key rule works on lines."""
-    return html.unescape(STRIP_TAGS.sub(" ", PARA_END.sub("\n", xml)))
-
-
-def scan_xml_part(label, name, chunks):
-    low = name.lower()
+def scan_xml_part(label, name, chunks, macrosheet=False):
     stack = []
     first = True
     for text in chunks:
@@ -3036,39 +3312,19 @@ def scan_xml_part(label, name, chunks):
             if ef:
                 emit(ef, label + name)
         first = False
-        if low.startswith("word/"):
-            word_fields(label + name + " ", text, stack)
-        if "externallinks/" in low:
-            for m in TAG.finditer(text):
-                if m.group(1) == "ddeLink":
-                    svc = html.unescape(attrs(m.group(2)).get("ddeservice", ""))
-                    emit("dde" if re.match(r"(?i)^" + SHELLS + r"(\.exe)?$", svc.strip()) else "dde_declared",
-                         "%s%s service %s" % (label, name, svc))
-        if low.startswith("xl/worksheets/") or low.startswith("xl/macrosheets/"):
-            for m in TAG.finditer(text):
-                if m.group(1) != "f" or m.group(3):
-                    continue
-                f = html.unescape(tag_text(text, m.end()))
-                if DDE_FORMULA.match(f):
-                    emit("dde", "%s%s %s" % (label, name, f.strip()[:60]))
-                elif low.startswith("xl/macrosheets/") and XLM_CALL.search(f):
-                    emit("xlm_dangerous", "%s%s %s" % (label, name, f.strip()[:60]))
-        if low.startswith("ppt/"):
-            for m in TAG.finditer(text):
-                act = html.unescape(attrs(m.group(2)).get("action", "")).lower()
-                if act.startswith("ppaction://program"):
-                    emit("ppt_program_action", "%s%s" % (label, name))
-                elif act.startswith("ppaction://macro"):
-                    emit("ppt_macro_action", "%s%s %s" % (label, name, act[:50]))
-        if low == "xl/connections.xml":
-            for m in TAG.finditer(text):
-                if m.group(1) == "webPr":
-                    classify_target(label + name + " ", "webquery", attrs(m.group(2)).get("url", ""))
-        if low == "xl/workbook.xml":
-            state["wb_hidden"] = bool(re.search(r"(?i)state=\"(very)?hidden\"", text))
-        to_view(label + name, text_of(text))
+        xml_rules(label, name, text, stack, macrosheet)
     for f in ("".join(x) for x in stack):
         field_findings(label + name + " ", f)
+
+
+PARA_END = re.compile(r"</(?:[\w.-]+:)?(?:p|h|row|si)>|<(?:[\w.-]+:)?(?:br|line-break)\b[^<>]{0,200}/>")
+STRIP_TAGS = re.compile(r"<[^<>]{0,4000}>")
+
+
+def text_of(xml):
+    """Visible text. A paragraph or row ends a line: a PEM key pasted into a document has one
+    paragraph per line, and the key rule works on lines."""
+    return html.unescape(STRIP_TAGS.sub(" ", PARA_END.sub("\n", xml)))
 
 
 # ── OpenDocument ─────────────────────────────────────────────────────────────
@@ -3081,38 +3337,38 @@ ODF_DANGER = re.compile(
 
 def analyze_odf_text(label, name, text, macros_embedded):
     for m in TAG.finditer(text):
-        tag, a = m.group(1), attrs(m.group(2))
-        if tag == "script:event-listener":
-            event = a.get("script:event-name", "").lower()
-            target = html.unescape(a.get("script:macro-name", "") or a.get("xlink:href", ""))
+        tag, a = local(m.group(1)), attrs(m.group(2))
+        if tag == "event-listener":
+            targets = [html.unescape(v) for v in a.get("macro-name", []) + a.get("href", [])]
+            target = next((v for v in targets if v), "")
             installed = (target.startswith(("application:", "user:")) or "location=application" in target
                          or "location=user" in target)
             if installed:
                 continue  # bound to a macro the application ships, not one the document carries
-            if event in AUTO_EVENTS:
-                emit("odf_auto_macro", "%s%s %s -> %s" % (label, name, event, target[:60]))
-            elif target:
-                emit("odf_macro", "%s%s %s -> %s" % (label, name, event, target[:60]))
+            for event in [v.lower() for v in av(a, "event-name")]:
+                if event in AUTO_EVENTS:
+                    emit("odf_auto_macro", "%s%s %s -> %s" % (label, name, event, target[:60]))
+                elif target:
+                    emit("odf_macro", "%s%s %s -> %s" % (label, name, event, target[:60]))
             continue
-        for k, v in a.items():
-            if k.endswith("dde-application"):
-                app = html.unescape(v).strip()
-                emit("dde" if re.match(r"(?i)^" + SHELLS + r"(\.exe)?$", app) else "dde_declared",
-                     "%s%s application %s" % (label, name, app))
-        href = html.unescape(a.get("xlink:href", "")).strip()
-        if not href or href.startswith("#") or not (SCHEME.match(href) or is_unc(href)):
-            continue
-        hyper = tag in ("text:a", "draw:a")
-        sch = (SCHEME.match(href).group(1).lower() if SCHEME.match(href) else "")
-        if sch in ("vnd.sun.star.script", "macro"):
-            if "location=application" not in href:
-                emit("odf_macro", "%s%s link %s" % (label, name, href[:60]))
-        elif sch in URI_HANDLERS:
-            emit("uri_handler", "%s%s %s -> %s" % (label, name, tag, href[:60]))
-        elif is_unc(href):
-            emit("unc_hyperlink" if hyper else "unc_path", "%s%s %s -> %s" % (label, name, tag, href[:60]))
-        elif sch in ("http", "https", "ftp", "ftps", "file") and not hyper:
-            emit("odf_external", "%s%s %s -> %s" % (label, name, tag, href[:60]))
+        for v in a.get("dde-application", []):
+            app = html.unescape(v).strip()
+            emit("dde" if re.match(r"(?i)^" + SHELLS + r"(\.exe)?$", app) else "dde_declared",
+                 "%s%s application %s" % (label, name, app))
+        for href in [html.unescape(v).strip() for v in a.get("href", [])]:
+            if not href or href.startswith("#") or not (SCHEME.match(href) or is_unc(href)):
+                continue
+            hyper = tag == "a"
+            sch = (SCHEME.match(href).group(1).lower() if SCHEME.match(href) else "")
+            if sch in ("vnd.sun.star.script", "macro"):
+                if "location=application" not in href:
+                    emit("odf_macro", "%s%s link %s" % (label, name, href[:60]))
+            elif sch in URI_HANDLERS:
+                emit("uri_handler", "%s%s %s -> %s" % (label, name, tag, href[:60]))
+            elif is_unc(href):
+                emit("unc_hyperlink" if hyper else "unc_path", "%s%s %s -> %s" % (label, name, tag, href[:60]))
+            elif sch in ("http", "https", "ftp", "ftps", "file") and not hyper:
+                emit("odf_external", "%s%s %s -> %s" % (label, name, tag, href[:60]))
     for m in ODF_DDE_FORMULA.finditer(text):
         emit("dde", "%s%s DDE(%s)" % (label, name, m.group(1)))
 
@@ -3131,15 +3387,18 @@ def analyze_odf_zip(z, infos, label, depth):
         n = info.filename
         if info.is_dir() or state["budget"] <= 0 or not (ODF_READ.match(n) or n in macros):
             continue
+        if out_of_time():
+            break
         data = entry_bytes(z, info, PART_CAP)
         state["budget"] -= len(data)
-        text = data.decode("utf-8", "replace")
+        is_xml = n.lower().endswith(".xml")
+        text = xml_normalise(decode_xml(data)) if is_xml else data.decode("utf-8", "replace")
         if n == "META-INF/manifest.xml":
             if "encryption-data" in text:
                 emit("encrypted", label + "manifest declares encrypted parts")
             continue
         if n in macros:
-            src = html.unescape(re.sub(r"<[^<>]*>", "", text)) if n.lower().endswith(".xml") else text
+            src = html.unescape(re.sub(r"<[^<>]*>", "", text)) if is_xml else text
             danger = sorted({re.sub(r"\s+", " ", m.group(1))[:24] for m in ODF_DANGER.finditer(src)})
             emit("odf_macro", label + n)
             if danger:
@@ -3164,8 +3423,70 @@ def analyze_zip_bytes(data, label, depth):
     return analyze_zip(z, label, depth)
 
 
-NAME_TEXT_PARTS = re.compile(r"(?i)^(word|xl|ppt|docProps|customXml)/.*\.xml$")
 FULL_READ = (".rels", ".xml", ".rtf", ".mht", ".htm", ".html", ".bin", ".js", ".vbs", ".hta")
+XML_TYPES = ("application/xml", "text/xml")
+
+
+class Package:
+    """What the package says about its own parts: [Content_Types].xml and every relationship, so a
+    part is recognised by what it is declared to be and by what points at it, not by its name."""
+
+    def __init__(self, z, infos):
+        self.defaults, self.overrides, self.roles = {}, {}, {}
+        ct = next((i for i in infos if i.filename.lower() == "[content_types].xml"), None)
+        if ct is not None:
+            text = xml_normalise(decode_xml(entry_bytes(z, ct, 4 * 1048576)))
+            for m in TAG.finditer(text):
+                nm, a = local(m.group(1)).lower(), attrs(m.group(2))
+                cts = [v.lower() for v in av(a, "contenttype")]
+                if nm == "default":
+                    for e in av(a, "extension"):
+                        self.defaults.setdefault(e.lower(), set()).update(cts)
+                elif nm == "override":
+                    for pn in av(a, "partname"):
+                        self.overrides.setdefault(pn.lower().lstrip("/"), set()).update(cts)
+
+    def finish(self, z, infos, label):
+        """Second step, after the content types are known: classify every relationship part."""
+        for info in infos:
+            if info.is_dir() or not info.filename.lower().endswith(".rels"):
+                continue
+            src = rels_source(info.filename)
+            if out_of_time():
+                break
+            data = entry_bytes(z, info, 4 * 1048576)
+            state["budget"] -= len(data)
+            if info.file_size > 4 * 1048576:
+                emit("incomplete", "%s is larger than the read limit and was read only in part" % info.filename)
+            analyze_rels(label + info.filename + " ", xml_normalise(decode_xml(data)), self.roles, src)
+
+    def types(self, name):
+        low = name.lower()
+        return self.overrides.get(low, set()) | self.defaults.get(low.rsplit(".", 1)[-1] if "." in low else "", set())
+
+    def kinds(self, name):
+        return self.roles.get(name.lower(), set())
+
+    def is_xml(self, name):
+        low = name.lower()
+        return low.endswith(".xml") or any(c.endswith("+xml") or c in XML_TYPES for c in self.types(name))
+
+    def is_macrosheet(self, name):
+        return (name.lower().startswith("xl/macrosheets/") or any("macrosheet" in c for c in self.types(name))
+                or any("macrosheet" in k for k in self.kinds(name)))
+
+    def is_vba(self, name):
+        return (name.lower().endswith("vbaproject.bin") or any("vbaproject" in c for c in self.types(name))
+                or any("vbaproject" in k for k in self.kinds(name)))
+
+    def is_embedded(self, name):
+        return "/embeddings/" in name.lower() or bool(self.kinds(name) & {"oleobject", "package"})
+
+    def is_altchunk(self, name):
+        return "afchunk" in name.lower() or "afchunk" in self.kinds(name)
+
+    def is_activex(self, name):
+        return "/activex/" in name.lower() or any("activex" in c for c in self.types(name)) or "control" in self.kinds(name)
 
 
 def analyze_zip(z, label, depth):
@@ -3183,7 +3504,7 @@ def analyze_zip(z, label, depth):
         if i.filename == "mimetype":
             mt = entry_bytes(z, i, 256)
     is_odf = mt.startswith(b"application/vnd.oasis.opendocument")
-    if not (is_odf or "[Content_Types].xml" in names):
+    if not (is_odf or any(n.lower() == "[content_types].xml" for n in names)):
         if depth == 1:
             emit("not_office", "document zip")  # only the file itself can be "not an office document"
         return False
@@ -3194,15 +3515,17 @@ def analyze_zip(z, label, depth):
     state["parts"] += len(infos)
     if is_odf:
         analyze_odf_zip(z, infos, label, depth)
+    pkg = Package(z, [] if is_odf else infos)
+    if not is_odf:
+        pkg.finish(z, infos, label)
     macro_seen = False
     state["wb_hidden"] = False
-    macrosheets = [n for n in names if n.lower().startswith("xl/macrosheets/")]
+    macrosheets = [n for n in names if not is_odf and pkg.is_macrosheet(n)]
     for info in infos:
-        if time.monotonic() > DEADLINE:
-            emit("incomplete", "time budget exceeded")
+        if out_of_time():
             break
         try:
-            macro_seen = zip_part(z, info, label, depth, is_odf, macro_seen)
+            macro_seen = zip_part(z, info, label, depth, is_odf, macro_seen, pkg)
         except Exception:
             emit("unreadable", label + info.filename)
     if macrosheets and "xlm_dangerous" not in facts:
@@ -3213,17 +3536,21 @@ def analyze_zip(z, label, depth):
     return True
 
 
-def zip_part(z, info, label, depth, is_odf, macro_seen):
+def zip_part(z, info, label, depth, is_odf, macro_seen, pkg):
     """One part of an OOXML or OpenDocument package. Returns the updated macro_seen."""
     n, low = info.filename, info.filename.lower()
     if info.is_dir():
         return macro_seen
-    embedded = "/embeddings/" in low
-    full = low.endswith(FULL_READ) or embedded or "/activex/" in low or "afchunk" in low
+    embedded = pkg.is_embedded(n) and not is_odf
+    xmlish = not is_odf and pkg.is_xml(n) and not low.endswith(".rels")
+    activex = not is_odf and pkg.is_activex(n)
+    altchunk = not is_odf and pkg.is_altchunk(n)
+    vba = not is_odf and pkg.is_vba(n)
+    full = low.endswith(FULL_READ) or embedded or activex or altchunk or xmlish or vba
     if full and state["budget"] <= 0:
         emit("incomplete", "read budget of %d MB exhausted" % (BUDGET >> 20))
         full = False
-    streamed = full and NAME_TEXT_PARTS.match(n) and low.endswith(".xml") and not is_odf
+    streamed = full and xmlish
     cap = EMBED_CAP if embedded else PART_CAP
     data = entry_bytes(z, info, HEAD if streamed or not full else cap)
     if full and not streamed:
@@ -3239,24 +3566,90 @@ def zip_part(z, info, label, depth, is_odf, macro_seen):
             blob(label, n, data, depth)
         return macro_seen
     if low.endswith(".rels"):
-        analyze_rels(label + n + " ", data.decode("utf-8", "replace"))
-    elif low.endswith("vbaproject.bin"):
+        return macro_seen   # classified up front, with the rest of the package's relationships
+    if vba:
         macro_seen = True
         analyze_cfb(data, label + n + "!", depth)
-    elif "/activex/" in low:
+    elif activex:
         emit("activex", label + n)
     elif embedded:
         blob(label, n, data, depth)
-    elif "afchunk" in low:
+    elif altchunk:
         emit("altchunk", label + n)
         blob(label, n, data, depth)
     elif EXEC_EXT.search(n):
         emit("embedded_executable", label + n)
     elif streamed:
         before = state["budget"]
-        scan_xml_part(label, n, iter_text(z, info, n, state["budget"]))
+        scan_xml_part(label, n, iter_text(z, info, n, state["budget"]), pkg.is_macrosheet(n))
         state["budget"] -= min(info.file_size, before)
+    elif data[:8] == CFB_MAGIC:
+        blob(label, n, entry_bytes(z, info, EMBED_CAP), depth)   # an OLE file under some other name
     return macro_seen
+
+
+# ── Flat OPC, Word 2003 XML, Excel 2003 XML ──────────────────────────────────
+# Word and Excel open a package written out as ONE XML file (Flat OPC) and the 2003 XML formats
+# whatever the extension says; the parts are inline and binary parts are base64.
+FLAT_OPC = "schemas.microsoft.com/office/2006/xmlPackage"
+XML_2003 = ("schemas.microsoft.com/office/word/2003/wordml", "urn:schemas-microsoft-com:office:spreadsheet",
+            "schemas.microsoft.com/office/word/2003/wordml/")
+
+
+def analyze_flat_xml(text, label, depth):
+    """`text` is normalised. Returns True when it was an office document."""
+    head = text[:8192]
+    odf = "urn:oasis:names:tc:opendocument:xmlns:office:1.0" in head
+    opc = FLAT_OPC in head
+    if not (odf or opc or any(x in head for x in XML_2003)):
+        return False
+    ef = entity_findings(text)
+    if ef:
+        emit(ef, label + "document")
+    if odf:
+        analyze_odf_text(label, "document", text, False)
+        pos = 0
+        for _ in range(1000):   # str.find, not a lazy pattern: an opener that never closes would rescan each time
+            s = text.find("<script:module", pos)
+            gt = text.find(">", s) if s != -1 else -1
+            e = text.find("</script:module>", gt) if gt != -1 else -1
+            if e == -1:
+                break
+            emit("odf_macro", "embedded StarBasic module")
+            if ODF_DANGER.search(html.unescape(text[gt + 1:e])):
+                emit("odf_dangerous", "embedded StarBasic module")
+            pos = e + 1
+        to_view(label + "document", text_of(text))
+        return True
+    if not opc:
+        scan_xml_part(label, "document", [text], True)
+        return True
+    starts = [m for m in TAG.finditer(text) if local(m.group(1)) == "part"][:MAX_ENTRIES]
+    analyze_rels(label + "package ", text)
+    for k, m in enumerate(starts):
+        if out_of_time():
+            break
+        seg = text[m.start():starts[k + 1].start() if k + 1 < len(starts) else len(text)]
+        a = attrs(m.group(2))
+        pname = av(a, "name")[0]
+        ctype = av(a, "contenttype")[0].lower()
+        bd = next((b for b in TAG.finditer(seg) if local(b.group(1)) == "binaryData"), None)
+        if bd is not None:
+            nxt = seg.find("<", bd.end())
+            raw = re.sub(r"\s+", "", seg[bd.end():nxt if nxt != -1 else len(seg)])[:EMBED_CAP * 4 // 3 + 8]
+            try:
+                blob_data = base64.b64decode(raw + "=" * (-len(raw) % 4), validate=False)
+            except ValueError:
+                emit("unreadable", label + pname)
+                continue
+            if "vbaproject" in ctype or pname.lower().endswith("vbaproject.bin"):
+                analyze_cfb(blob_data, label + pname + "!", depth)
+                state["flat_macro"] = True
+            else:
+                blob(label, pname, blob_data, depth)
+        else:
+            scan_xml_part(label, pname, [seg], "macrosheet" in ctype)
+    return True
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -3308,6 +3701,16 @@ def rtf_hex(group, key):
     return bytes.fromhex(h[:len(h) & ~1])
 
 
+URL_MONIKER = bytes.fromhex("e0c9ea79f9bace118c8200aa004ba90b")   # CLSID_StdURLMoniker, as stored (little-endian GUID)
+REMOTE_ASCII = re.compile(rb"(?i)(?:https?|ftp)://|\\\\[A-Za-z0-9.-]+\\")
+# The same, as UTF-16LE: a URL moniker stores its target as wide characters, so an ASCII search never sees it.
+REMOTE_WIDE = re.compile(rb"(?i)(?:h\x00t\x00t\x00p\x00(?:s\x00)?|f\x00t\x00p\x00):\x00/\x00/\x00|\\\x00\\\x00[A-Za-z0-9]\x00")
+
+
+def remote_url(data):
+    return REMOTE_ASCII.search(data) is not None or REMOTE_WIDE.search(data) is not None
+
+
 def ole1(data):
     """(class name, native data) of an OLE 1.0 embedded or linked object, or None."""
     try:
@@ -3330,7 +3733,10 @@ def analyze_rtf(data, label, depth):
         emit("incomplete", "objects nested deeper than %d levels were not opened" % (MAX_DEPTH - 1))
         return
     text = data.decode("latin-1")
-    for m in re.finditer(r"\{\\\*\\template\s+([^{}]{0,2000})\}", text):
+    for k, m in enumerate(re.finditer(r"\{\\\*\\template\s+([^{}]{0,2000})\}", text)):
+        if k >= 1000:
+            emit("incomplete", "more than 1000 RTF templates, the rest were not read")
+            break
         tgt = m.group(1).strip()
         if SCHEME.match(tgt) or is_unc(tgt):
             classify_target(label, "attachedtemplate", tgt)
@@ -3367,8 +3773,11 @@ def analyze_rtf(data, label, depth):
         native = o[1] if o else objdata
         tag = "%sobject %d%s" % (label, n_obj, " (%s)" % cls if cls else "")
         auto_link = bool(re.search(r"\\objautlink\b", grp) and re.search(r"\\objupdate\b", grp))
-        remote = re.search(rb"(?i)(https?://|ftp://|\\\\[A-Za-z0-9.-]+\\)", native or b"") is not None
-        if auto_link and (remote or re.search(r"(?i)htmlfile|ShockwaveFlash|Microsoft Word|Excel", cls)):
+        remote = remote_url(native or b"")
+        # CVE-2017-0199: a linked object (Word.Document.8 / htmlfile / OLE2Link) whose URL moniker, stored
+        # as UTF-16, makes Word fetch and run the target when the document opens.
+        linkish = auto_link or re.search(r"(?i)OLE2Link|StdOleLink", cls + " " + cls_decl) or URL_MONIKER in (native or b"")
+        if (auto_link and (remote or re.search(r"(?i)htmlfile|ShockwaveFlash|Microsoft Word|Excel", cls))) or (linkish and remote):
             emit("rtf_remote_link", tag)
             continue
         if re.search(r"(?i)equation", cls):
@@ -3391,7 +3800,9 @@ def analyze_rtf(data, label, depth):
             analyze_zip_bytes(native, tag + "!", depth + 1)
         else:
             emit("rtf_object", tag)
-    plain = re.sub(r"[0-9a-fA-F\s]{200,}", " ", text)  # hex blobs (objects, pictures) are not text
+    # hex blobs (objects, pictures) are not text. Maximal runs, replaced when long: "{200,}" tried from
+    # every position inside a shorter run costs the run's length each time.
+    plain = re.sub(r"[0-9a-fA-F\s]+", lambda m: " " if len(m.group()) >= 200 else m.group(), text)
     plain = re.sub(r"\\[a-zA-Z]+-?\d* ?|\\'[0-9a-fA-F]{2}|[{}\\]", " ", plain)
     to_view(label + "text", plain)
 
@@ -3413,6 +3824,15 @@ def whole(limit):
         return fh.read(limit)
 
 
+def analyze_flat_xml_file():
+    """Flat OPC, Word 2003 XML, Excel 2003 XML and flat OpenDocument: one XML file holding the whole document."""
+    htxt = head.decode(xml_codec(head[:512]), "replace").lstrip("\ufeff \t\r\n")
+    if not htxt.startswith("<"):
+        return False
+    text = xml_normalise(decode_xml(whole(64 * 1048576)))
+    return analyze_flat_xml(text, "", 1)
+
+
 def run():
     if head is not None:
         if not size:
@@ -3430,33 +3850,26 @@ def run():
                 analyze_zip(zf, "", 1)
         elif head[:5] == b"{\\rtf" or b"{\\rtf" in head[:1024]:
             analyze_rtf(whole(64 * 1048576), "", 1)
-        elif re.match(rb"\s*<\?xml", head) and b"office:document" in head:
-            t = whole(64 * 1048576).decode("utf-8", "replace")
-            analyze_odf_text("", "document", t, False)
-            # str.find, not a lazy pattern: an opener that never closes would rescan to the end each time
-            pos = 0
-            for _ in range(1000):
-                s = t.find("<script:module", pos)
-                gt = t.find(">", s) if s != -1 else -1
-                e = t.find("</script:module>", gt) if gt != -1 else -1
-                if e == -1:
-                    break
-                emit("odf_macro", "embedded StarBasic module")
-                if ODF_DANGER.search(html.unescape(t[gt + 1:e])):
-                    emit("odf_dangerous", "embedded StarBasic module")
-                pos = e + 1
-            to_view("document", text_of(t))
+        elif analyze_flat_xml_file():
+            pass
         else:
             emit("not_office", "text" if texty(head) else "binary")
 
 
-if head is not None:
-    try:
-        run()
-    except Exception as exc:
-        # Whatever was found before the failure is kept, and the failure itself is reported:
-        # a document built to crash the reader must not come out clean.
-        emit("unparseable", "internal error %s" % type(exc).__name__)
+try:
+    if head is not None:
+        try:
+            run()
+        except Watchdog:
+            raise
+        except Exception as exc:
+            # Whatever was found before the failure is kept, and the failure itself is reported:
+            # a document built to crash the reader must not come out clean.
+            emit("unparseable", "internal error %s" % type(exc).__name__)
+except Watchdog:
+    emit("incomplete", "time budget exceeded, the analysis was stopped")
+if hasattr(signal, "setitimer"):
+    signal.setitimer(signal.ITIMER_REAL, 0)
 view.close()
 for tag, (n, ex) in facts.items():
     print("FACT %s %d %s" % (tag, n, "; ".join(ex)))

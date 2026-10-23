@@ -922,6 +922,100 @@ for p,i in d.get('file_results',{}).items():
             "an Excel web query to a UNC path is flagged"
         assert_not_contains "$(line_for office_webquery_safe.xlsx)" "office:" \
             "a workbook whose connection is a local database query is not reported"
+
+        # Found by red-teaming the scanner: each of these evaded it until it was fixed
+        DDE_MSG="CWE-94:office_dde_field_or_formula_starts_a_program"
+        assert_contains "$(line_for office_rt_prefix_dde.docx)" "$DDE_MSG" \
+            "a Word field written with the prefix x: instead of w: is still found (a prefix is arbitrary)"
+        assert_contains "$(line_for office_rt_prefix_formula.xlsx)" "$DDE_MSG" \
+            "a DDE cell formula in x:f elements is still found"
+        assert_contains "$(line_for office_rt_prefix_listener.odt)" "CWE-94:odf_macro_runs_on_open" \
+            "an ODF event listener written with another prefix is still flagged"
+        assert_contains "$(line_for office_rt_prefix_rels.docx)" "CWE-829:office_remote_template_injection" \
+            "a relationships part with a prefixed namespace is still read"
+        assert_contains "$(line_for office_rt_moved_main.docx)" "$DDE_MSG" \
+            "a main part moved to doc/main.dat (named by _rels/.rels and [Content_Types].xml) is still inspected"
+        assert_contains "$(line_for office_rt_moved_macrosheet.xlsm)" "CWE-94:office_excel4_macro_sheet_is_hidden_or_runs_programs" \
+            "an Excel 4.0 macro sheet moved to xl/ms/sheet2.xml (named by the workbook relationship) is still found"
+        assert_contains "$(line_for office_rt_utf16_rels.docx)" "CWE-829:office_remote_template_injection" \
+            "a UTF-16 relationships part is decoded, not read as mojibake"
+        assert_contains "$(line_for office_rt_utf16_document.docx)" "$DDE_MSG" \
+            "a UTF-16 main part is decoded"
+        assert_contains "$(line_for office_rt_cdata_dde.docx)" "$DDE_MSG" \
+            "a field instruction held in CDATA is read"
+        assert_contains "$(line_for office_rt_comment_dde.docx)" "$DDE_MSG" \
+            "a comment inside a field instruction does not split DDEAUTO"
+        assert_contains "$(line_for office_rt_xxe_padded.docx)" "CWE-611:office_part_declares_an_external_entity" \
+            "an external entity whose SYSTEM keyword is 2600 spaces after ENTITY is flagged"
+        assert_contains "$(line_for office_rt_xxe_after_many.docx)" "CWE-611:office_part_declares_an_external_entity" \
+            "an external entity behind 400 harmless ones is flagged"
+        assert_contains "$(line_for office_rt_ole2link.rtf)" "CWE-829:rtf_linked_object_updates_from_a_remote_source" \
+            "a CVE-2017-0199 OLE2Link object (UTF-16 URL in the moniker) is flagged"
+        JOL=$(line_for office_rt_ole2link_local.rtf)
+        assert_contains "$JOL" "rtf:contains_embedded_ole_object" \
+            "an OLE2Link object that points at a local file is reported"
+        assert_not_contains "$JOL" "[FAIL]" \
+            "…and is not blocked"
+        assert_contains "$(line_for office_rt_ole2link.doc)" "CWE-829:office_object_or_frame_fetched_from_a_remote_host" \
+            "a URL moniker inside a legacy .doc object is flagged"
+        VBA_MSG="CWE-94:office_vba_macro_runs_programs_or_downloads"
+        assert_contains "$(line_for office_rt_vba_declare_shell.docm)" "$VBA_MSG" \
+            "VirtualAlloc/CreateThread declared before Lib \"kernel32\" (with a continuation line) is a shellcode loader"
+        assert_contains "$(line_for office_rt_vba_declare_alias.docm)" "$VBA_MSG" \
+            "…and so is a declaration that renames VirtualAlloc through Alias"
+        JVB=$(line_for office_rt_vba_declare_benign.docm)
+        assert_not_contains "$JVB" "[FAIL]" \
+            "GetTickCount and CopyMemory declarations alone do not block a macro"
+        assert_contains "$JVB" "office:vba_macro_runs_when_the_document_opens" \
+            "…but its AutoOpen is still reported"
+        assert_contains "$(line_for office_rt_flat_opc.docx)" "$DDE_MSG" \
+            "a Flat OPC package (one XML file) with a DDE field is read"
+        assert_contains "$(line_for office_rt_flat_opc_macro.docx)" "$VBA_MSG" \
+            "a VBA project carried as base64 binaryData in a Flat OPC package is found"
+        assert_contains "$(line_for office_rt_wordml2003.doc)" "$DDE_MSG" \
+            "a Word 2003 XML document named .doc is read"
+        assert_contains "$(line_for office_rt_plain_xml.docx)" "office:not_an_office_document_despite_its_extension" \
+            "an unrelated XML file named .docx is still only reported"
+        assert_contains "$(line_for office_rt_attr_collision_last.docx)" "CWE-829:office_remote_template_injection" \
+            "Type followed by x:Type: the unprefixed Type is not hidden by the attribute that shares its local name"
+        assert_contains "$(line_for office_rt_attr_collision_first.docx)" "CWE-829:office_remote_template_injection" \
+            "x:Type followed by Type: the same, in the other order"
+        assert_contains "$(line_for office_rt_utf16le_nobom_rels.docx)" "CWE-829:office_remote_template_injection" \
+            "UTF-16LE without a byte-order mark is recognised from the shape of the first '<'"
+        assert_contains "$(line_for office_rt_utf16be_rels.docx)" "CWE-829:office_remote_template_injection" \
+            "UTF-16BE with a byte-order mark is decoded"
+        XLM_MSG="CWE-94:office_excel4_macro_sheet_is_hidden_or_runs_programs"
+        assert_contains "$(line_for office_rt_macrosheet_ctype_only.xlsm)" "$XLM_MSG" \
+            "a macro sheet named only by its content type is found"
+        assert_contains "$(line_for office_rt_macrosheet_rel_only.xlsm)" "$XLM_MSG" \
+            "a macro sheet named only by the workbook relationship is found"
+        assert_contains "$(line_for office_rt_macrosheet_dotdot.xlsm)" "$XLM_MSG" \
+            "a relationship target with .. is resolved against the source part's folder"
+        assert_contains "$(line_for office_rt_macrosheet_absolute.xlsm)" "$XLM_MSG" \
+            "an absolute relationship target (/data/sheet2.xml) is resolved from the package root"
+        assert_contains "$(line_for office_rt_vba_ctype_only.docx)" "$VBA_MSG" \
+            "a VBA project named only by its content type is read, whatever its file name"
+        assert_contains "$(line_for office_rt_vba_rel_only.docx)" "$VBA_MSG" \
+            "a VBA project named only by the relationship that points at it is read"
+        assert_contains "$(line_for office_rt_embedded_elsewhere.docx)" "CWE-506:office_embeds_an_executable_or_script" \
+            "an OLE package outside word/embeddings/, named by its oleObject relationship, is opened"
+        assert_contains "$(line_for office_rt_ole_unnamed.docx)" "$VBA_MSG" \
+            "an OLE compound file stored under an unrelated name is recognised by its magic and opened"
+        assert_contains "$(line_for office_rt_vba_default_ctype.docx)" "$VBA_MSG" \
+            "a VBA project whose content type comes from a Default extension entry is read"
+        assert_contains "$(line_for office_rt_delinstr.docx)" "$DDE_MSG" \
+            "a tracked-deleted field instruction (it returns when the change is rejected) is read"
+        assert_contains "$(line_for office_rt_vba_declare_continued.docm)" "$VBA_MSG" \
+            "a declaration whose API name is on a continuation line is judged as one statement"
+        assert_contains "$(line_for office_rt_vba_declare_ntdll.docm)" "$VBA_MSG" \
+            "NtAllocateVirtualMemory declared from ntdll is a loader"
+        RTF_LINK="CWE-829:rtf_linked_object_updates_from_a_remote_source"
+        assert_contains "$(line_for office_rt_ole2link_class_only.rtf)" "$RTF_LINK" \
+            "an OLE2Link object is flagged by its class and a UTF-16 URL, without the update flags"
+        assert_contains "$(line_for office_rt_ole2link_moniker_only.rtf)" "$RTF_LINK" \
+            "an object carrying a URL moniker and a UTF-16 URL is flagged whatever its class"
+        assert_contains "$(line_for office_rt_ole2link_flags_wide.rtf)" "$RTF_LINK" \
+            "an auto-updating linked object with a UTF-16 URL is flagged whatever its class"
         assert_contains "$(line_for office_legacy_ppt_macro.ppt)" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
             "a macro inside a legacy .ppt (a compressed ExOleObjStg record) is found"
         assert_not_contains "$(line_for office_embedded_workbook.docx)" "[WARN]" \
@@ -1300,6 +1394,16 @@ PYEOF
     JARSLOW=$(timeout 20 python3 -I "$JARPY" "${SCRATCH}/redos.jar" "${SCRATCH}/view.txt" 2>&1 || true)
     assert_contains "$JARSLOW" "FACT done" \
         "adversarial repeated PEM-header fragments finish inside 20 s (no quadratic regex)"
+
+    # The alarm: a helper stuck in a loop no budget check can reach prints what it found and exits.
+    sed 's/^def to_view(label, text):$/emit("marker", "found before the hang")\nwhile True:\n    pass\n\n\ndef to_view(label, text):/' "$JARPY" > "${SCRATCH}/jar_facts_stuck.py"
+    JARSTUCK=$(JAR_TIME_BUDGET_S=1 timeout 60 python3 -I "${SCRATCH}/jar_facts_stuck.py" "${FIXTURES}/rules/jar_safe.jar" "${SCRATCH}/view.txt" 2>&1 || true)
+    assert_contains "$JARSTUCK" "FACT incomplete" \
+        "a jar helper stuck past its time budget is stopped by the alarm and reports the archive as not fully read"
+    assert_contains "$JARSTUCK" "FACT marker" \
+        "…and keeps what it found before it was stopped"
+    assert_contains "$JARSTUCK" "FACT done" \
+        "…and still finishes, so the scanner can tell it from a crash"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1342,7 +1446,32 @@ import sys
 sys.path.insert(0, sys.argv[2])
 import make_office_fixtures as m
 d = sys.argv[1]
+def vba_doc(src):
+    return m.docx(extra={"word/vbaProject.bin": m.cfb(m.vba_project({"ThisDocument": src}))},
+                  content_extra='<Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/>')
+
+
+HEAD = 'Attribute VB_Name = "ThisDocument"\n'
 cases = {
+    # VBA source: the auto-run finder and the declaration search ran in time quadratic in blank lines / repeats
+    "adv_vba_blank.docm": vba_doc(HEAD + "\n" * 100000 + "x = 1\n"),
+    "adv_vba_blank_spaces.docm": vba_doc(HEAD + "   \n" * 60000 + "x = 1\n"),
+    "adv_vba_lib.docm": vba_doc(HEAD + "Declare Function f " + 'Lib "kernel32" ' * 300000 + "\n"),
+    "adv_vba_continued.docm": vba_doc(HEAD + "x = 1 _\n" * 300000 + "y = 2\n"),
+    "adv_vba_powershell.docm": vba_doc(HEAD + "powershell -e " * 300000 + "\n"),
+    # a compound file with 20000 storages in its ObjectPool: each used to scan every path
+    "adv_objpool.doc": m.cfb({"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60, "ObjectPool": {f"_{i}": {"x": b"1"} for i in range(20000)}}),
+    # comments, CDATA and processing instructions that never close, or open and close a million times
+    "adv_comments.docx": m.docx(doc_xml=m.CT_HEAD + f"<w:document {m.NS_W}><w:body>" + "<!--" * 1000000 + "</w:body></w:document>"),
+    "adv_cdata_open.docx": m.docx(doc_xml=m.CT_HEAD + f"<w:document {m.NS_W}><w:body>" + "<![CDATA[" * 400000 + "</w:body></w:document>"),
+    "adv_pi.docx": m.docx(doc_xml=m.CT_HEAD + f"<w:document {m.NS_W}><w:body>" + "<?" * 1500000 + "</w:body></w:document>"),
+    "adv_mixed_openers.docx": m.docx(doc_xml=m.CT_HEAD + f"<w:document {m.NS_W}><w:body>" + "<!--x--><![CDATA[y]]><?z?>" * 150000 + "<?" + "</w:body></w:document>"),
+    # entity declarations with long whitespace runs, and 300000 of them
+    "adv_entity_spaces.docx": m.docx(doc_xml=m.CT_HEAD + "<!DOCTYPE d [" + ("<!ENTITY a" + " " * 3000) * 1000 + f"]><w:document {m.NS_W}/>"),
+    "adv_entity_pairs.docx": m.docx(doc_xml=m.CT_HEAD + "<!DOCTYPE d [" + "<!ENTITY x y " * 300000 + f"]><w:document {m.NS_W}/>"),
+    # a Flat OPC package of 200000 part openers, and one of 50000 binary parts
+    "adv_flat_opc.docx": ('<?xml version="1.0"?><pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">' + '<pkg:part pkg:name="/a" pkg:contentType="x">' * 200000 + "</pkg:package>").encode(),
+    "adv_flat_parts.docx": ('<?xml version="1.0"?><pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">' + '<pkg:part pkg:name="/a" pkg:contentType="x"><pkg:binaryData>QUJD</pkg:binaryData></pkg:part>' * 50000 + "</pkg:package>").encode(),
     "adv_instr.docx": m.docx(doc_xml=m.CT_HEAD + f"<w:document {m.NS_W}><w:body>" + "<w:instrText>" * 300000 + "</w:body></w:document>"),
     "adv_angle.odt": m.odf("<a" * 1500000),
     "adv_template.rtf": m.rtf("{\\*\\template " * 300000),
@@ -1355,25 +1484,47 @@ cases = {
 for n, data in cases.items():
     open(f"{d}/{n}", "wb").write(data)
 ADVEOF
-    # A field whose instruction lies in a later 4 MB slice than its begin: the open fields must be
-    # carried from one slice to the next.
+    # A field whose instruction is split between two 4 MB slices: " DD" in the first, "EAUTO ..." in the
+    # second. Only a reader that carries the open field from one slice to the next joins them.
     python3 -I - "$SCRATCH" "${FIXTURES}" <<'ADVEOF'
 import sys
 sys.path.insert(0, sys.argv[2])
 import make_office_fixtures as m
-pad = "<w:p><w:r><w:t>" + "x" * 900 + "</w:t></w:r></w:p>" * 1 
-body = ('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:p>' + pad * 6000
-        + '<w:p><w:r><w:instrText> DDEAUTO c:\\windows\\system32\\cmd.exe "/k calc.exe"</w:instrText></w:r>'
+pad = "<w:p><w:r><w:t>" + "x" * 900 + "</w:t></w:r></w:p>"
+body = ('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> DD</w:instrText></w:r></w:p>' + pad * 6000
+        + '<w:p><w:r><w:instrText>EAUTO c:\\windows\\system32\\cmd.exe "/k calc.exe"</w:instrText></w:r>'
           '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
 open(sys.argv[1] + "/adv_straddle.docx", "wb").write(m.docx(body))
 ADVEOF
     OFFSTR=$(python3 -I "$OFFPY" "${SCRATCH}/adv_straddle.docx" "${SCRATCH}/view.txt" docx 2>&1 || true)
     assert_contains "$OFFSTR" "FACT dde" \
-        "a DDEAUTO field whose instruction is in a later slice than its begin is still found"
-    for _adv in adv_instr.docx adv_angle.odt adv_template.rtf adv_objects.rtf adv_rels.docx adv_entity.docx adv_basic_tags.odt adv_flat_modules.fodt; do
+        "a DDEAUTO instruction split between two 4 MB slices is joined and found"
+
+    # Every byte read from a compound file is charged to the read budget, and an exhausted budget is reported.
+    OFFCFB=$(OFFICE_READ_BUDGET_MB=0.0001 python3 -I "$OFFPY" "${FIXTURES}/rules/office_legacy_macro.doc" "${SCRATCH}/view.txt" doc 2>&1 || true)
+    assert_contains "$OFFCFB" "read budget" \
+        "OFFICE_READ_BUDGET_MB also limits what is read from a compound file"
+
+    # The alarm: a helper stuck in a loop no budget check can reach is stopped, and what it found is kept.
+    sed 's/^def run():$/def run():\n    emit("marker", "found before the hang")\n    while True:\n        pass/' "$OFFPY" > "${SCRATCH}/office_facts_stuck.py"
+    OFFSTUCK=$(OFFICE_TIME_BUDGET_S=1 timeout 60 python3 -I "${SCRATCH}/office_facts_stuck.py" "${FIXTURES}/rules/office_safe.docx" "${SCRATCH}/view.txt" docx 2>&1 || true)
+    assert_contains "$OFFSTUCK" "FACT incomplete" \
+        "a helper stuck past its time budget is stopped by the alarm and reports the document as not fully read"
+    assert_contains "$OFFSTUCK" "FACT marker" \
+        "…and keeps what it found before it was stopped"
+    assert_contains "$OFFSTUCK" "FACT done" \
+        "…and still finishes, so the scanner can tell it from a crash"
+    for _adv in adv_instr.docx adv_angle.odt adv_template.rtf adv_objects.rtf adv_rels.docx adv_entity.docx adv_basic_tags.odt adv_flat_modules.fodt \
+                adv_vba_blank.docm adv_vba_blank_spaces.docm adv_vba_lib.docm adv_vba_continued.docm adv_vba_powershell.docm adv_objpool.doc \
+                adv_comments.docx adv_cdata_open.docx adv_pi.docx adv_mixed_openers.docx adv_entity_spaces.docx adv_entity_pairs.docx \
+                adv_flat_opc.docx adv_flat_parts.docx; do
         OFFSLOW=$(timeout 20 python3 -I "$OFFPY" "${SCRATCH}/${_adv}" "${SCRATCH}/view.txt" "${_adv##*.}" 2>&1 || true)
         assert_contains "$OFFSLOW" "FACT done" \
             "adversarial input finishes inside 20 s (no quadratic pattern): ${_adv}"
+        if [[ "$_adv" == adv_objpool.doc ]]; then
+            assert_contains "$OFFSLOW" "FACT incomplete" \
+                "a compound file with 20000 embedded objects is read only in part, and says so"
+        fi
     done
 fi
 
