@@ -955,6 +955,38 @@ first, and each is a class and not an instance:
    pattern never matched, and a declaration can continue on the next line. A declaration is now judged as
    one statement. `RtlMoveMemory` alone is `CopyMemory`, which ordinary code declares, and no longer blocks.
 
+**Second round.** The same exercise on the fixed code, one agent per format family, with real LibreOffice
+as the oracle for what a document does on open: thirteen candidates, all reproduced, all fixed, again as
+classes:
+
+- **Names.** The tokenizer required `[A-Za-z_]` to start a name, so a prefix such as `é:` — or one holding
+  U+00B7 — made an element invisible. A name is now anything XML allows.
+- **Attribute values are character data.** `TargetMode="Ext&#101;rnal"`, `fldCharType="b&#101;gin"` and
+  `state="&#104;idden"` are `External`, `begin` and `hidden` to every parser; `attrs()` now decodes each
+  value once, and the hidden-sheet test reads the attribute instead of searching the raw text for the word.
+- **Field syntax.** `INCLUDEPICTURE \d "\\host\x"` puts a switch before the file name and
+  `LINK Excel.Sheet.8 "\\host\x"` a class name; every argument is now examined, switches skipped.
+- **ODF.** `mimetype` is found wherever it is in the archive (or the manifest identifies the package), and
+  three more events run a document macro while LibreOffice opens a document — measured, by loading each
+  event binding in LibreOffice 24.2 through UNO: `dom:DOMFocusIn`, `office:layout-finished` (text) and
+  `office:page-count-change` (text). `office:load` and `office:activate` did not fire there; they stay on the
+  list because they cost nothing.
+- **Legacy.** A macro sheet with `Auto_Close`/`Auto_Activate`/`Auto_Deactivate` or a command line is not
+  just "a visible macro sheet" (BIFF formulas are tokens, not text, so this reads the strings in the
+  stream — see the known gaps); an Equation object recognised by CLSID or `CompObj` is searched for a payload
+  in all of its streams, whatever they are called; a `\x01Ole` stream is searched in full.
+- **RTF.** A control word that does nothing (`\additive`) before `DDEAUTO` or a template target, a `\'44`
+  hex escape inside the keyword, and `\binN` — whose N raw bytes are *data*, a `}` among them — all defeated
+  group tracking. Field and template text is now read the way Word reads it (`rtf_plain`), `\binN` is
+  honoured in group tracking and in `\objdata`, and an `INCLUDEPICTURE` in an RTF is checked like one in a
+  `.docx`.
+- **Routing.** Word opens an RTF whatever the file is called, so a file named `.txt`, `.log` or with no
+  extension whose first kilobyte contains `{\rtf` goes to the office scanner (a builtin `read`, no fork per
+  file), and a `.xml` that is Flat OPC or Word/Excel 2003 XML is scanned as a document as well.
+
+The first round's verifiers were cut short by a usage limit, so nine of the thirteen were reproduced by hand
+instead; the survivors of both rounds are in `tests/fixtures/rules/office_rt_*` and `office_rt2_*`.
+
 Not on the report but found while fixing it: a tracked-deleted field instruction (`w:delInstrText`)
 returns when the change is rejected, so it is read; the slice-straddling test passed without the code it
 was written for (an instruction with no `begin` is reported anyway) and now splits `DD` from `EAUTO`
@@ -979,6 +1011,10 @@ name used to be a "not an office document" WARN.
   declared in a `DOCTYPE` is reported as a bare `DOCTYPE` (WARN). Word itself refuses a DOCTYPE; other
   readers may not.
 - **Excel 2003 XML** is read for `ss:Formula` DDE only; its other constructs are not.
+- **Legacy macro-sheet formulas** are BIFF tokens, not text. The scanner reads the strings in the workbook
+  stream (a command line, `URLDownloadToFile`, an `Auto_*` name) and the hidden flag of the sheet; a visible
+  macro sheet that runs a program through tokens only (`EXEC` as a function id, built from pieces) is reported
+  as a macro sheet, not blocked.
 - Calibration is **libraries and templates**, not a corpus of macro-bearing business documents: none of
   the 217 has a macro, a DDE field or a remote link, so what the rules do on a hostile document rests on
   fixtures.
