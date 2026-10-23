@@ -888,6 +888,11 @@ def main() -> None:
     write(R / "office_rt_embedded_elsewhere.docx", docx(
         doc_rels=[("rId9", "oleObject", "data/payload.bin", False)], extra={"word/data/payload.bin": pkg_exe}))
     write(R / "office_rt_ole_unnamed.docx", docx(extra={"word/media/thumb.dat": proj_bin}))
+    # An embedded package that is not an OLE file, so only the relationship says what it is.
+    inner_pkg = xlsx(extra={"xl/vbaProject.bin": cfb(vba_project({"ThisWorkbook": VBA_EVIL_XLS}))},
+                     content_extra='<Override PartName="/xl/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/>')
+    write(R / "office_rt_embedded_pkg_elsewhere.docx", docx(
+        doc_rels=[("rId9", "package", "data/inner.dat", False)], extra={"word/data/inner.dat": inner_pkg}))
     write(R / "office_rt_vba_default_ctype.docx", docx(extra={"word/data/macros.vba": proj_bin},
         content_extra='<Default Extension="vba" ContentType="application/vnd.ms-office.vbaProject"/>'))
     # A tracked-deleted field instruction comes back when the change is rejected.

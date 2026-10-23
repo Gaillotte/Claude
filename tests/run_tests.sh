@@ -999,6 +999,15 @@ for p,i in d.get('file_results',{}).items():
             "a VBA project named only by the relationship that points at it is read"
         assert_contains "$(line_for office_rt_embedded_elsewhere.docx)" "CWE-506:office_embeds_an_executable_or_script" \
             "an OLE package outside word/embeddings/, named by its oleObject relationship, is opened"
+        MACRO_EXT="office:vba_macro_in_a_non_macro_extension"
+        assert_contains "$(line_for office_rt_vba_ctype_only.docx)" "$MACRO_EXT" \
+            "…and is recognised as a macro project (a .docx carrying one is reported)"
+        assert_contains "$(line_for office_rt_vba_rel_only.docx)" "$MACRO_EXT" \
+            "…likewise when only the relationship names it"
+        assert_contains "$(line_for office_rt_vba_default_ctype.docx)" "$MACRO_EXT" \
+            "…and when the content type comes from a Default extension entry"
+        assert_contains "$(line_for office_rt_embedded_pkg_elsewhere.docx)" "$VBA_MSG" \
+            "an embedded package that is not an OLE file, named only by its package relationship, is opened"
         assert_contains "$(line_for office_rt_ole_unnamed.docx)" "$VBA_MSG" \
             "an OLE compound file stored under an unrelated name is recognised by its magic and opened"
         assert_contains "$(line_for office_rt_vba_default_ctype.docx)" "$VBA_MSG" \
