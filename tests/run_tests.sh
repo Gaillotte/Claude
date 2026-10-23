@@ -910,6 +910,18 @@ for p,i in d.get('file_results',{}).items():
             "an INCLUDETEXT field fetching from http:// is reported"
         assert_contains "$(line_for office_smb.docx)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
             "a smb:// target is treated as a network share"
+        assert_contains "$(line_for office_cifs.docx)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "a cifs:// target is treated as a network share"
+        assert_contains "$(line_for office_file4.docx)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "file://// (four slashes, a UNC path) is treated as a network share"
+        assert_contains "$(line_for office_webquery.xlsx)" "office:remote_image_or_content_fetched_when_opened" \
+            "an Excel web query to http:// is reported"
+        assert_not_contains "$(line_for office_webquery.xlsx)" "[FAIL]" \
+            "…and is not blocked"
+        assert_contains "$(line_for office_webquery_unc.xlsx)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "an Excel web query to a UNC path is flagged"
+        assert_not_contains "$(line_for office_webquery_safe.xlsx)" "office:" \
+            "a workbook whose connection is a local database query is not reported"
         assert_contains "$(line_for office_legacy_ppt_macro.ppt)" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
             "a macro inside a legacy .ppt (a compressed ExOleObjStg record) is found"
         assert_not_contains "$(line_for office_embedded_workbook.docx)" "[WARN]" \
