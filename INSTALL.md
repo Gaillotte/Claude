@@ -2302,7 +2302,10 @@ names are compared **without their prefix** (a prefix is arbitrary, so `x:instrT
 instruction as `w:instrText` is), the encoding comes from the byte-order mark or declaration (UTF-16
 parts are decoded), comments and CDATA are normalised away, and a part is recognised by what
 `[Content_Types].xml` and the relationships say it is, so a main part, macro sheet or VBA project works
-wherever it is stored. Flat OPC, Word 2003 XML and Excel 2003 XML are read whatever the extension.
+wherever it is stored. Flat OPC, Word 2003 XML and Excel 2003 XML are read whatever the extension. Word
+opens an RTF whatever the file is called, so a `.txt`, `.log`, `.md`, `.rst` or extensionless file whose first
+kilobyte contains `{\rtf` is scanned as an RTF, and a `.xml` that is Flat OPC or Word/Excel 2003 XML is scanned
+as a document as well as an XML file.
 
 | Blocks (FAIL) | Reported (WARN) |
 |---|---|

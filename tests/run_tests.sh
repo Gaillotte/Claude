@@ -1040,6 +1040,12 @@ for p,i in d.get('file_results',{}).items():
             "…and is not blocked"
         assert_contains "$(line_for office_rt2_xlm_auto_close.xls)" "$XLM_MSG" \
             "a legacy macro sheet with Auto_Close and a command line is not just 'a visible macro sheet'"
+        assert_contains "$(line_for office_rt2_xlm_cmd_only.xls)" "$XLM_MSG" \
+            "a legacy macro sheet whose strings hold a command line is flagged without any Auto_ name"
+        assert_contains "$(line_for office_rt2_xlm_autoclose_only.xls)" "$XLM_MSG" \
+            "a legacy macro sheet with an Auto_Close name is flagged without any command line"
+        assert_contains "$(line_for office_rt2_equation_compobj_only.doc)" "CWE-94:office_equation_editor_object_carries_a_payload" \
+            "an Equation object recognised only by its CompObj text is searched for a payload in all of its streams"
         JXQ=$(line_for office_rt2_xlm_visible_quiet.xls)
         assert_contains "$JXQ" "office:excel4_macro_sheet" \
             "a visible legacy macro sheet that runs nothing is reported"
@@ -1497,6 +1503,8 @@ if ! _skipping; then
         "OFFICE_MAX_ENTRIES: parts beyond the limit are reported as not read"
     assert_contains "$(office_with OFFICE_READ_BUDGET_MB=1)" "read budget" \
         "OFFICE_READ_BUDGET_MB: an exhausted read budget is reported"
+    assert_contains "$(office_with OFFICE_READ_BUDGET_MB=1)" "read only in part" \
+        "…and a streamed XML part larger than the budget is cut at the budget and says so"
     assert_contains "$(office_with OFFICE_TIME_BUDGET_S=0.001)" "time budget exceeded" \
         "OFFICE_TIME_BUDGET_S: an exceeded time budget is reported"
 

