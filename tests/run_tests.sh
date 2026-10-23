@@ -924,6 +924,7 @@ for p,i in d.get('file_results',{}).items():
             "a workbook whose connection is a local database query is not reported"
 
         # Found by red-teaming the scanner: each of these evaded it until it was fixed
+        XLM_MSG="CWE-94:office_excel4_macro_sheet_is_hidden_or_runs_programs"
         DDE_MSG="CWE-94:office_dde_field_or_formula_starts_a_program"
         assert_contains "$(line_for office_rt_prefix_dde.docx)" "$DDE_MSG" \
             "a Word field written with the prefix x: instead of w: is still found (a prefix is arbitrary)"
@@ -984,7 +985,6 @@ for p,i in d.get('file_results',{}).items():
             "UTF-16LE without a byte-order mark is recognised from the shape of the first '<'"
         assert_contains "$(line_for office_rt_utf16be_rels.docx)" "CWE-829:office_remote_template_injection" \
             "UTF-16BE with a byte-order mark is decoded"
-        XLM_MSG="CWE-94:office_excel4_macro_sheet_is_hidden_or_runs_programs"
         assert_contains "$(line_for office_rt_macrosheet_ctype_only.xlsm)" "$XLM_MSG" \
             "a macro sheet named only by its content type is found"
         assert_contains "$(line_for office_rt_macrosheet_rel_only.xlsm)" "$XLM_MSG" \
@@ -1005,6 +1005,75 @@ for p,i in d.get('file_results',{}).items():
             "a VBA project whose content type comes from a Default extension entry is read"
         assert_contains "$(line_for office_rt_delinstr.docx)" "$DDE_MSG" \
             "a tracked-deleted field instruction (it returns when the change is rejected) is read"
+        # Second round of red-teaming (an agent per format family; real LibreOffice used as the oracle for the ODF events)
+        assert_contains "$(line_for office_rt2_unicode_prefix_dde.docx)" "$DDE_MSG" \
+            "a namespace prefix that starts with a non-ASCII letter (é:) is still read"
+        assert_contains "$(line_for office_rt2_unicode_prefix_rels.docx)" "CWE-829:office_remote_template_injection" \
+            "…and so is one holding U+00B7, which an XML name allows"
+        assert_contains "$(line_for office_rt2_cref_targetmode.docx)" "CWE-829:office_remote_template_injection" \
+            "TargetMode=\"Ext&#101;rnal\": a character reference in an attribute value is decoded, as a parser decodes it"
+        assert_contains "$(line_for office_rt2_cref_fldchar.docx)" "$DDE_MSG" \
+            "fldCharType=\"b&#101;gin\" still opens the field whose instruction is split across runs"
+        assert_contains "$(line_for office_rt2_cref_hidden.xlsm)" "$XLM_MSG" \
+            "state=\"&#104;idden\" on a macro sheet is still a hidden macro sheet"
+        assert_contains "$(line_for office_rt2_include_switch.docx)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "INCLUDEPICTURE with a switch before the file name: the UNC target is still found"
+        assert_contains "$(line_for office_rt2_link_class.docx)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "LINK takes a class name first; the file name after it is still found"
+        assert_not_contains "$(line_for office_rt2_include_local.docx)" "office:" \
+            "INCLUDEPICTURE with a switch and a local file name is not reported"
+        ODFMSG="CWE-94:odf_macro_runs_on_open"
+        assert_contains "$(line_for office_rt2_odf_mimetype_late.odt)" "$ODFMSG" \
+            "an ODF package whose mimetype entry is not among the first four is still an ODF package"
+        assert_contains "$(line_for office_rt2_odf_no_mimetype.odt)" "$ODFMSG" \
+            "…and so is one with no mimetype entry at all (the manifest says what it is)"
+        assert_contains "$(line_for office_rt2_odf_domfocusin.odt)" "$ODFMSG" \
+            "dom:DOMFocusIn runs a document macro when LibreOffice opens the document"
+        assert_contains "$(line_for office_rt2_odf_layout_finished.odt)" "$ODFMSG" \
+            "office:layout-finished runs a document macro when a text document opens"
+        assert_contains "$(line_for office_rt2_odf_page_count_change.odt)" "$ODFMSG" \
+            "office:page-count-change does too"
+        JMC=$(line_for office_rt2_odf_modify_changed.odt)
+        assert_contains "$JMC" "odf:contains_macro" \
+            "office:modify-changed (not fired on open) is reported"
+        assert_not_contains "$JMC" "[FAIL]" \
+            "…and is not blocked"
+        assert_contains "$(line_for office_rt2_xlm_auto_close.xls)" "$XLM_MSG" \
+            "a legacy macro sheet with Auto_Close and a command line is not just 'a visible macro sheet'"
+        JXQ=$(line_for office_rt2_xlm_visible_quiet.xls)
+        assert_contains "$JXQ" "office:excel4_macro_sheet" \
+            "a visible legacy macro sheet that runs nothing is reported"
+        assert_not_contains "$JXQ" "[FAIL]" \
+            "…and is not blocked"
+        assert_contains "$(line_for office_rt2_equation_renamed_stream.doc)" "CWE-94:office_equation_editor_object_carries_a_payload" \
+            "an Equation object recognised by its CLSID is searched for a payload in any of its streams"
+        assert_contains "$(line_for office_rt2_ole_moniker_padded.doc)" "CWE-829:office_object_or_frame_fetched_from_a_remote_host" \
+            "a URL moniker in an Ole stream padded past 64 KB is still found"
+        assert_contains "$(line_for office_rt2_rtf_dde_additive.rtf)" "$DDE_MSG" \
+            "a no-op RTF control word before DDEAUTO does not hide the field"
+        assert_contains "$(line_for office_rt2_rtf_dde_hexescape.rtf)" "$DDE_MSG" \
+            "a hex escape (apostrophe 44) inside the keyword is decoded"
+        assert_contains "$(line_for office_rt2_rtf_template_additive.rtf)" "CWE-829:office_remote_template_injection" \
+            "a no-op control word before a remote template target does not hide it"
+        assert_contains "$(line_for office_rt2_rtf_includepicture.rtf)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "an INCLUDEPICTURE field in an RTF is checked like one in a .docx"
+        assert_contains "$(line_for office_rt2_rtf_bin_brace_equation.rtf)" "CWE-94:office_equation_editor_object_carries_a_payload" \
+            "a raw closing brace carried by a bin control word inside objdata is data and does not end the object"
+        assert_contains "$(line_for office_rt2_rtf_bin_brace_pe.rtf)" "CWE-506:office_embeds_an_executable_or_script" \
+            "…for an OLE Package holding an .exe"
+        assert_contains "$(line_for office_rt2_rtf_bin_brace_ole2link.rtf)" "CWE-829:rtf_linked_object_updates_from_a_remote_source" \
+            "…and for a CVE-2017-0199 link object"
+        assert_contains "$(line_for office_rt2_rtf_renamed.txt)" "$DDE_MSG" \
+            "an RTF named .txt is read as an RTF (Word opens it as one)"
+        assert_contains "$(line_for office_rt2_rtf_renamed.log)" "$DDE_MSG" \
+            "…named .log"
+        assert_contains "$(line_for office_rt2_rtf_noext)" "$DDE_MSG" \
+            "…with no extension at all"
+        assert_contains "$(line_for office_rt2_flat_opc.xml)" "$DDE_MSG" \
+            "a Flat OPC package saved as .xml (Word opens it as a document) is read as one"
+        JPN=$(line_for office_rt2_plain_notes.txt)
+        assert_not_contains "$JPN" "office:" \
+            "a plain .txt that merely mentions RTF is not routed to the office scanner"
         assert_contains "$(line_for office_rt_vba_declare_continued.docm)" "$VBA_MSG" \
             "a declaration whose API name is on a continuation line is judged as one statement"
         assert_contains "$(line_for office_rt_vba_declare_ntdll.docm)" "$VBA_MSG" \

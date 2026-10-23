@@ -2945,6 +2945,11 @@ def blob(label, name, data, depth, in_doc=True):
         emit("embedded_object", label + base)
 
 
+# Text in a macro sheet that makes it run something: an auto-run name (a defined name Excel calls on
+# open, close, activate), a call that starts or loads a program, or a command line.
+XLM_RUNS = re.compile(rb"(?i)Auto_(?:Open|Close|Activate|Deactivate)|EXEC\(|REGISTER\(|CALL\(|URLDownloadToFile|\b"
+                      + SHELLS.encode() + rb"(?:\.exe)?\s*/[ck]")
+
 KNOWN_OFFICE_STREAMS = {"WordDocument", "Workbook", "Book", "PowerPoint Document", "EncryptedPackage"}
 
 
@@ -2979,9 +2984,9 @@ def analyze_cfb(data, label, depth):
                 emit("embedded_object", label + "/".join(p))
         elif p[-1] == "Equation Native":
             equation_findings(label + "/".join(p[:-1]), cf.read(e))
-        elif p[-1] == "\x01Ole" and e["size"] < 65536:
+        elif p[-1] == "\x01Ole":
             # the link information of a linked (not embedded) object: a URL moniker names its target
-            ole = cf.read(e)
+            ole = cf.read(e, 1048576)
             if URL_MONIKER in ole and remote_url(ole):
                 emit("remote_object", label + "/".join(p[:-1]) + " links to a remote URL")
         elif p[-1] in ("Package", "package_stream"):
@@ -2996,12 +3001,14 @@ def analyze_cfb(data, label, depth):
         kids = cf.children.get(p, {})
         if "\x01Ole10Native" in kids or "Equation Native" in kids:
             continue  # reported above
+        def kid_bytes():
+            return b"".join(cf.read(ee, 262144) for ee in kids.values() if ee["kind"] == 2)[:1048576]
         if e["clsid"] == eq_clsid:
-            equation_findings(label + "/".join(p), b"")
+            equation_findings(label + "/".join(p), kid_bytes())
             continue
         comp = cf.read(kids["\x01CompObj"]) if "\x01CompObj" in kids and kids["\x01CompObj"]["kind"] == 2 else b""
         if b"Equation" in comp:
-            equation_findings(label + "/".join(p), b"")
+            equation_findings(label + "/".join(p), kid_bytes())
         elif not set(kids) & KNOWN_OFFICE_STREAMS:
             emit("embedded_object", label + "/".join(p))
     # Excel 4.0 macro sheets: BOUNDSHEET records of type "macro sheet" in the Workbook stream
@@ -3019,7 +3026,7 @@ def analyze_cfb(data, label, depth):
                 elif rid == 0x000A and pos > 0:
                     break
                 pos += 4 + size
-            runs = re.search(rb"(?i)Auto_Open|EXEC\(|REGISTER\(|URLDownloadToFile", wb.replace(b"\x00", b""))
+            runs = XLM_RUNS.search(wb.replace(b"\x00", b""))
             for nm, hid in sheets:
                 if hid or runs:
                     emit("xlm_dangerous", "%s%s %s" % (label, nm, "hidden macro sheet" if hid else "macro sheet that runs programs"))
@@ -3069,8 +3076,11 @@ def analyze_cfb(data, label, depth):
 # "[^>]*" is wrong anyway: '>' is legal inside a quoted attribute value, so an attacker can put one
 # before the attribute that matters. A tag here is: a name, then attributes whose values are quoted
 # strings, then an optional slash. Matching is deterministic, so it is linear.
-TAG = re.compile(r"<(/?[A-Za-z_][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:\"[^\"]*\"|'[^']*'))*)\s*(/?)>")
-ATTR = re.compile(r"([\w:.-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
+# Names are anything XML allows: a prefix can be "é" or "a·b", and a tokenizer that insists on [A-Za-z_]
+# or \w never sees the element at all.
+_NM = r"[^\s/>=<\"'&]"
+TAG = re.compile(r"<(/?(?:[^\W\d]|:)" + _NM + r"*)((?:\s+" + _NM + r"+\s*=\s*(?:\"[^\"]*\"|'[^']*'))*)\s*(/?)>")
+ATTR = re.compile(r"(" + _NM + r"+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
 SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 URI_HANDLERS = {"ms-msdt", "msdt", "mhtml", "search-ms", "search", "ms-officecmd", "ms-appinstaller", "javascript", "vbscript", "jscript"}
 REMOTE_OBJ_TYPES = {"oleobject", "frame", "subdocument", "package", "control", "aschunk", "afchunk", "externaldata"}
@@ -3091,7 +3101,7 @@ def attrs(raw):
     for k, v1, v2 in ATTR.findall(raw):
         lst = out.setdefault(local(k).lower(), [])
         if len(lst) < 8:
-            lst.append(v1 or v2)
+            lst.append(html.unescape(v1 or v2))   # TargetMode="Ext&#101;rnal" is External to a parser
     return out
 
 
@@ -3207,7 +3217,9 @@ def analyze_rels(label, text, roles=None, source=None):
 
 
 DDE_FIELD = re.compile(r"(?is)^\s*DDE(?:AUTO)?\b")
-FETCH_FIELD = re.compile(r"(?is)^\s*(?:INCLUDETEXT|INCLUDEPICTURE|LINK|IMPORT)\s+(?:\"([^\"]{1,2000})\"|(\S{1,2000}))")
+FETCH_FIELD = re.compile(r"(?is)^\s*(?:INCLUDETEXT|INCLUDEPICTURE|LINK|IMPORT)\b")
+FIELD_ARG = re.compile(r'"([^"]{0,2000})"|(\S{1,2000})')
+FIELD_SWITCH = re.compile(r"\\[A-Za-z*]")
 
 
 def field_findings(label, f):
@@ -3217,11 +3229,18 @@ def field_findings(label, f):
         return
     m = FETCH_FIELD.match(f)
     if m:
-        # Word writes a backslash in a field argument doubled, so \\\\host\\x is the UNC path \\host\x;
-        # an argument written singly is read as it stands. Both spellings are tested.
-        arg = m.group(1) or m.group(2)
-        for v in dict.fromkeys((arg, arg.replace("\\\\", "\\"))):
-            classify_target(label, "field", v)
+        # Every argument is tried: a switch can come before the file name (INCLUDEPICTURE \\d "..."), and
+        # LINK takes a class name first (LINK Excel.Sheet.8 "..."). Word writes a backslash in an
+        # argument doubled, so \\\\host\\x is the UNC path \\host\x; an argument written singly is read as
+        # it stands. Both spellings are tested.
+        for k, am in enumerate(FIELD_ARG.finditer(f, m.end())):
+            if k >= 32:
+                break
+            arg = am.group(1) if am.group(1) is not None else am.group(2)
+            if FIELD_SWITCH.match(arg):
+                continue
+            for v in dict.fromkeys((arg, arg.replace("\\\\", "\\"))):
+                classify_target(label, "field", v)
 
 
 def tag_text(text, end):
@@ -3297,9 +3316,10 @@ def xml_rules(label, name, text, stack, macrosheet=False):
             if local(m.group(1)) == "webPr":
                 for u in av(attrs(m.group(2)), "url"):
                     classify_target(shown + " ", "webquery", u)
-    if "hidden" in text.lower():
-        if re.search(r"(?i)\bstate\s*=\s*[\"'](?:very)?hidden[\"']", text):
-            state["wb_hidden"] = True
+    if "state" in text and "sheet" in text:
+        for m in TAG.finditer(text):
+            if local(m.group(1)) == "sheet" and any(v.lower() in ("hidden", "veryhidden") for v in av(attrs(m.group(2)), "state")):
+                state["wb_hidden"] = True
     to_view(shown, text_of(text))
 
 
@@ -3317,7 +3337,7 @@ def scan_xml_part(label, name, chunks, macrosheet=False):
         field_findings(label + name + " ", f)
 
 
-PARA_END = re.compile(r"</(?:[\w.-]+:)?(?:p|h|row|si)>|<(?:[\w.-]+:)?(?:br|line-break)\b[^<>]{0,200}/>")
+PARA_END = re.compile(r"</(?:[^\s/<>:]+:)?(?:p|h|row|si)>|<(?:[^\s/<>:]+:)?(?:br|line-break)\b[^<>]{0,200}/>")
 STRIP_TAGS = re.compile(r"<[^<>]{0,4000}>")
 
 
@@ -3328,7 +3348,8 @@ def text_of(xml):
 
 
 # ── OpenDocument ─────────────────────────────────────────────────────────────
-AUTO_EVENTS = {"office:load", "office:new", "office:create", "office:view-created", "office:activate", "dom:load", "dom:domcontentloaded"}
+AUTO_EVENTS = {"office:load", "office:new", "office:create", "office:view-created", "office:activate", "dom:load", "dom:domcontentloaded",
+               "dom:domfocusin", "office:layout-finished", "office:page-count-change"}
 ODF_DDE_FORMULA = re.compile(r"(?i)\bDDE\s*\(\s*(?:&quot;|\")\s*(" + SHELLS + r")")
 ODF_DANGER = re.compile(
     r"(?i)(\bShell\s*\(|SystemShellExecute|os\.system|subprocess|\bsocket\b|urllib|requests\.|__import__|\bctypes\b|\bpty\b|"
@@ -3500,10 +3521,13 @@ def analyze_zip(z, label, depth):
         if ".." in parts or n.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", n):
             emit("zip_slip", label + n)
     mt = b""
-    for i in infos[:4]:
-        if i.filename == "mimetype":
+    for i in infos:
+        if i.filename.lower() == "mimetype":   # the spec wants it first; the readers do not insist
             mt = entry_bytes(z, i, 256)
-    is_odf = mt.startswith(b"application/vnd.oasis.opendocument")
+            break
+    lows = {n.lower() for n in names}
+    is_odf = mt.startswith(b"application/vnd.oasis.opendocument") or (
+        "[content_types].xml" not in lows and "content.xml" in lows and "meta-inf/manifest.xml" in lows)
     if not (is_odf or any(n.lower() == "[content_types].xml" for n in names)):
         if depth == 1:
             emit("not_office", "document zip")  # only the file itself can be "not an office document"
@@ -3660,6 +3684,16 @@ RTF_CTRL = re.compile(r"\\[a-zA-Z]+-?\d* ?|\\'[0-9a-fA-F]{2}|\\.", re.S)
 RTF_STEPS = {"left": 4000000}
 
 
+RTF_BIN = re.compile(r"\\bin(\d{1,9}) ?")
+RTF_TOKEN = re.compile(r"\\'([0-9a-fA-F]{2})|\\([\\{}])|\\[a-zA-Z]+-?\d* ?|\\[^a-zA-Z]|[{}]", re.S)
+
+
+def rtf_plain(g):
+    """The text of an RTF fragment as Word reads it: control words (\\additive, \\b0) and groups
+    vanish, \\'hh is a character, \\\\ \\{ \\} are themselves."""
+    return RTF_TOKEN.sub(lambda m: chr(int(m.group(1), 16)) if m.group(1) else (m.group(2) or ""), g)
+
+
 def rtf_group(text, start):
     """(text of the brace group that opens at text[start], whether it closed). Steps are counted
     over all groups: an unterminated group at every object would otherwise cost the whole file each."""
@@ -3671,7 +3705,8 @@ def rtf_group(text, start):
         RTF_STEPS["left"] -= 1
         c, i = m.group(0), m.end()
         if c == "\\":
-            i += 1
+            mb = RTF_BIN.match(text, i - 1)   # \binN: the next N bytes are data, whatever they are
+            i = mb.end() + int(mb.group(1)) if mb else i + 1
         elif c == "{":
             depth += 1
         else:
@@ -3682,23 +3717,50 @@ def rtf_group(text, start):
 
 
 def rtf_hex(group, key):
-    """Hex bytes of an \\objdata destination: Word ignores everything that is not a hex digit."""
+    """Bytes of an \\objdata destination. Word ignores everything that is not a hex digit, and a
+    \\binN control word puts N raw bytes into the data (a '}' among them is data, not the end of the group)."""
     m = re.search(r"\\" + key + r"(?![a-z])", group, re.I)
     if not m:
         return b""
     body = group[m.end():]
-    body = re.sub(r"\\'[0-9a-fA-F]{2}|\\[a-zA-Z]+-?\d* ?|\\.", "", body, flags=re.S)  # control words, escapes
-    depth, end = 0, len(body)
-    for k, mm in enumerate(re.finditer(r"[{}]", body)):
-        if mm.group(0) == "{":
-            depth += 1
-        elif depth == 0:
-            end = mm.start()
+    out, pending, depth = bytearray(), [], [0]
+
+    def feed(seg):
+        seg = re.sub(r"\\'[0-9a-fA-F]{2}|\\[a-zA-Z]+-?\d* ?|\\.", "", seg, flags=re.S)  # control words, escapes
+        end, ended = len(seg), False
+        for mm in re.finditer(r"[{}]", seg):
+            if mm.group(0) == "{":
+                depth[0] += 1
+            elif depth[0] == 0:
+                end, ended = mm.start(), True
+                break
+            else:
+                depth[0] -= 1
+        pending.append(re.sub(r"[^0-9a-fA-F]", "", seg[:end]))
+        return ended
+
+    def flush():
+        h = "".join(pending)
+        del pending[:]
+        out.extend(bytes.fromhex(h[:len(h) & ~1]))
+
+    pos, ended = 0, False
+    for k, mb in enumerate(RTF_BIN.finditer(body)):
+        if k >= 10000:
             break
-        else:
-            depth -= 1
-    h = re.sub(r"[^0-9a-fA-F]", "", body[:end])
-    return bytes.fromhex(h[:len(h) & ~1])
+        if mb.start() < pos:
+            continue
+        if feed(body[pos:mb.start()]):
+            ended = True
+            break
+        flush()
+        n = int(mb.group(1))
+        out.extend(body[mb.end():mb.end() + n].encode("latin-1", "replace"))
+        pos = mb.end() + n
+    if not ended:
+        feed(body[pos:])
+    flush()
+    return bytes(out)
 
 
 URL_MONIKER = bytes.fromhex("e0c9ea79f9bace118c8200aa004ba90b")   # CLSID_StdURLMoniker, as stored (little-endian GUID)
@@ -3737,7 +3799,7 @@ def analyze_rtf(data, label, depth):
         if k >= 1000:
             emit("incomplete", "more than 1000 RTF templates, the rest were not read")
             break
-        tgt = m.group(1).strip()
+        tgt = rtf_plain(m.group(1)).strip()
         if SCHEME.match(tgt) or is_unc(tgt):
             classify_target(label, "attachedtemplate", tgt)
     for k, m in enumerate(re.finditer(r"\{\\field\b", text)):
@@ -3750,11 +3812,8 @@ def analyze_rtf(data, label, depth):
             g, _ = rtf_group(grp, fm.start())
             g = re.sub(r"^\{(?:\\\*)?\\fldinst ?", "", g)
             g = g[:-1] if g.endswith("}") else g
-            g = re.sub(r"\\'[0-9a-fA-F]{2}", "", g).replace("\\\\", "\x00").replace("{", "").replace("}", "")
-            parts.append(g.replace("\x00", "\\"))
-        fld = "".join(parts)
-        if DDE_FIELD.match(fld.strip()):
-            emit("dde", label + re.sub(r"\s+", " ", fld.strip())[:80])
+            parts.append(rtf_plain(g))
+        field_findings(label, "".join(parts))   # DDE, and INCLUDEPICTURE/INCLUDETEXT/LINK to a remote or UNC target
     n_obj = 0
     for m in re.finditer(r"\{\\object\b", text):
         n_obj += 1
@@ -5771,6 +5830,20 @@ scan_csharp() {
 }
 
 # ── Classification ───────────────────────────────────────────────────────────
+# Word opens an RTF whatever the file is called (.txt, .log, no extension at all) and opens Flat OPC and
+# the 2003 XML formats from a .xml. The first bytes decide. `read -N` is a builtin, so the check costs no fork.
+_rtf_head() {
+    local h=""
+    IFS= read -r -d '' -N 1024 h < "$1" 2>/dev/null || true
+    [[ "$h" == *'{\rtf'* ]]
+}
+_flat_office_head() {
+    local h=""
+    IFS= read -r -d '' -N 8192 h < "$1" 2>/dev/null || true
+    [[ "$h" == *schemas.microsoft.com/office/2006/xmlPackage* || "$h" == *schemas.microsoft.com/office/word/2003/wordml* \
+       || "$h" == *urn:schemas-microsoft-com:office:spreadsheet* ]]
+}
+
 classify_file() {
     local f="$1"
     local base ext
@@ -5828,7 +5901,11 @@ classify_file() {
         .rs)                              scan_rust        "$f" ;;
         .kt|.kts)                         scan_kotlin      "$f" ;;
         .cs)                              scan_csharp      "$f" ;;
-        .xml|.pom)                        scan_xml         "$f" ;;
+        .xml|.pom)
+            scan_xml "$f"
+            # Word and Excel open a Flat OPC package or a 2003 XML document from a .xml
+            if _flat_office_head "$f"; then scan_office "$f"; fi
+            ;;
         .yml|.yaml)                       scan_yaml        "$f" ;;
         .tf|.tfvars|.hcl)               scan_terraform   "$f" ;;
         .so|.dll|.dylib|.exe|.elf|.bin)  scan_binary     "$f" ;;
@@ -5856,14 +5933,16 @@ classify_file() {
             fi
             ;;
         .md|.txt|.rst)
-            if grep_check \
+            if _rtf_head "$f"; then
+                scan_office "$f"   # Word opens an RTF whatever it is called
+            elif grep_check \
                 '(password|secret|api_key)\s*[:=]\s*[^${[:space:]][^[:space:]]{4,}' "$f"; then
                 record_fail "$f" "CWE-798:hardcoded_credential_in_doc"
             else
                 record_pass "$f"
             fi
             ;;
-        *) scan_unknown "$f" ;;
+        *) if _rtf_head "$f"; then scan_office "$f"; else scan_unknown "$f"; fi ;;
     esac
 }
 

