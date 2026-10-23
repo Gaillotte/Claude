@@ -329,7 +329,7 @@ FAMILIES = [
               "A visible Excel 4.0 macro sheet; ActiveX; embedded objects that are not readable office documents; an Equation object without a payload",
               "Content fetched from http(s) when opened; a hyperlink to a file share; a DDE link to an ordinary program",
               "A bare DOCTYPE; encrypted or unreadable content; a limit reached"],
-        note="Prose is not searched for hostile strings (a manual may say 'pipe curl into sh'). 217 real and converted documents: no finding. Recall rests on fixtures checked with olevba, olefile and rtfobj. Obfuscated VBA, VBA stomping and encrypted files are not read."),
+        note="Names are compared without their prefix, UTF-16 is decoded, and a part is what the package says it is, wherever stored. Prose is not searched for hostile strings. 217 real and converted documents: no finding. Recall rests on fixtures checked with olevba, olefile and rtfobj. Obfuscated VBA, VBA stomping and encrypted files are not read."),
     dict(
         key="legacy_office", title="Office documents — legacy OLE2 (.doc .xls .ppt)", scanner="scan_office",
         ext=[".doc", ".dot", ".xls", ".xlt", ".xla", ".ppt", ".pot", ".pps", ".ppa"],

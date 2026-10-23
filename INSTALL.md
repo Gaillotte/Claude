@@ -2297,6 +2297,13 @@ document at all goes back to the unknown-file path when it is plain text and pla
 The document is **never extracted to disk**; a standard-library helper reads it in place. An office
 document is data, so one with nothing to report is a **PASS** (a jar, which is code, is a WARN).
 
+The XML is read the way a parser would hand it over, not the way it is spelled: element and attribute
+names are compared **without their prefix** (a prefix is arbitrary, so `x:instrText` is a field
+instruction as `w:instrText` is), the encoding comes from the byte-order mark or declaration (UTF-16
+parts are decoded), comments and CDATA are normalised away, and a part is recognised by what
+`[Content_Types].xml` and the relationships say it is, so a main part, macro sheet or VBA project works
+wherever it is stored. Flat OPC, Word 2003 XML and Excel 2003 XML are read whatever the extension.
+
 | Blocks (FAIL) | Reported (WARN) |
 |---|---|
 | a VBA macro that starts a program or downloads (the module is decompressed and read) | any VBA macro, one that runs on open, one in a `.docx`/`.xlsx`/`.pptx` |
@@ -2306,9 +2313,9 @@ document is data, so one with nothing to report is a **PASS** (a jar, which is c
 | an `ms-msdt:`, `mhtml:`, `search-ms:`, `javascript:` or `vbscript:` link | ActiveX controls, embedded OLE objects that cannot be read as an office document |
 | a UNC path (`\\host\share`, `smb://`) outside a hyperlink (NTLM leak); an `INCLUDETEXT`/`INCLUDEPICTURE`/`LINK` field aimed at a remote host or UNC path | an Equation object without a payload |
 | an embedded executable or script, also under a document name | an alternate-format chunk; a bare `DOCTYPE` |
-| an Equation Editor object carrying a command or URL; a PowerPoint `ppaction://program` hyperlink | an ODF macro, or a hyperlink that runs one; a `ppaction://macro` action; a hyperlink to an executable |
+| an Equation Editor object carrying a command or URL; a PowerPoint `ppaction://program` hyperlink; a legacy `.doc` object holding a URL moniker to a remote address | an ODF macro, or a hyperlink that runs one; a `ppaction://macro` action; a hyperlink to an executable |
 | an external `ENTITY`; a part named `../…` | an ODF resource linked from http(s) or a path |
-| RTF: a linked object that auto-updates from a remote source; a remote `\template` | an RTF embedded OLE object |
+| RTF: a linked object (flags, `OLE2Link` class, or URL moniker) whose target URL — ASCII or UTF-16 — is remote (CVE-2017-0199); a remote `\template` | an RTF embedded OLE object |
 | ODF: a document-embedded macro bound to `office:load` / `office:new`; a script calling `Shell`, `os.system` … | encrypted content, an unparseable container, an unreadable VBA project |
 | a PEM private key or any of the 18 known credential formats in the text | every limit reached |
 
@@ -2316,7 +2323,10 @@ document is data, so one with nothing to report is a **PASS** (a jar, which is c
 The `curl | sh` / encoded-PowerShell / `certutil` rules run on macro source, field codes, formulas and
 ODF scripts only.
 
-Every limit is reported when reached, and each has an environment knob:
+Every limit is reported when reached, and each has an environment knob. The time budget is checked
+between parts; a pattern run away inside one part is stopped by an **alarm** armed at the budget plus ten
+seconds in both this helper and the jar helper, which prints what was found and reports the document as
+`inspection_incomplete`. Reads from a compound file are charged to the read budget too.
 
 | Variable | Default | Meaning |
 |---|---|---|
