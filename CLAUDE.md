@@ -50,6 +50,7 @@ Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantin
 | `OFFLINE` | `false` | Air-gapped: no scanner attempts a network call |
 | `OFFLINE_CACHE` | `$WORK_DIR/offline-cache` | Staged Semgrep rules, trivy DB, ClamAV signatures |
 | `JAR_MAX_ENTRIES`, `JAR_READ_BUDGET_MB`, `JAR_VIEW_MB`, `JAR_MAX_UNCOMPRESSED_MB`, `JAR_TIME_BUDGET_S` | `50000`, `64`, `32`, `1024`, `90` | Limits of the Java archive scanner; each one reached is reported (see "Java archives") |
+| `OFFICE_MAX_ENTRIES`, `OFFICE_READ_BUDGET_MB`, `OFFICE_TIME_BUDGET_S` | `20000`, `256`, `90` | Limits of the office-document scanner; each one reached is reported (see "Office documents") |
 
 ## Allowlist and exclusions
 
@@ -115,7 +116,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09), plus known credential formats (18 providers) |
-| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_bat** (bat/cmd), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_jar** (jar/war/ear/aar — structure, constant pools, wrapper shape), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
+| L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_bat** (bat/cmd), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_jar** (jar/war/ear/aar — structure, constant pools, wrapper shape), **scan_office** (docx/xlsx/pptx and macro/template variants, doc/xls/ppt, odt/ods/odp and flat/template variants, rtf — macros, DDE, remote relationships, embedded objects), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
 
 **Verdict helpers:**
@@ -765,6 +766,165 @@ Tests: `tests/fixtures/make_jar_fixtures.py` regenerates the 52 fixtures byte-fo
 repository never holds a contiguous token. The limits are exercised through the env knobs on an
 11 KB fixture.
 
+## Office documents
+
+`scan_office()` handles OOXML (`.docx .docm .dotx .dotm .xlsx .xlsm .xlsb .xltx .xltm .xlam .pptx .pptm
+.ppsx .ppsm .potx .potm .ppam`), the legacy OLE2 formats (`.doc .dot .xls .xlt .xla .ppt .pot .pps .ppa`),
+OpenDocument and its flat and template variants (`.odt .ods .odp .odg .ott .ots .otp .otg .fodt .fods
+.fodp .fodg`) and `.rtf`. None had a handler: all fell through to `scan_unknown` and were recorded
+**PASS**. A document is a *container*, and what makes one dangerous is what happens when it is opened
+or what it carries, not its prose:
+
+- **OOXML and OpenDocument are ZIPs of XML.** A relationship names an attached template, an OLE
+  object or an image; fetched from a remote host that is code (remote template injection, Follina)
+  or a credential leak (a UNC path makes Windows send the user's NTLM hash). A Word field can be
+  `DDEAUTO`, an Excel cell can be `cmd|'/c calc'!A0`.
+- **Every VBA macro, in any format, is a compressed module inside an OLE2 compound file (CFB).** The
+  module is decompressed (MS-OVBA, with a real decompressor, copy tokens included) and read.
+  Excel 4.0 macro sheets, Equation Editor objects and an OLE Package holding an `.exe` are the other
+  classic carriers.
+- **RTF has no container.** Its objects are hex inside the text, and Word reads them through any
+  amount of junk: line breaks and empty groups inside the hex do not stop it, so they do not stop the
+  scanner (`office_rtf_obfuscated.rtf`).
+
+**The content is sniffed, the extension is a hint.** Word opens an RTF named `.docx` and an OLE2 file
+named `.doc` without complaint. When the content is not an office document at all, the extension
+decides: `.dot` is Graphviz, `.pot` is gettext and a `.doc` is sometimes plain text, so those fall
+back to `scan_unknown` and PASS; plain text named `.docx` or `.odt` is a WARN; a native executable
+named `.docx` is a FAIL.
+
+The document is **never extracted to disk**. A standard-library helper reads parts like Office does
+(offset and size from the central directory, deflate inflated to its end; a bad CRC, a mismatched local
+name or a too-small declared size hides nothing). XML is read through **one linear tokenizer** that is
+aware of `>` inside a quoted attribute, and parts larger than 4 MB are streamed in element-aligned
+slices (a 9 MB workbook with ~100 MB of sheet XML takes 2.6 s). Every limit is *reported* when reached:
+
+| Limit (env knob) | Default | When reached |
+|---|---|---|
+| `OFFICE_MAX_ENTRIES` | 20000 | parts beyond it are not read (WARN) |
+| `OFFICE_READ_BUDGET_MB` | 256 | content beyond it is not read (WARN) |
+| `OFFICE_TIME_BUDGET_S` | 90 | the rest of the document is not read (WARN) |
+| nesting | 3 levels | a deeper object is not opened (WARN) |
+
+Part **names** are checked for every part regardless of the first limit.
+
+**FAIL** — a VBA macro that starts a program or downloads (`Shell`, `CreateObject("WScript.Shell")`,
+`URLDownloadToFile`, PowerShell, `kernel32` shellcode calls — the finding names the module and any
+auto-run procedure) · a DDE / `DDEAUTO` field (the fragments of a field are joined across runs and
+across 4 MB slices), a `cmd|'…'!A0` formula or a `ddeLink` to a shell · an Excel 4.0 macro sheet that
+is hidden or calls `EXEC` / `CALL` / `REGISTER` · an `attachedTemplate` over http(s)/ftp (remote
+template injection) or an `oleObject` / `frame` / `subDocument` / `package` relationship from a remote
+host (the Follina shape) · a link whose scheme is `ms-msdt:`, `mhtml:`, `search-ms:`, `javascript:` or
+`vbscript:` · a UNC path (`\\host\share`, `file://host/…`, `smb://`, `cifs://`) in anything but a
+hyperlink · a Word `INCLUDETEXT` / `INCLUDEPICTURE` / `LINK` / `IMPORT` field aimed at a remote host or
+a UNC path (written with one backslash or two: the field text is compared both ways) · a PowerPoint
+`ppaction://program` hyperlink (an action that starts a program) · an
+embedded executable or script (a PE, ELF or Mach-O, an `.exe` `.js` `.vbs` …) — also stored under a
+document name (`word/media/image1.png`) or inside an OLE Package · an Equation Editor object whose
+stream carries a command or URL (the CVE-2017-11882 family), also inside an RTF alternate-format chunk
+· an XML part with an external `ENTITY` (XXE for whatever parses the document next) · a part named
+`../…` (zip-slip) · a PEM private key or any of the 18 known credential formats in the text · RTF: a
+linked object with `\objautlink` and `\objupdate` fetching from a remote source, `{\*\template …}`
+over http(s) · OpenDocument: a macro **embedded in the document** and bound to `office:load` /
+`office:new` / `office:create` / `office:view-created`, or a StarBasic / Python / BeanShell script that
+calls `Shell`, `os.system`, `subprocess`, sockets, `urllib`, `ctypes` …
+
+**WARN** — any VBA macro, one that runs when the document opens, a macro in a `.docx` / `.xlsx` /
+`.pptx` extension (a disguised macro file) · a visible Excel 4.0 macro sheet · ActiveX controls ·
+embedded OLE objects that **cannot be read as an office document**, an Equation object without a
+payload · a `ppaction://macro` action, a hyperlink whose target is an executable · an image or other content fetched from
+http(s) when the document opens, a hyperlink to a file share · a DDE link to an ordinary program ·
+an alternate-format chunk (`afchunk`) · a bare `DOCTYPE` · an ODF macro, or a hyperlink that runs one
+on click, an ODF resource linked from http(s) or a file path · an RTF embedded OLE object · encrypted
+content (reported, not opened), a container that cannot be parsed, a VBA project whose source cannot
+be read, every limit reached. A document with nothing to report is **PASS**: it is data, not code
+(unlike a jar).
+
+**An embedded object that is itself an office document is analysed, not reported.** Every chart in a
+`.docx` or `.pptx` comes with an embedded workbook (`word/embeddings/Microsoft_Excel_Sheet1.xlsx`, or a
+`Workbook` stream in a legacy `ObjectPool`), and the first version warned about each one: found by
+scanning 30 documents with charts, pictures and tables, which all came out WARN. An embedded
+OOXML / ODF / CFB / RTF file is now opened through the same analysis (three levels deep); one that
+analyses clean is unremarkable and one with a macro is a FAIL exactly as if it were the top-level
+file. Only an object that stays opaque — a ZIP that is not an office document, an unknown binary — is
+`office:contains_embedded_object`, and a nested non-office ZIP does not make the *document* look
+like "not an office document". An OOXML package wrapped in an OLE object (a stream named `Package`)
+is opened the same way, and a legacy `.ppt` keeps its OLE objects in zlib-compressed `ExOleObjStg`
+records, which are inflated and read (so a macro in a `.ppt` is found). The `.ppt` macro fixture is a
+**simplified** PowerPoint structure — `olevba` does not recognise it as having a macro — and the record
+format was checked against a real LibreOffice-written `.ppt`, not against a PowerPoint-authored macro
+deck, so that route is less proven than the others.
+
+**RTF fragments.** pandoc writes an RTF *fragment* with no `{\rtf` header; it is read as plain text and
+warned about as one, not scanned as RTF.
+
+**Document prose is not searched for hostile strings.** A manual that says "pipe curl into sh" is
+ordinary. The hostile-string rules (`curl | sh`, encoded PowerShell, `certutil -urlcache`) run on
+code-bearing content only — macro source, field codes, formulas, ODF scripts. Credentials and PEM
+keys are searched in the text of the document, through the same rules as Layer 4 (a PEM key pasted
+into Word is one paragraph per line, so a paragraph ends a line).
+
+**Calibration, and what it changed.** 123 real OpenDocument templates (LibreOffice's own), the
+python-docx and python-pptx defaults and pandoc's RTF template on this host, plus 62 documents
+LibreOffice converted to every format (`.doc .xls .ppt .odt .ods .odp .rtf .docx .xlsx .pptx .fodt
+.fods .dotx .ott`) from sources built with python-docx, openpyxl and python-pptx: **187 documents, 17
+extensions, no finding of any kind.** A second set of **30** with charts, pictures, tables, notes and
+headers (the same converters) found the embedded-workbook noise described above and passes clean
+after it. Three things the real files taught that no fixture would have:
+
+- Every OpenDocument file declares the `script:` namespace, so a rule on that string fails **100%** of
+  them. Macros are `Basic/` and `Scripts/` parts and `<script:event-listener>` elements.
+- **10 of the 123 templates bind an event to a macro** — but to `application:Template.Correspondence.Main`,
+  a macro the *application* ships, not one the document carries. A document-embedded macro on
+  `office:load` is the attack; an `application:` binding is not (`office_safe.odt` carries the shape).
+- `meta:template` names the template a document was made from, with a `file:///…` href, so every
+  document made from a template has an "external link" in `meta.xml`. `meta.xml` and `settings.xml` are
+  not searched for links.
+
+**Fixtures are validated against independent readers**, not just against this scanner: `olefile` opens
+every compound file the generator writes, `olevba` extracts the VBA source and flags the same auto-run
+procedures and keywords, `rtfobj` finds the objects in every RTF (including the obfuscated one),
+python-docx / openpyxl / python-pptx open the benign OOXML, and LibreOffice converts it. The generator
+carries a CFB writer and a real MS-OVBA compressor, so the scanner's decompressor is exercised on copy
+tokens as well as literals.
+
+**Two denial-of-service classes were found by feeding the helper adversarial input**, both are
+tested, and a third turned up in the review: a flat OpenDocument file with `<script:module ` repeated
+300,000 times ran for over a minute under `<script:module\b[^>]*>(.*?)</script:module>`, an opener
+that never closes rescanning to the end of the input every time. It is now `str.find`, and the tag
+strip in the macro path is `<[^<>]*>` (each character is visited at most twice). A lint test fails if
+`_jar_facts` or `_office_facts` contains `[^>]*`, `[^>]+`, `.*?` or `.+?` again. First: patterns that reached into a tag with `[^>]*` or `.*?` went quadratic. Bounding them to
+`{0,4000}` was **not enough** — `<a<a<a…` (a 3 KB document) still ran for over a minute, and
+`<w:instrText>` repeated 300,000 times for 32 s. The fix is structural: one tokenizer whose tag pattern
+is deterministic, and no pattern ever reaches into a tag. Second: `[^>]*` is also *wrong*, because `>` is
+legal inside a quoted attribute value, so an attacker can put one before the attribute that matters
+(`office_gt_attr.docx`); single-quoted attributes had the same problem. RTF group scanning counts its
+steps over all groups and jumps between the characters that matter, so an unterminated group at every
+object does not cost the whole file each time.
+
+**Known gaps, stated rather than hidden:**
+
+- **Obfuscated VBA** (string building, `Chr()` chains, `StrReverse`) is not followed; an auto-running macro
+  with no recognisable dangerous call is only a WARN. **VBA stomping** (source removed, p-code kept) shows
+  as a macro whose source cannot be read.
+- **Password-protected documents** are reported, not opened.
+- **Padding forces a WARN**: parts and bytes past the limits are not read, so a document padded past the
+  budget and then carrying a payload is `office:inspection_incomplete`, not a FAIL. Part names and
+  relationships in the parts that were read are unaffected. Treat that message as "not inspected".
+- **`.xlsb`** is a ZIP of binary parts: relationships, macros and macro sheets are read, but a DDE formula
+  inside `xl/worksheets/*.bin` is not.
+- **Not routed:** `.one` (OneNote), `.pub`, `.vsd`, `.msg`, `.csv`/`.tsv`/`.slk` formula injection, and
+  anything that merely contains a document (a `.zip`, an `.iso`, an `.eml` attachment).
+- Calibration is **libraries and templates**, not a corpus of macro-bearing business documents: none of
+  the 217 has a macro, a DDE field or a remote link, so what the rules do on a hostile document rests on
+  fixtures.
+
+Tests: `tests/fixtures/make_office_fixtures.py` regenerates the fixtures byte-for-byte
+(`python3 tests/fixtures/make_office_fixtures.py`); credential documents are built at run time so the
+repository never holds a contiguous token. The limits, a helper that cannot open a file, eight
+pathological inputs and a DDE field whose instruction lies in a later 4 MB slice than its `begin` are
+all exercised.
+
 ## Package manifests
 
 `package.json`, `composer.json` and `requirements*.txt` / `constraints*.txt` are
@@ -1024,7 +1184,7 @@ GitHub documentation token. Each pattern is bounded on both sides, so a token in
 a longer identifier or a base64 blob does not count. Binary files are skipped (`grep
 -I`), which is a limit: a token inside an image is not seen. Jars are the exception: `scan_jar`
 extracts a text view of the archive (text resources, class-file string constants) and runs this
-same rule on it, through the shared `_known_cred_check`.
+same rule on it, through the shared `_known_cred_check`; so does `scan_office` on a document's text.
 
 **Not matched, by design:** providers whose secrets are bare hex or base64 with no
 prefix (Heroku, Mailgun, Twilio and the like). Nothing distinguishes them from a hash,
@@ -1090,7 +1250,8 @@ inspects the shebang: an extensionless `entrypoint` starting with `#!/usr/bin/en
 python3` is routed to `scan_python()` and gets full per-language analysis. Only files
 with neither a recognised extension nor a recognised shebang fall back to a MIME-type
 check — those pass through L1–L4 (pattern-based) but are skipped by L5 per-type SAST.
-ScanCode (L6) still inspects them for licences.
+ScanCode (L6) still inspects them for licences. An office-looking extension whose content is not an
+office document (`.dot` is Graphviz, `.pot` is gettext, a plain-text `.doc`) comes back here.
 
 ## selfcheck.py flags
 
@@ -1126,8 +1287,9 @@ python3 selfcheck.py --write-manifest
 ### Bug classes that have already shipped — lint enforces each
 
 The first six are the same kind of defect: a rule or a script that fails *silently*,
-so nothing in a normal run shows it is broken. The seventh is the same discipline applied to
-output rather than to rules.
+so nothing in a normal run shows it is broken. The seventh is a cost no ordinary run shows: a
+pattern that is linear on every real file and quadratic on a hostile one. The eighth is the same
+discipline applied to output rather than to rules.
 
 - **Multi-character `IFS`.** `IFS=':::'` is a character *set*, silently identical to
   `IFS=':'`. This broke the allowlist and the semgrep result parser.
@@ -1151,6 +1313,11 @@ output rather than to rules.
   reproduces it). `ai_transit.sh` clears stale sidecars and defaults a missing
   verdict to `FAIL`, so it failed *closed* — wrong, but not unsafe. Use
   `sed -n '1,Np'`, which reads its whole input.
+- **An unbounded `[^>]*` or lazy `.*?` in an embedded Python helper.** When the opener never closes,
+  the pattern rescans to the end of the input for every opener, so a few MB of `<a<a<a…` runs for
+  minutes (a 3 KB jar: 98 s; a flat ODF with 300,000 `<script:module `: over a minute). Bounding the
+  class (`{0,4000}`) did not help. Use `[^<>]*`, `str.find`, or the linear `TAG` tokenizer. Linted on
+  `_jar_facts` and `_office_facts`, which read files an attacker built to be slow.
 - **`echo -e` on text from the repository.** File names, archive entry names and finding
   messages are attacker-controlled; `echo -e` expands a literal `\033` in them into a real escape
   byte. Print through `printf '%s'` after replacing control bytes (see "Reports and console output"

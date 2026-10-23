@@ -1585,6 +1585,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("Office documents", "L5", True,
+     "No hostile macro, DDE, remote template or embedded exe",
+     "macro that runs programs, DDEAUTO, remote template, UNC path, embedded exe → FAIL",
+     "Any macro, remote image, embedded object, encrypted file → WARN"),
     ("Java archive scanner", "L5", True,
      "No zip-slip, fake class or hidden executable",
      "../ entry, non-bytecode .class, PE/ELF as logo.png, remote Class-Path → FAIL",
@@ -1766,7 +1770,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "360 assertions", [
+    ("Test suite", "504 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

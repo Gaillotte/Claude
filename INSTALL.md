@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 360/360 passed
+./tests/run_tests.sh          # Expected: ✔ 504/504 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 360/360 passed
+# Expected: ✔ 504/504 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1566,6 +1566,7 @@ tool; nothing to stage, no flags required.
 | CMake scanner (`scan_cmake`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Windows batch (`scan_bat`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Java archives (`scan_jar`) | L5 | Built in; needs `python3` (standard library only), reads the archive in place — no extraction, no network, nothing to stage |
+| Office documents (`scan_office`) | L5 | Built in; needs `python3` (standard library only), reads the document in place — no extraction, no network, nothing to stage |
 | PowerShell (`scan_powershell`, `scan_powershell_xml`) | L5 | Built in; pure pattern matching, nothing to stage |
 | Known credential formats (Layer 4, every file) | L4 | Built in; pure pattern matching, nothing to stage |
 | `setup.py` / `conanfile.py` (`scan_setup_py`) | L5 | Built in; pure pattern matching, nothing to stage |
@@ -2281,6 +2282,76 @@ WORK_DIR=/tmp/jarcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 # Expected WARN (no FAIL): jar_safe.jar, jar_agent.jar, jar_native.jar, wrapper_good/gradle-wrapper.jar
 ```
 
+### 11.2.14 Office documents — OOXML, OpenDocument, legacy OLE2 and RTF
+
+Needs only `python3` and its standard library; identical offline. Before this, every office document
+fell through to the unknown-file scanner and was recorded **PASS**.
+
+Routed by extension — `.docx .docm .dotx .dotm .xlsx .xlsm .xlsb .xltx .xltm .xlam .pptx .pptm .ppsx
+.ppsm .potx .potm .ppam` (OOXML), `.doc .dot .xls .xlt .xla .ppt .pot .pps .ppa` (legacy OLE2), `.odt
+.ods .odp .odg .ott .ots .otp .otg .fodt .fods .fodp .fodg` (OpenDocument) and `.rtf` — but the
+**content is sniffed**: Word opens an RTF named `.docx` without complaint. A file that is not an office
+document at all goes back to the unknown-file path when it is plain text and plausibly something else
+(`.dot` is Graphviz, `.pot` is gettext, a `.doc` can be text) and is reported otherwise.
+
+The document is **never extracted to disk**; a standard-library helper reads it in place. An office
+document is data, so one with nothing to report is a **PASS** (a jar, which is code, is a WARN).
+
+| Blocks (FAIL) | Reported (WARN) |
+|---|---|
+| a VBA macro that starts a program or downloads (the module is decompressed and read) | any VBA macro, one that runs on open, one in a `.docx`/`.xlsx`/`.pptx` |
+| a DDE / `DDEAUTO` field, a `cmd\|'…'!A0` formula, a `ddeLink` to a shell | a DDE link to an ordinary program |
+| an Excel 4.0 macro sheet that is hidden or calls `EXEC`/`CALL`/`REGISTER` | a visible Excel 4.0 macro sheet |
+| a remote `attachedTemplate`, or an `oleObject`/`frame`/`package` fetched from a remote host | content fetched from http(s) on open; a hyperlink to a file share |
+| an `ms-msdt:`, `mhtml:`, `search-ms:`, `javascript:` or `vbscript:` link | ActiveX controls, embedded OLE objects that cannot be read as an office document |
+| a UNC path (`\\host\share`, `smb://`) outside a hyperlink (NTLM leak); an `INCLUDETEXT`/`INCLUDEPICTURE`/`LINK` field aimed at a remote host or UNC path | an Equation object without a payload |
+| an embedded executable or script, also under a document name | an alternate-format chunk; a bare `DOCTYPE` |
+| an Equation Editor object carrying a command or URL; a PowerPoint `ppaction://program` hyperlink | an ODF macro, or a hyperlink that runs one; a `ppaction://macro` action; a hyperlink to an executable |
+| an external `ENTITY`; a part named `../…` | an ODF resource linked from http(s) or a path |
+| RTF: a linked object that auto-updates from a remote source; a remote `\template` | an RTF embedded OLE object |
+| ODF: a document-embedded macro bound to `office:load` / `office:new`; a script calling `Shell`, `os.system` … | encrypted content, an unparseable container, an unreadable VBA project |
+| a PEM private key or any of the 18 known credential formats in the text | every limit reached |
+
+**Prose is not searched for hostile strings**: a manual that says "pipe curl into sh" is ordinary.
+The `curl | sh` / encoded-PowerShell / `certutil` rules run on macro source, field codes, formulas and
+ODF scripts only.
+
+Every limit is reported when reached, and each has an environment knob:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OFFICE_MAX_ENTRIES` | 20000 | parts whose bytes are read (part *names* are always all checked) |
+| `OFFICE_READ_BUDGET_MB` | 256 | bytes read across all parts |
+| `OFFICE_TIME_BUDGET_S` | 90 | wall-clock limit per document |
+
+Objects embedded in a document are opened three levels deep; anything deeper is reported, not opened.
+An embedded object that is itself an office document (the workbook behind every chart, an OOXML package
+wrapped in an OLE `Package` stream, the OLE objects of a legacy `.ppt`) is analysed like the top-level
+file: clean is unremarkable and a macro inside it is a FAIL. Only an object that stays opaque is reported.
+pandoc writes RTF *fragments* with no `{\rtf` header; those are read, and warned about, as plain text.
+
+**Calibration.** 123 real OpenDocument templates, the python-docx and python-pptx defaults, an RTF, and 62
+documents LibreOffice converted to every format: **187 documents, 17 extensions, no finding**; a second set of
+30 with charts, pictures and tables found (and, once fixed, passes clean) the embedded-workbook noise. The real
+files changed the design: every OpenDocument file declares the `script:` namespace (a rule on it would
+fail 100%), **10 of the 123 templates bind an event to a macro the application ships** (`application:…`,
+not a finding), and `meta:template` carries a `file:///` link in every document made from a template.
+
+> **What this does not establish.** None of the 217 has a macro, a DDE field or a remote link, so what
+> the rules do on a hostile document rests on fixtures. They are validated against `olevba`, `olefile`
+> and `rtfobj` (independent readers), not just against this scanner. Obfuscated VBA, VBA stomping and
+> password-protected files are not read (the last is reported). A document padded past the read budget
+> is a WARN (`office:inspection_incomplete`), not a FAIL: treat that message as "not inspected".
+
+Not routed: `.one`, `.pub`, `.vsd`, `.msg`, `.csv`/`.tsv` formula injection, and anything that merely
+contains a document (`.zip`, `.iso`, an `.eml` attachment).
+
+```bash
+WORK_DIR=/tmp/officecheck bash scan_pipeline.sh tests/fixtures/rules --quiet
+# Expected FAIL: office_macro_dangerous.docm, office_remote_template.docx, office_dde.docx, office_rtf_equation.rtf, …
+# Expected PASS: office_safe.docx, office_safe.odt (an application: event listener), office_graphviz.dot
+```
+
 ### 11.3 Environment variables
 
 | Variable | Default | Purpose |
@@ -2557,7 +2628,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 360/360 passed
+# Expected: ✔ 504/504 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -2996,7 +3067,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  360/360 passed
+  ✔  504/504 passed
 ```
 
 ### 17.1 What each layer covers
@@ -3008,6 +3079,7 @@ Expected output on a healthy installation:
 | C — flags | `--report-only`, `--min-severity`, argument guards, `.transit-allow.json`, `.transitignore`, `--no-zip`/`--no-excel` |
 | D — artifacts | JSON valid and carries a verdict, HTML written and escaped (a hostile file or jar-entry name is shown as text), ZIP entries repo-relative, Excel Findings tab, no escape codes when redirected, no terminal control bytes taken from a file name |
 | Java archive limits | The `JAR_*` environment limits of `scan_jar`, each reached and reported on an 11 KB fixture, plus the archive helper's behaviour on a file that cannot be opened |
+| Office document limits | The `OFFICE_*` limits of `scan_office`, six adversarial inputs that must finish inside 20 s (quadratic patterns), and a DDE field whose instruction lies in a later 4 MB slice than its `begin` |
 | E — diff mode | `--since` scans exactly the changed files; `.git` excluded from local copies |
 | F — static | Parse checks, shellcheck, and lint rules for seven bug classes that have already shipped (six silent-failure classes and `echo -e` on repository text) |
 

@@ -218,6 +218,7 @@ toc_items = [
     ("    5.23", "Manifestes de paquets"),
     ("    5.24", "XML, Maven et Ant (.xml .pom)"),
     ("    5.25", "Archives Java (.jar .war .ear .aar)"),
+    ("    5.26", "Documents bureautiques (OOXML, OpenDocument, OLE2, RTF)"),
     ("6.", "Outils utilisés — Description détaillée"),
     ("7.", "Résultats — Archives et rapports"),
     ("    7.1", "Archive ZIP approuvée (répertoire Good/)"),
@@ -509,6 +510,7 @@ dispatch = [
     ("package.json composer.json requirements*.txt", "Manifestes", "—", "hooks d'installation, dépendances http/git, identifiants dans une URL"),
     (".pdf",               "PDF",         "—",               "JavaScript, actions automatiques, Launch, exécutable embarqué"),
     (".jar .war .ear .aar","Archive Java","—",               "zip-slip, .class factice, exécutable caché, pool de constantes"),
+    (".docx .xlsx .pptx .doc .xls .ppt .odt .ods .odp .rtf (+ variantes)", "Document bureautique", "—", "macros, DDE, modèle distant, UNC, objet intégré · contenu reconnu"),
     (".so .dll .dylib .exe .elf .bin","Binaire","strings",   "FAIL automatique + recherche IOC dans strings"),
     (".zip .tar .gz .tgz .bz2 .xz","Archive","—",            "FAIL automatique, extraction + re-scan requis"),
     (".sql",               "SQL",         "—",               "xp_cmdshell, DROP TABLE/DATABASE, injections"),
@@ -1188,6 +1190,71 @@ file_types = [
              "script shell de lancement avant l'archive, un Class-Path absolu, et chaque limite atteinte. "
              "Remplir un jar au-delà du budget de lecture donne donc un WARN et non un FAIL : traiter "
              "jar:inspection_incomplete comme « non inspecté ».",
+             "WARN"),
+        ]
+    ),
+    (
+        "5.26 Documents bureautiques (OOXML, OpenDocument, OLE2 historique, RTF)",
+        ".docx .docm .dotx .dotm .xlsx .xlsm .xlsb .xltx .xltm .xlam .pptx .pptm .ppsx .ppsm .potx .potm .ppam, "
+        ".doc .dot .xls .xlt .xla .ppt .pot .pps .ppa, .odt .ods .odp .odg .ott .ots .otp .otg .fodt .fods .fodp .fodg, .rtf",
+        "Les documents bureautiques n'avaient aucun gestionnaire et étaient enregistrés PASS. Un document est un conteneur "
+        "et ce qui le rend dangereux, c'est ce qui se passe à l'ouverture ou ce qu'il transporte, pas son texte. OOXML et "
+        "OpenDocument sont des ZIP de XML ; les anciens .doc/.xls/.ppt sont des fichiers composés OLE2, et toute macro VBA, "
+        "quel que soit le format, est un module compressé dans l'un d'eux ; le RTF n'a pas de conteneur et garde ses objets "
+        "en hexadécimal dans le texte. Le contenu est reconnu et non présumé : Word ouvre sans broncher un RTF nommé .docx, "
+        "l'extension ne décide donc que lorsque le contenu n'est pas un document bureautique (.dot est du Graphviz, .pot du "
+        "gettext et un .doc est parfois du texte brut : ils retournent au chemin des fichiers inconnus et passent). Le "
+        "document n'est jamais extrait sur disque ; un assistant de la bibliothèque standard lit les parties comme le fait "
+        "Office, le XML passe par un seul analyseur de balises linéaire et les parties de plus de 4 Mo sont lues en flux. "
+        "Chaque limite atteinte est signalée (OFFICE_MAX_ENTRIES 20000, OFFICE_READ_BUDGET_MB 256, OFFICE_TIME_BUDGET_S 90, "
+        "objets ouverts sur trois niveaux). Le texte courant n'est pas cherché pour des chaînes hostiles (un manuel peut "
+        "dire « redirigez curl vers sh ») ; ces règles s'appliquent au code des macros, aux codes de champ, aux formules et "
+        "aux scripts ODF, tandis que les secrets et les clés PEM sont cherchés dans le texte. Calibrage : 123 modèles "
+        "OpenDocument réels, les modèles par défaut de python-docx et python-pptx, un RTF et 62 documents convertis par "
+        "LibreOffice dans tous les formats : 187 documents, aucun finding. Cela a changé la conception : tout fichier ODF "
+        "déclare l'espace de noms script:, 10 modèles sur 123 lient un événement à une macro fournie par l'APPLICATION "
+        "(application:...) et meta:template renvoie au modèle d'origine. Un second lot de 30 documents avec graphiques, images et "
+        "tableaux a révélé le bruit des classeurs intégrés (un document bureautique intégré qui s'analyse sans finding n'est plus "
+        "signalé). Aucun des 217 n'a de macro, de champ DDE ni de lien "
+        "distant : le comportement sur un document hostile repose donc sur des fixtures vérifiées avec olevba, olefile et rtfobj.",
+        [
+            ("Macros",
+             "Une macro VBA qui lance un programme ou télécharge (Shell, WScript.Shell, URLDownloadToFile, PowerShell, appels "
+             "kernel32 de shellcode) : le module est décompressé (MS-OVBA) et lu, et le finding nomme le module et la procédure "
+             "à exécution automatique. Une feuille de macros Excel 4.0 cachée ou qui appelle EXEC / CALL / REGISTER. En "
+             "OpenDocument, une macro intégrée au document et liée à office:load / office:new / office:create, ou un script "
+             "StarBasic, Python ou BeanShell appelant Shell, os.system, subprocess, des sockets ou urllib.",
+             "FAIL"),
+            ("DDE",
+             "Un champ DDE ou DDEAUTO (les fragments en lesquels Word le découpe sont réassemblés), une formule de cellule "
+             "cmd|'...'!A0, un ddeLink vers un shell, un champ DDEAUTO en RTF, un lien DDE ODF vers un shell.",
+             "FAIL"),
+            ("Relations distantes",
+             "Un attachedTemplate en http(s)/ftp (injection de modèle distant) ; une relation oleObject, frame, subDocument ou "
+             "package depuis un hôte distant (forme Follina) ; un lien dont le schéma est ms-msdt:, mhtml:, search-ms:, "
+             "javascript: ou vbscript: ; un chemin UNC hors hyperlien, qui fait envoyer par Windows le hachage NTLM de "
+             "l'utilisateur (aussi smb:// et cifs://) ; un champ INCLUDETEXT, INCLUDEPICTURE ou LINK visant un hôte distant ou un chemin "
+             "UNC ; un hyperlien PowerPoint ppaction://program ; un objet lié RTF qui se met à jour automatiquement depuis une source "
+             "distante ou un \\template distant.",
+             "FAIL"),
+            ("Charges utiles intégrées",
+             "Un exécutable ou script intégré (PE, ELF ou Mach-O, .exe, .js, .vbs ...), y compris stocké sous un nom de document "
+             "(word/media/image1.png) ou dans un OLE Package ; un objet Equation Editor dont le flux porte une commande ou une "
+             "URL (famille CVE-2017-11882), y compris dans un fragment RTF de format alternatif.",
+             "FAIL"),
+            ("Conteneur et contenu",
+             "Une partie XML avec une ENTITY externe ; une partie nommée ../ (zip-slip) ; un exécutable natif nommé .docx ; une "
+             "clé privée PEM ou l'un des 18 formats d'identifiants connus dans le texte du document.",
+             "FAIL"),
+            ("À relire",
+             "Toute macro VBA, une macro qui s'exécute à l'ouverture, une macro dans une extension .docx/.xlsx/.pptx ; une feuille "
+             "de macros Excel 4.0 visible ; des contrôles ActiveX ; des objets intégrés illisibles comme documents bureautiques (un classeur "
+             "intégré sans finding n'est pas signalé ; avec une macro, c'est un FAIL) ; un objet Equation sans charge utile ; une action "
+             "ppaction://macro ; un hyperlien vers un exécutable ; "
+             "du contenu récupéré en http(s) à l'ouverture ; un hyperlien vers un partage de fichiers ; un lien DDE vers un "
+             "programme ordinaire ; une macro ODF ou un hyperlien qui en lance une au clic ; un DOCTYPE nu ; un contenu chiffré, "
+             "un conteneur illisible, un projet VBA illisible ; chaque limite atteinte. Un document rempli au-delà du budget de "
+             "lecture donne un WARN et non un FAIL : traiter office:inspection_incomplete comme « non inspecté ».",
              "WARN"),
         ]
     ),

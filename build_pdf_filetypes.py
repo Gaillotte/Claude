@@ -312,6 +312,63 @@ FAMILIES = [
               "XFA forms; remote or embedded destinations (/GoToR, /GoToE)", "Incremental updates (several %%EOF)"],
         note="The five PDFs this project ships are the acceptance test: scan them and expect PASS with no finding. Image filters are excluded — they carry pixels, never dictionaries."),
     dict(
+        key="ooxml", title="Office documents — OOXML (Word, Excel, PowerPoint)", scanner="scan_office",
+        ext=[".docx", ".docm", ".dotx", ".dotm", ".xlsx", ".xlsm", ".xlsb", ".xltx", ".xltm", ".xlam",
+             ".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm", ".ppam"],
+        tools=[("stdlib helper", "Opens the ZIP in place, never extracts. Reads parts as Office does. XML goes through one linear tokenizer; VBA is decompressed (MS-OVBA) and read. Content is sniffed, whatever the extension says.")],
+        fail=["A VBA macro that starts a program or downloads: Shell, WScript.Shell, URLDownloadToFile, PowerShell, kernel32 shellcode calls",
+              "DDE: a DDE / DDEAUTO field (fragments joined across runs), a cmd|'…'!A0 formula, a ddeLink to a shell",
+              "An Excel 4.0 macro sheet that is hidden or calls EXEC / CALL / REGISTER",
+              "Remote fetch: an attachedTemplate over http(s) (template injection); an oleObject / frame / package from a remote host (Follina)",
+              "A link with an ms-msdt:, mhtml:, search-ms:, javascript: or vbscript: scheme; a UNC / smb:// path outside a hyperlink (NTLM leak)",
+              "An INCLUDETEXT / INCLUDEPICTURE / LINK field aimed at a remote host or UNC path; a PowerPoint ppaction://program link",
+              "An embedded executable or script, also under a document name (word/media/image1.png) or inside an OLE Package",
+              "An Equation Editor object carrying a command or URL — also inside an RTF alternate-format chunk",
+              "An external ENTITY; a part named ../…; a PEM key or one of the 18 known token formats in the text"],
+        warn=["Any VBA macro; one that runs when the document opens; one in a .docx / .xlsx / .pptx",
+              "A visible Excel 4.0 macro sheet; ActiveX; embedded objects that are not readable office documents; an Equation object without a payload",
+              "Content fetched from http(s) when opened; a hyperlink to a file share; a DDE link to an ordinary program",
+              "A bare DOCTYPE; encrypted or unreadable content; a limit reached"],
+        note="Prose is not searched for hostile strings (a manual may say 'pipe curl into sh'). 217 real and converted documents: no finding. Recall rests on fixtures checked with olevba, olefile and rtfobj. Obfuscated VBA, VBA stomping and encrypted files are not read."),
+    dict(
+        key="legacy_office", title="Office documents — legacy OLE2 (.doc .xls .ppt)", scanner="scan_office",
+        ext=[".doc", ".dot", ".xls", ".xlt", ".xla", ".ppt", ".pot", ".pps", ".ppa"],
+        tools=[("stdlib CFB reader", "Reads the compound file's directory and streams (FAT and mini-FAT, bounded), decompresses each VBA module, parses BOUNDSHEET records and OLE Package streams.")],
+        fail=["A VBA macro that starts a program or downloads (the module source is decompressed and read)",
+              "A hidden Excel 4.0 macro sheet, or one that runs programs",
+              "An OLE Package holding an executable or script",
+              "An Equation Editor object whose stream carries a command or URL (CVE-2017-11882 family)",
+              "A DDEAUTO field in the document stream"],
+        warn=["Any VBA macro, or one whose source cannot be read",
+              "An embedded OLE object; an Equation object without a payload",
+              "Encrypted content; a file that cannot be parsed"],
+        note=".dot is Graphviz, .pot is gettext and a .doc is sometimes plain text: the content is sniffed, and text goes back to the unknown-file path (PASS). A password-protected file is reported, not opened."),
+    dict(
+        key="odf", title="OpenDocument (LibreOffice, OpenOffice)", scanner="scan_office",
+        ext=[".odt", ".ods", ".odp", ".odg", ".ott", ".ots", ".otp", ".otg", ".fodt", ".fods", ".fodp", ".fodg"],
+        tools=[("stdlib helper", "Opens the ZIP (or reads the flat XML). Looks at content.xml, styles.xml, the manifest, Basic/ and Scripts/. meta.xml is not searched for links.")],
+        fail=["A macro bound to office:load / office:new / office:create / view-created that lives IN the document",
+              "A StarBasic, Python or BeanShell script calling Shell, os.system, subprocess, sockets, urllib, ctypes …",
+              "curl | sh, encoded PowerShell or certutil -urlcache in an embedded script",
+              "A DDE link to a shell; a UNC path outside a hyperlink; an executable stored in the package",
+              "An external ENTITY; a PEM key or a known token format in the text"],
+        warn=["Any embedded macro, or a hyperlink that runs one on click",
+              "An image or object linked from http(s) or a file path; a DDE link to an ordinary program",
+              "Encrypted parts; a limit reached"],
+        note="Calibrated on 123 real templates. Not findings: every file declares the script: namespace (a rule on it fails 100%); 10 of 123 bind an event to a macro the APPLICATION ships (application:…); meta:template links to the source template."),
+    dict(
+        key="rtf", title="Rich Text Format", scanner="scan_office",
+        ext=[".rtf"],
+        tools=[("stdlib helper", "RTF has no container: objects are hex inside the text, and Word reads them through junk. Object groups are decoded and each OLE 1.0 object is opened.")],
+        fail=["An Equation.3 object whose data carries a command or URL (CVE-2017-11882 family)",
+              "A linked object with \\objautlink and \\objupdate that fetches from a remote source",
+              "A {\\*\\template …} over http(s) or a UNC path",
+              "A Package object holding an executable or script",
+              "A DDEAUTO field"],
+        warn=["An embedded OLE object (not an exploit shape)",
+              "An unterminated object group or a limit reached"],
+        note="The hex is read through line breaks and empty groups, as Word reads it. Group scanning is bounded: an unterminated group at every object would otherwise cost the whole file each."),
+    dict(
         key="sql", title="SQL", scanner="scan_sql",
         ext=[".sql"],
         tools=[("— none —", "Four built-in rules.")],
@@ -391,6 +448,8 @@ def routed_patterns() -> tuple[set[str], set[str]]:
     src = open(SCANNER, encoding="utf-8").read()
     body = src[src.index("classify_file() {"):]
     body = body[:body.index("\n}\n")]
+    # A case pattern may continue over several lines with a trailing backslash (the office routes do).
+    body = re.sub(r"\\\n\s*", "", body)
 
     def labels(block: str) -> list[str]:
         out = []
@@ -580,7 +639,7 @@ def render() -> None:
     steps = [
         ("0", "Excluded?", ".transitignore patterns and the default pruned directories (node_modules, .git, vendor, dist, build, target, coverage …) never reach a scanner."),
         ("1", "Basename", "Dockerfile*, Makefile*, CMakeLists.txt, package.json, composer.json, requirements*.txt, constraints*.txt, *.gradle, *.gradle.kts, gradle*.properties, setup.py, conanfile.py."),
-        ("2", "Extension", "Lower-cased first, so .PS1 and .JAR are treated like .ps1 and .jar. One slide per family in this deck."),
+        ("2", "Extension", "Lower-cased first, so .PS1 and .JAR are treated like .ps1 and .jar. One slide per family in this deck. Office extensions are only a hint: the content is sniffed (a .dot may be Graphviz)."),
         ("3", "Shebang", "No known extension: the first line decides — python, bash / sh / zsh / ksh, ruby, node, php, pwsh / powershell."),
         ("4", "MIME type", "Still nothing: file --mime-type. An executable type (x-executable, x-sharedlib, x-dosexec) → FAIL."),
         ("5", "Default", "Anything else passes Layer 5 untouched. See \"Unknown extensions\"."),

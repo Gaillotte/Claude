@@ -650,6 +650,280 @@ for p,i in d.get('file_results',{}).items():
         assert_contains "$(line_for wrapper_maven/maven-wrapper.jar)" "jar:wrapper_checksum_must_be_verified" \
             "maven-wrapper.jar is held to the same shape check"
 
+        # ── Office documents ─────────────────────────────────────────────────
+        # Before scan_office a .docx, .xlsx, .odt, .rtf or .doc had no handler and was
+        # recorded PASS, whatever it held. An office document is a container: OOXML and
+        # OpenDocument are ZIPs of XML, the legacy .doc/.xls/.ppt are OLE2 compound
+        # files, and a VBA macro is a compressed module inside a nested one. What
+        # matters is what runs when the file is OPENED (macros, DDE, an external
+        # template or object fetched from a remote host) and what the file smuggles
+        # (an embedded executable, an Equation Editor object). Calibration: 123 real
+        # OpenDocument templates and the python-docx / python-pptx defaults on this
+        # host, plus documents LibreOffice converted to every format; recall rests on
+        # fixtures, because none of these has a macro or a remote link.
+        for _safe in office_safe.docx office_safe.xlsx office_safe.pptx office_safe.odt office_safe.rtf \
+                     office_legacy_plain.doc office_big.docx; do
+            assert_not_contains "$(line_for "$_safe")" "[FAIL]" \
+                "does NOT fail an ordinary document: ${_safe}"
+            assert_not_contains "$(line_for "$_safe")" "[WARN]" \
+                "…and does not warn about it either: ${_safe}"
+        done
+        # .dot is Graphviz, .pot is gettext and a .doc can be plain text: all three are
+        # routed here by extension and must fall back to the unknown-file path, not fail.
+        for _amb in office_graphviz.dot office_gettext.pot office_plain.doc; do
+            assert_not_contains "$(line_for "$_amb")" "[FAIL]" \
+                "text with an office-looking extension is not an office document and does not fail: ${_amb}"
+            assert_not_contains "$(line_for "$_amb")" "[WARN]" \
+                "…nor warn: ${_amb}"
+        done
+
+        # External relationships
+        assert_contains "$(line_for office_remote_template.docx)" "CWE-829:office_remote_template_injection" \
+            "an attachedTemplate pointing at http:// is flagged (remote template injection)"
+        assert_contains "$(line_for office_follina.docx)" "CWE-829:office_object_or_frame_fetched_from_a_remote_host" \
+            "an oleObject relationship to http://…html! is flagged (the Follina shape)"
+        assert_contains "$(line_for office_uri_handler.docx)" "CWE-94:office_link_uses_a_script_or_diagnostic_uri_scheme" \
+            "a hyperlink with an ms-msdt: target is flagged"
+        assert_contains "$(line_for office_unc_image.docx)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "an image fetched from \\\\host\\share is flagged (NTLM leak)"
+        assert_contains "$(line_for office_unc_hyperlink.docx)" "office:hyperlink_to_a_unc_path" \
+            "a hyperlink to a file share is reported"
+        assert_not_contains "$(line_for office_unc_hyperlink.docx)" "[FAIL]" \
+            "…but not blocked: enterprise documents link to shares"
+        assert_contains "$(line_for office_remote_image.docx)" "office:remote_image_or_content_fetched_when_opened" \
+            "an image fetched from http:// is reported (tracking pixel)"
+        assert_not_contains "$(line_for office_remote_image.docx)" "[FAIL]" \
+            "…but not blocked"
+
+        # DDE
+        assert_contains "$(line_for office_dde.docx)" "CWE-94:office_dde_field_or_formula_starts_a_program" \
+            "a DDEAUTO field split across runs is flagged (the fragments are joined)"
+        assert_contains "$(line_for office_dde_formula.xlsx)" "CWE-94:office_dde_field_or_formula_starts_a_program" \
+            "a cmd|'/c calc'!A0 cell formula is flagged"
+        assert_contains "$(line_for office_dde_link.xlsx)" "CWE-94:office_dde_field_or_formula_starts_a_program" \
+            "an Excel ddeLink to cmd is flagged"
+
+        # Macros
+        JMD=$(line_for office_macro_dangerous.docm)
+        assert_contains "$JMD" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
+            "a Word macro that auto-runs and starts PowerShell is flagged"
+        assert_contains "$JMD" "AutoOpen" \
+            "…and the finding names the auto-run procedure"
+        assert_contains "$(line_for office_macro_evil.xlsm)" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
+            "an Excel macro with URLDownloadToFile and Shell is flagged"
+        JMB=$(line_for office_macro_benign.xlsm)
+        assert_contains "$JMB" "office:contains_vba_macro" \
+            "a macro-enabled workbook with a harmless macro is reported"
+        assert_not_contains "$JMB" "[FAIL]" \
+            "…and is not blocked: a macro that only writes cells does not start anything"
+        JMX=$(line_for office_macro_ext.docx)
+        assert_contains "$JMX" "office:vba_macro_in_a_non_macro_extension" \
+            "a vbaProject.bin inside a .docx is reported as a disguised macro file"
+        assert_contains "$JMX" "office:contains_vba_macro" \
+            "…as a macro file too"
+        JXL=$(line_for office_xlm.xlsm)
+        assert_contains "$JXL" "CWE-94:office_excel4_macro_sheet_is_hidden_or_runs_programs" \
+            "a veryHidden Excel 4.0 macro sheet running EXEC is flagged"
+
+        # Embedded objects
+        assert_contains "$(line_for office_embedded_exe.docx)" "CWE-506:office_embeds_an_executable_or_script" \
+            "an OLE Package holding invoice.exe is flagged"
+        assert_contains "$(line_for office_embedded_script.docx)" "CWE-506:office_embeds_an_executable_or_script" \
+            "an embedded .js is flagged"
+        JEN=$(line_for office_embedded_nested.docx)
+        assert_contains "$JEN" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
+            "a macro inside a workbook embedded in the document is found (nested one level)"
+        assert_contains "$JEN" "Microsoft_Excel_Worksheet.xlsx!" \
+            "…and the finding says where it was"
+        assert_contains "$(line_for office_embedded_object.docx)" "office:contains_embedded_object" \
+            "an ordinary embedded OLE object is reported"
+        assert_not_contains "$(line_for office_embedded_object.docx)" "[FAIL]" \
+            "…but not blocked"
+        assert_contains "$(line_for office_activex.docx)" "office:contains_activex_control" \
+            "an ActiveX control is reported"
+        assert_contains "$(line_for office_altchunk.docx)" "CWE-94:office_equation_editor_object_carries_a_payload" \
+            "an Equation object inside an alternate-format RTF chunk is found"
+        assert_contains "$(line_for office_altchunk.docx)" "office:contains_alternate_format_chunk" \
+            "…and the chunk itself is reported"
+
+        # Container shape
+        assert_contains "$(line_for office_xxe.docx)" "CWE-611:office_part_declares_an_external_entity" \
+            "a part with an external ENTITY is flagged (XXE for whatever parses it next)"
+        assert_contains "$(line_for office_doctype.docx)" "office:xml_part_has_a_doctype" \
+            "a bare DOCTYPE in an Office part is reported"
+        assert_not_contains "$(line_for office_doctype.docx)" "[FAIL]" \
+            "…but not blocked"
+        assert_contains "$(line_for office_zipslip.docx)" "CWE-22:office_part_path_traversal_zip_slip" \
+            "a part named ../../… is flagged as zip-slip"
+        assert_contains "$(line_for office_elf.docx)" "CWE-506:office_file_is_a_native_executable_despite_its_extension" \
+            "an ELF binary named .docx is flagged"
+        assert_contains "$(line_for office_text.docx)" "office:not_an_office_document_despite_its_extension" \
+            "plain text named .docx is reported"
+        assert_not_contains "$(line_for office_text.docx)" "[FAIL]" \
+            "…but not blocked"
+        assert_contains "$(line_for office_not_ooxml.docx)" "office:not_an_office_document_despite_its_extension" \
+            "a ZIP with no Office structure named .docx is reported"
+        assert_contains "$(line_for office_truncated.docx)" "office:container_could_not_be_parsed" \
+            "a truncated .docx is reported as not inspected"
+        assert_contains "$(line_for office_empty.docx)" "office:empty_file" \
+            "a zero-byte .docx is reported"
+        assert_contains "$(line_for office_encrypted.docx)" "office:encrypted_content_not_inspected" \
+            "a password-protected .docx is reported as not inspected"
+
+        # OpenDocument
+        JOM=$(line_for office_odf_macro.odt)
+        assert_contains "$JOM" "CWE-94:odf_macro_runs_on_open" \
+            "an embedded macro bound to office:load is flagged"
+        assert_contains "$JOM" "CWE-94:odf_macro_runs_programs_or_downloads" \
+            "…and its Shell() call is flagged"
+        assert_contains "$(line_for office_odf_macro_benign.ods)" "odf:contains_macro" \
+            "an embedded StarBasic macro that only shows a message is reported"
+        assert_not_contains "$(line_for office_odf_macro_benign.ods)" "[FAIL]" \
+            "…and is not blocked"
+        assert_contains "$(line_for office_odf_python.odt)" "CWE-94:odf_macro_runs_programs_or_downloads" \
+            "an embedded Python script calling os.system is flagged"
+        assert_contains "$(line_for office_odf_dde.ods)" "CWE-94:office_dde_field_or_formula_starts_a_program" \
+            "an ODF DDE link to cmd is flagged"
+        assert_contains "$(line_for office_odf_flat_dde.fods)" "CWE-94:office_dde_field_or_formula_starts_a_program" \
+            "a flat .fods with a DDE link to powershell is flagged"
+        assert_contains "$(line_for office_odf_unc.odt)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "an ODF image fetched from a UNC path is flagged"
+        assert_contains "$(line_for office_odf_remote.odt)" "odf:external_resource_linked" \
+            "an ODF image fetched from http:// is reported"
+        assert_not_contains "$(line_for office_odf_remote.odt)" "[FAIL]" \
+            "…but not blocked"
+        assert_contains "$(line_for office_odf_encrypted.odt)" "office:encrypted_content_not_inspected" \
+            "an encrypted ODF document is reported as not inspected"
+
+        # RTF
+        assert_contains "$(line_for office_rtf_equation.rtf)" "CWE-94:office_equation_editor_object_carries_a_payload" \
+            "an RTF Equation.3 object carrying a command is flagged"
+        assert_contains "$(line_for office_rtf_obfuscated.rtf)" "CWE-94:office_equation_editor_object_carries_a_payload" \
+            "the same object with line breaks and empty groups inside the hex is still flagged"
+        assert_contains "$(line_for office_rtf_autolink.rtf)" "CWE-829:rtf_linked_object_updates_from_a_remote_source" \
+            "an RTF \\objautlink + \\objupdate object is flagged"
+        assert_contains "$(line_for office_rtf_template.rtf)" "CWE-829:office_remote_template_injection" \
+            "an RTF \\template pointing at http:// is flagged"
+        assert_contains "$(line_for office_rtf_package.rtf)" "CWE-506:office_embeds_an_executable_or_script" \
+            "an RTF Package object holding invoice.exe is flagged"
+        assert_contains "$(line_for office_rtf_dde.rtf)" "CWE-94:office_dde_field_or_formula_starts_a_program" \
+            "an RTF DDEAUTO field is flagged"
+        assert_contains "$(line_for office_rtf_object.rtf)" "rtf:contains_embedded_ole_object" \
+            "an ordinary embedded OLE object in an RTF is reported"
+        assert_not_contains "$(line_for office_rtf_object.rtf)" "[FAIL]" \
+            "…but not blocked"
+
+        # Legacy binary (OLE2)
+        JLM=$(line_for office_legacy_macro.doc)
+        assert_contains "$JLM" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
+            "a .doc whose macro auto-runs and starts PowerShell is flagged"
+        assert_contains "$JLM" "AutoOpen" \
+            "…and the finding names the auto-run procedure"
+        assert_contains "$(line_for office_legacy_macro_benign.xls)" "office:contains_vba_macro" \
+            "a .xls with a harmless macro is reported"
+        assert_not_contains "$(line_for office_legacy_macro_benign.xls)" "[FAIL]" \
+            "…and is not blocked"
+        assert_contains "$(line_for office_legacy_equation.doc)" "CWE-94:office_equation_editor_object_carries_a_payload" \
+            "an Equation Editor object with a command in its stream is flagged"
+        assert_contains "$(line_for office_legacy_equation_benign.doc)" "office:equation_editor_object" \
+            "an Equation Editor object without a payload is reported"
+        assert_not_contains "$(line_for office_legacy_equation_benign.doc)" "[FAIL]" \
+            "…and is not blocked: old scientific documents contain them"
+        assert_contains "$(line_for office_legacy_package.doc)" "CWE-506:office_embeds_an_executable_or_script" \
+            "a .doc whose OLE Package holds invoice.exe is flagged"
+        assert_contains "$(line_for office_legacy_objpool.doc)" "office:contains_embedded_object" \
+            "a .doc with an ordinary embedded object is reported"
+        assert_contains "$(line_for office_legacy_xlm.xls)" "CWE-94:office_excel4_macro_sheet_is_hidden_or_runs_programs" \
+            "a .xls with a hidden Excel 4.0 macro sheet is flagged"
+        assert_contains "$(line_for office_legacy_dde.doc)" "CWE-94:office_dde_field_or_formula_starts_a_program" \
+            "a .doc with a DDEAUTO field is flagged"
+        assert_contains "$(line_for office_legacy_truncated.doc)" "office:container_could_not_be_parsed" \
+            "a truncated .doc is reported as not inspected"
+
+        # Ways round the rules
+        JGT=$(line_for office_gt_attr.docx)
+        assert_contains "$JGT" "CWE-829:office_object_or_frame_fetched_from_a_remote_host" \
+            "a '>' inside a quoted attribute value does not hide the Type and Target that follow"
+        assert_contains "$JGT" "CWE-829:office_remote_template_injection" \
+            "single-quoted attributes are read like double-quoted ones"
+        JSM=$(line_for office_severity_marker.docx)
+        assert_contains "$JSM" "[FAIL] CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "a :LOW: inside a relationship target does not downgrade the FAIL"
+        assert_not_contains "$JSM" "LOW_SEV" \
+            "…and the message carries no severity marker taken from the document"
+        assert_contains "$(line_for office_hidden_exe.docx)" "CWE-506:office_embeds_an_executable_or_script" \
+            "a Windows executable stored as word/media/image1.png is flagged"
+        assert_contains "$(line_for office_pem.docx)" "CWE-321:hardcoded_private_key" \
+            "a PEM private key pasted into a document, one paragraph per line, is flagged"
+        JXV=$(line_for office_xlm_visible.xlsm)
+        assert_contains "$JXV" "office:excel4_macro_sheet" \
+            "a visible Excel 4.0 macro sheet that calls nothing dangerous is reported"
+        assert_not_contains "$JXV" "[FAIL]" \
+            "…and is not blocked"
+        JVG=$(line_for office_vba_garbage.docm)
+        assert_contains "$JVG" "office:vba_project_could_not_be_read" \
+            "a VBA project whose source cannot be read is reported as not inspected"
+        assert_contains "$JVG" "office:contains_vba_macro" \
+            "…and still counts as a macro"
+        assert_contains "$(line_for office_nested_deep.docx)" "office:inspection_incomplete" \
+            "a macro four documents deep is not opened, and the document says so"
+        assert_contains "$(line_for office_unreadable.docx)" "office:parts_could_not_be_read" \
+            "a part stored with an unsupported compression method is reported"
+        assert_contains "$(line_for office_odf_link_macro.odt)" "odf:contains_macro" \
+            "an ODF hyperlink that runs a document macro on click is reported"
+        assert_not_contains "$(line_for office_odf_link_macro.odt)" "[FAIL]" \
+            "…and is not blocked: that needs a click"
+        assert_contains "$(line_for office_odf_dde_benign.ods)" "office:dde_connection_declared" \
+            "an ODF DDE link to an ordinary program is reported"
+        assert_not_contains "$(line_for office_odf_dde_benign.ods)" "[FAIL]" \
+            "…and is not blocked"
+        assert_contains "$JMB" "office:vba_macro_runs_when_the_document_opens" \
+            "a macro with a Workbook_Open procedure says it runs when the document opens"
+        assert_contains "$(line_for office_odf_python.odt)" "CWE-78:office_macro_or_script_pipes_a_download_into_a_shell" \
+            "curl | sh inside an ODF script is flagged by the hostile-string rule"
+        assert_contains "$(line_for office_vba_corrupt_dir.docm)" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
+            "a VBA project with an unreadable dir stream is still read: the source is found by its signature"
+        assert_contains "$(line_for office_xlm_hidden_quiet.xlsm)" "CWE-94:office_excel4_macro_sheet_is_hidden_or_runs_programs" \
+            "a hidden Excel 4.0 macro sheet is flagged even when it calls nothing"
+        JOH=$(line_for office_odf_hostile.odt)
+        assert_contains "$JOH" "CWE-78:office_macro_or_script_runs_encoded_powershell" \
+            "powershell -enc inside an ODF script is flagged"
+        assert_contains "$JOH" "CWE-494:office_macro_or_script_downloads_with_certutil_or_bitsadmin" \
+            "certutil -urlcache inside an ODF script is flagged"
+        assert_not_contains "$(line_for office_safe_template_link.odt)" "[WARN]" \
+            "a meta:template link to a local file (every document made from a template has one) is not reported"
+
+        # Found by reviewing the rules
+        JPP=$(line_for office_pptx_program.pptx)
+        assert_contains "$JPP" "CWE-78:office_presentation_action_runs_a_program" \
+            "a PowerPoint ppaction://program hyperlink is flagged"
+        assert_contains "$JPP" "office:hyperlink_targets_a_program" \
+            "…and the hyperlink that points at cmd.exe is reported"
+        assert_contains "$(line_for office_pptx_macro_action.pptx)" "office:presentation_action_runs_a_macro" \
+            "a ppaction://macro action is reported"
+        assert_not_contains "$(line_for office_pptx_macro_action.pptx)" "[FAIL]" \
+            "…and is not blocked"
+        JFI=$(line_for office_field_include.docx)
+        assert_contains "$JFI" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "an INCLUDEPICTURE field fetching from a UNC path is flagged"
+        assert_contains "$JFI" "office:remote_image_or_content_fetched_when_opened" \
+            "an INCLUDETEXT field fetching from http:// is reported"
+        assert_contains "$(line_for office_smb.docx)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "a smb:// target is treated as a network share"
+        assert_contains "$(line_for office_legacy_ppt_macro.ppt)" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
+            "a macro inside a legacy .ppt (a compressed ExOleObjStg record) is found"
+        assert_not_contains "$(line_for office_embedded_workbook.docx)" "[WARN]" \
+            "an embedded workbook (a chart's data) that analyses clean is not reported"
+        assert_not_contains "$(line_for office_legacy_objpool_workbook.doc)" "[WARN]" \
+            "a legacy embedded Excel workbook is not reported either"
+        JEZ=$(line_for office_embedded_zip.docx)
+        assert_contains "$JEZ" "office:contains_embedded_object" \
+            "an embedded ZIP that is not an office document is reported"
+        assert_not_contains "$JEZ" "not_an_office_document" \
+            "…and does not make the DOCUMENT look like something else"
+        assert_contains "$(line_for office_legacy_package_stream.doc)" "CWE-94:office_vba_macro_runs_programs_or_downloads" \
+            "a macro in an OOXML package wrapped in an OLE object (a Package stream) is found"
+
         # ── setup.py ─────────────────────────────────────────────────────────
         # setup.py runs on a source `pip install`, so it is install-time code with
         # its own risk model: os.system and subprocess are ordinary build tools
@@ -1016,6 +1290,81 @@ PYEOF
         "adversarial repeated PEM-header fragments finish inside 20 s (no quadratic regex)"
 fi
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Office document limits and adversarial inputs
+# ═════════════════════════════════════════════════════════════════════════════
+# scan_office() never extracts to disk and bounds every read; each limit is REPORTED when it
+# is reached. The patterns that read the XML must also stay linear: unbounded [^>]* and .*?
+# are quadratic on megabytes of "<a<a<a…", and a 3 KB document ran for over a minute.
+group "Office document limits"
+if ! _skipping; then
+    OFFLIM="${SCRATCH}/office_limits"
+    mkdir -p "$OFFLIM"
+    cp "${FIXTURES}/rules/office_big.docx" "$OFFLIM/"
+    office_with() {   # office_with VAR=value … ; prints the findings for office_big.docx
+        (
+            export "$@"
+            run_pipeline "$OFFLIM" --quiet
+            [[ -n "$RUN_JSON" ]] && json_findings "$RUN_JSON" | grep "/office_big.docx " || true
+        )
+    }
+    assert_contains "$(office_with OFFICE_MAX_ENTRIES=1)" "more than 1 parts" \
+        "OFFICE_MAX_ENTRIES: parts beyond the limit are reported as not read"
+    assert_contains "$(office_with OFFICE_READ_BUDGET_MB=1)" "read budget" \
+        "OFFICE_READ_BUDGET_MB: an exhausted read budget is reported"
+    assert_contains "$(office_with OFFICE_TIME_BUDGET_S=0.001)" "time budget exceeded" \
+        "OFFICE_TIME_BUDGET_S: an exceeded time budget is reported"
+
+    OFFPY="${SCRATCH}/office_facts.py"
+    awk '/^_office_facts\(\) \{/{f=1;next} f&&/<<.PYEOF.*/{g=1;next} g&&/^PYEOF$/{exit} g{print}' \
+        "${ROOT_DIR}/scan_pipeline.sh" > "$OFFPY"
+    OFFGONE=$(python3 -I "$OFFPY" "${SCRATCH}/no_such.docx" "${SCRATCH}/view.txt" docx 2>&1 || true)
+    assert_contains "$OFFGONE" "FACT unreadable_file" \
+        "a file that cannot be opened is reported as unreadable"
+    assert_contains "$OFFGONE" "FACT done" \
+        "…and the helper still finishes, so the scanner can tell it from a crash"
+
+    # Pathological inputs, each a few KB to a few MB and each quadratic under an unbounded pattern.
+    python3 -I - "$SCRATCH" "${FIXTURES}" <<'ADVEOF'
+import sys
+sys.path.insert(0, sys.argv[2])
+import make_office_fixtures as m
+d = sys.argv[1]
+cases = {
+    "adv_instr.docx": m.docx(doc_xml=m.CT_HEAD + f"<w:document {m.NS_W}><w:body>" + "<w:instrText>" * 300000 + "</w:body></w:document>"),
+    "adv_angle.odt": m.odf("<a" * 1500000),
+    "adv_template.rtf": m.rtf("{\\*\\template " * 300000),
+    "adv_objects.rtf": m.rtf("{\\object{\\*\\objdata " * 200000),
+    "adv_rels.docx": m.docx(extra={"word/_rels/document.xml.rels": b"<Relationships>" + b"<Relationship " * 300000 + b"</Relationships>"}),
+    "adv_entity.docx": m.docx(doc_xml=m.CT_HEAD + "<!DOCTYPE d [" + "<!ENTITY a " * 200000 + f"]><w:document {m.NS_W}/>"),
+    "adv_basic_tags.odt": m.odf(extra={"Basic/Standard/M.xml": (m.CT_HEAD + '<script:module xmlns:script="urn:oasis:names:tc:opendocument:xmlns:script:1.0" script:name="M">' + "<a" * 1500000 + "</script:module>").encode()}),
+    "adv_flat_modules.fodt": (m.CT_HEAD + f'<office:document {m.ODF_NS} office:mimetype="application/vnd.oasis.opendocument.text">' + "<script:module " * 300000 + "</office:document>").encode(),
+}
+for n, data in cases.items():
+    open(f"{d}/{n}", "wb").write(data)
+ADVEOF
+    # A field whose instruction lies in a later 4 MB slice than its begin: the open fields must be
+    # carried from one slice to the next.
+    python3 -I - "$SCRATCH" "${FIXTURES}" <<'ADVEOF'
+import sys
+sys.path.insert(0, sys.argv[2])
+import make_office_fixtures as m
+pad = "<w:p><w:r><w:t>" + "x" * 900 + "</w:t></w:r></w:p>" * 1 
+body = ('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:p>' + pad * 6000
+        + '<w:p><w:r><w:instrText> DDEAUTO c:\\windows\\system32\\cmd.exe "/k calc.exe"</w:instrText></w:r>'
+          '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
+open(sys.argv[1] + "/adv_straddle.docx", "wb").write(m.docx(body))
+ADVEOF
+    OFFSTR=$(python3 -I "$OFFPY" "${SCRATCH}/adv_straddle.docx" "${SCRATCH}/view.txt" docx 2>&1 || true)
+    assert_contains "$OFFSTR" "FACT dde" \
+        "a DDEAUTO field whose instruction is in a later slice than its begin is still found"
+    for _adv in adv_instr.docx adv_angle.odt adv_template.rtf adv_objects.rtf adv_rels.docx adv_entity.docx adv_basic_tags.odt adv_flat_modules.fodt; do
+        OFFSLOW=$(timeout 20 python3 -I "$OFFPY" "${SCRATCH}/${_adv}" "${SCRATCH}/view.txt" "${_adv##*.}" 2>&1 || true)
+        assert_contains "$OFFSLOW" "FACT done" \
+            "adversarial input finishes inside 20 s (no quadratic pattern): ${_adv}"
+    done
+fi
+
 group "Layer B — end-to-end verdicts"
 if ! _skipping; then
     run_pipeline "${FIXTURES}/clean" --quiet
@@ -1108,6 +1457,8 @@ put_secret jwt "session = ""eyJlCIxr89LcspvfiHbtwjH_j3Db0BtCH9sY"".""eyJFsvZc6Xj
 # in a class file's constant pool, where it sits between binary length fields.
 AITRANSIT_TEST_TOKEN="ghp_""oKFEOeVI2WdxcX4L8y""aUEcp4bWTkt2HGVHQx" \
     python3 "${FIXTURES}/make_jar_fixtures.py" --credential-jars "$SECR"
+AITRANSIT_TEST_TOKEN="ghp_""oKFEOeVI2WdxcX4L8y""aUEcp4bWTkt2HGVHQx" \
+    python3 "${FIXTURES}/make_office_fixtures.py" --credential-docs "$SECR"
 run_pipeline "$SECR" --quiet
 FK=""
 [[ -n "$RUN_JSON" ]] && FK=$(json_findings "$RUN_JSON")
@@ -1155,6 +1506,10 @@ assert_contains "$(kline jar_cred_class.jar)" "CWE-798:known_credential_format_g
     "a GitHub token in a class file's constant pool is flagged"
 assert_contains "$(kline jar_cred_utf16.jar)" "CWE-798:known_credential_format_github_token" \
     "a GitHub token in a UTF-16 resource is flagged"
+assert_contains "$(kline office_cred.docx)" "CWE-798:known_credential_format_github_token" \
+    "a GitHub token pasted into a Word document is flagged"
+assert_contains "$(kline office_cred.xlsx)" "CWE-798:known_credential_format_github_token" \
+    "a GitHub token in an Excel cell is flagged"
 assert_contains "$(kline known_jwt.txt)" "jwt_embedded" \
     "a JWT is reported, but does not block"
 assert_not_contains "$(kline known_jwt.txt)" "[FAIL]" \
@@ -1621,6 +1976,20 @@ if ! _skipping; then
     else
         fail_test "scan_pipeline.sh never passes \$* through echo -e" "$BAD"
     fi
+
+    # The embedded Python helpers (_jar_facts, _office_facts) read documents an attacker built to
+    # be slow. `[^>]*`, `[^>]+`, `.*?` and `.+?` rescan to the end of the input for every opener
+    # that never closes, so "<a<a<a…" a few MB long runs for minutes: a 3 KB jar once took the
+    # pipeline 98 s. Use `[^<>]*`, str.find, or the linear TAG tokenizer. Comments are skipped.
+    for _fn in _jar_facts _office_facts; do
+        BAD=$(awk -v fn="$_fn" '$0 ~ "^" fn "\\(\\) \\{" {f=1;next} f&&/<<.PYEOF.*/{g=1;next} g&&/^PYEOF$/{exit} g{print NR": "$0}' \
+                "${ROOT_DIR}/scan_pipeline.sh" | grep -E '\[\^>\][*+]|\.\*\?|\.\+\?' | grep -vE '^[0-9]+: *#' || true)
+        if [[ -z "$BAD" ]]; then
+            ok_test "${_fn} has no unbounded lazy or [^>]* pattern"
+        else
+            fail_test "${_fn} has no unbounded lazy or [^>]* pattern" "$BAD"
+        fi
+    done
 
     # A RETURN trap is not scoped to the function that installs it: it keeps
     # firing as later functions return. If its body defers expansion — single

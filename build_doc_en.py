@@ -225,6 +225,7 @@ toc_items = [
     ("    5.27", "Gradle"),
     ("    5.28", "Package manifests"),
     ("    5.29", "Java archives (.jar .war .ear .aar)"),
+    ("    5.30", "Office documents (OOXML, OpenDocument, legacy OLE2, RTF)"),
     ("6.", "Security Standards Covered"),
     ("7.", "Tools Used — Detailed Description"),
     ("8.", "Success Criteria per Tool"),
@@ -646,6 +647,7 @@ dispatch = [
     ("package.json composer.json requirements*.txt", "Manifests", "—", "install-time hooks, http/git dependencies, URL credentials"),
     (".pdf",               "PDF",         "—",               "CWE-94/78/506 · streams decoded, name escapes resolved"),
     (".jar .war .ear .aar","Java archive", "—",              "CWE-22/506/829/494/78/321/798 · opened in place, constant pools parsed"),
+    (".docx .xlsx .pptx .doc .xls .ppt .odt .ods .odp .rtf (+ macro, template, flat variants)", "Office document", "—", "CWE-94/829/522/506/611 · macros, DDE, remote templates, embedded objects · content sniffed"),
     (".so .dll .dylib .exe .elf .bin","Binary","strings",    "Automatic FAIL + IOC search in strings"),
     (".zip .tar .gz .tgz .bz2 .xz","Archive","—",            "Automatic FAIL · CWE-22 zip-slip check"),
     (".sql",               "SQL",         "—",               "CWE-78/89 xp_cmdshell, DROP, injection patterns"),
@@ -1575,6 +1577,70 @@ file_types = [
              "WARN"),
         ]
     ),
+    (
+        "5.30 Office documents (OOXML, OpenDocument, legacy OLE2, RTF)",
+        ".docx .docm .dotx .dotm .xlsx .xlsm .xlsb .xltx .xltm .xlam .pptx .pptm .ppsx .ppsm .potx .potm .ppam, "
+        ".doc .dot .xls .xlt .xla .ppt .pot .pps .ppa, .odt .ods .odp .odg .ott .ots .otp .otg .fodt .fods .fodp .fodg, .rtf",
+        "Office documents had no handler and were recorded PASS. A document is a container, and what makes it "
+        "dangerous is what happens when it is opened or what it carries, not its prose. OOXML and OpenDocument are ZIPs "
+        "of XML; the legacy .doc/.xls/.ppt are OLE2 compound files, and every VBA macro, in any format, is a compressed "
+        "module inside one; RTF has no container and keeps its objects as hex in the text. The content is sniffed, "
+        "not trusted: Word opens an RTF named .docx without complaint, so the extension only decides what to do when the "
+        "content is not an office document (.dot is Graphviz, .pot is gettext and a .doc is sometimes plain text, so "
+        "those return to the unknown-file path and PASS). The document is never extracted to disk; a standard-library "
+        "helper reads parts the way Office does, XML goes through one linear tokenizer, and parts over 4 MB are "
+        "streamed. Every limit reached is reported (OFFICE_MAX_ENTRIES 20000, OFFICE_READ_BUDGET_MB 256, "
+        "OFFICE_TIME_BUDGET_S 90, objects opened three levels deep). Document prose is not searched for hostile strings "
+        "(a manual may say 'pipe curl into sh'); those rules run on macro source, field codes, formulas and ODF scripts, "
+        "while credentials and PEM keys are searched in the text. Calibration: 123 real OpenDocument templates, the "
+        "python-docx / python-pptx defaults, an RTF and 62 documents converted by LibreOffice to every format: 187 "
+        "documents, no finding. It changed the design: every ODF file declares the script: namespace, 10 of the "
+        "123 templates bind an event to a macro the APPLICATION ships (application:...), and meta:template links to the "
+        "source template. A second set of 30 documents with charts, pictures and tables found the embedded-workbook noise "
+        "(an embedded office document that analyses clean is no longer reported). None of the 217 has a macro, a DDE field "
+        "or a remote link, so what the rules do on a hostile document rests on fixtures checked against olevba, olefile "
+        "and rtfobj.",
+        [
+            ("Macros",
+             "A VBA macro that starts a program or downloads (Shell, WScript.Shell, URLDownloadToFile, PowerShell, kernel32 "
+             "shellcode calls): the module is decompressed (MS-OVBA) and read, and the finding names the module and any "
+             "auto-run procedure. An Excel 4.0 macro sheet that is hidden or calls EXEC / CALL / REGISTER. In OpenDocument, "
+             "a macro embedded in the document and bound to office:load / office:new / office:create, or a StarBasic, "
+             "Python or BeanShell script calling Shell, os.system, subprocess, sockets or urllib.",
+             "FAIL"),
+            ("DDE",
+             "A DDE or DDEAUTO field (the fragments Word splits it into are joined), a cmd|'...'!A0 cell formula, a "
+             "ddeLink to a shell, an RTF DDEAUTO field, an ODF DDE link to a shell.",
+             "FAIL"),
+            ("Remote relationships",
+             "An attachedTemplate over http(s)/ftp (remote template injection); an oleObject, frame, subDocument or "
+             "package relationship from a remote host (the Follina shape); a link whose scheme is ms-msdt:, mhtml:, "
+             "search-ms:, javascript: or vbscript:; a UNC path outside a hyperlink, which makes Windows send the user's "
+             "NTLM hash (also smb:// and cifs://); an INCLUDETEXT, INCLUDEPICTURE or LINK field aimed at a remote host or UNC "
+             "path; a PowerPoint ppaction://program hyperlink; an RTF linked object that auto-updates from a remote source "
+             "or a remote \\template.",
+             "FAIL"),
+            ("Embedded payloads",
+             "An embedded executable or script (a PE, ELF or Mach-O, an .exe, .js, .vbs ...) also stored under a document "
+             "name (word/media/image1.png) or inside an OLE Package; an Equation Editor object whose stream carries a "
+             "command or URL (the CVE-2017-11882 family), also inside an RTF alternate-format chunk.",
+             "FAIL"),
+            ("Container and content",
+             "An XML part with an external ENTITY; a part named ../ (zip-slip); a native executable named .docx; a PEM "
+             "private key or any of the 18 known credential formats in the document text.",
+             "FAIL"),
+            ("Reviewable",
+             "Any VBA macro, one that runs when the document opens, a macro in a .docx/.xlsx/.pptx extension; a visible "
+             "Excel 4.0 macro sheet; ActiveX controls; embedded objects that cannot be read as an office document (an "
+             "embedded workbook that analyses clean is not reported; one with a macro is a FAIL); an Equation object "
+             "without a payload; a ppaction://macro action; a hyperlink to an executable; "
+             "content fetched from http(s) when opened; a hyperlink to a file share; a DDE link to an ordinary program; "
+             "an ODF macro or a hyperlink that runs one on click; a bare DOCTYPE; encrypted content, an unparseable "
+             "container, an unreadable VBA project; every limit reached. A document padded past the read budget is a "
+             "WARN, not a FAIL: treat office:inspection_incomplete as 'not inspected'.",
+             "WARN"),
+        ]
+    ),
 ]
 
 for title, exts, intro, checks in file_types:
@@ -1970,6 +2036,7 @@ success_rows = [
     ("Gradle scanner",              "L5", "No remote apply, no insecure repo, no spawn",   "exec / commandLine, configuration-time fetch", "apply from http, allowInsecureProtocol, spawn",     "CWE-494, CWE-78"),
     ("Package manifests",           "L5", "No hostile install hook, no plaintext source",  "Install hook, --trusted-host, git dependency", "curl|sh hook, http:// dependency or index, URL credential", "CWE-494, CWE-798"),
     ("Maven / Ant (XML)",           "L5", "No http repository, no shell exec",             "exec/antrun plugin present, system scope",  "http repository, exec of a shell, <get> over http",    "CWE-494, CWE-78"),
+    ("Office document scanner",    "L5", "No macro that runs programs, no DDE, no remote template or embedded exe", "Any macro, remote image, embedded object, ActiveX, encrypted file, limit reached", "macro that runs programs, DDEAUTO, remote template, UNC path, embedded exe, Equation payload", "CWE-94, CWE-829, CWE-522, CWE-506"),
     ("Rust / Kotlin / C#",          "L5", "No unsafe, no process spawn, no weak hash",     "—",                                         "unsafe block, Command / Runtime.exec / Process.Start, MD5, literal credential", "CWE-119, CWE-78, CWE-327"),
     ("xp_cmdshell (SQL)",           "L5", "Not present",                                   "—",                                         "xp_cmdshell or sp_OACreate",                           "CWE-78"),
     ("UNION SELECT (SQL)",          "L5", "Not present",                                   "—",                                         "UNION SELECT payload found",                           "CWE-89"),
