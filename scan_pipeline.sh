@@ -2342,7 +2342,8 @@ def emit(tag, detail=""):
 
 # ── byte shapes ──────────────────────────────────────────────────────────────
 CFB_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
-EXEC_EXT = re.compile(r"\.(exe|dll|scr|bat|cmd|com|pif|cpl|js|jse|vbs|vbe|wsf|wsh|ps1|psm1|hta|lnk|msi|jar|chm|sct|reg|sh)$", re.I)
+EXEC_EXT = re.compile(r"\.(exe|dll|scr|bat|cmd|com|pif|cpl|js|jse|vbs|vbe|wsf|wsh|ps1|psm1|hta|lnk|msi|msp|jar|chm|sct|wsc|reg|sh|"
+                     r"xll|wll|url|scf|inf|ocx|msc|application|appref-ms|gadget|settingcontent-ms|library-ms|searchconnector-ms)$", re.I)
 SHELLS = r"(?:cmd|powershell|pwsh|mshta|wscript|cscript|rundll32|regsvr32|msiexec|certutil|bitsadmin|bash|sh)"
 MACHO = (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe")
 
@@ -2656,6 +2657,7 @@ class CFB:
         if not self.entries or self.entries[0] is None or self.entries[0]["kind"] != 5:
             raise ValueError("no root entry")
         self.paths = {}
+        self.too_deep = False
         self._walk(0, ())
         self.children = {}
         for pth, ent in self.paths.items():
@@ -2688,6 +2690,9 @@ class CFB:
             seen.add(i)
             e = self.entries[i]
             p = par + (e["name"],)
+            if len(p) > 64:   # real documents are a handful deep; paths are tuples, so depth costs quadratic memory
+                self.too_deep = True
+                continue
             self.paths[p] = e
             stack.append((e["left"], par))
             stack.append((e["right"], par))
@@ -2797,8 +2802,10 @@ AUTO_PROC = re.compile(
 # Calls that start a program or fetch from the network. CreateObject alone is not on the list:
 # Scripting.Dictionary is the commonest use of it there is.
 VBA_DANGER = re.compile(
-    r"(?i)\b(Shell\b\s*\(?|ShellExecute\w*|URLDownloadToFile\w*|DownloadFile|DownloadString|Net\.WebClient|ExecuteExcel4Macro|"
-    r"CreateObject\s*\(\s*\"(?:WScript\.Shell|Shell\.Application|MSXML2\.[\w.]*|Microsoft\.XMLHTTP|WinHttp\.WinHttpRequest[\w.]*|ADODB\.Stream)\"|"
+    r"(?i)\b(Shell\b\s*\(?|ShellExecute\w*|WinExec|CreateProcess\w*|URLDownloadToFile\w*|URLDownloadToCacheFile\w*|"
+    r"InternetOpenUrl\w*|DownloadFile|DownloadString|Net\.WebClient|ExecuteExcel4Macro|"
+    r"CreateObject\s*\(\s*\"(?:WScript\.Shell|Shell\.Application|MSXML2\.(?:Server)?XMLHTTP[\w.]*|Microsoft\.XMLHTTP|"
+    r"WinHttp\.WinHttpRequest[\w.]*|ADODB\.Stream|MSScriptControl\.ScriptControl)\"|GetObject\s*\(\s*\"script:|"
     r"GetObject\s*\(\s*\"winmgmts|powershell|mshta|regsvr32|rundll32|certutil|bitsadmin|cscript\.exe|wscript\.exe|"
     r"cmd(?:\.exe)?\s*/[ck])")
 # Functions that allocate or run memory: the core of a shellcode loader. RtlMoveMemory alone is
@@ -2866,7 +2873,17 @@ def analyze_vba(cf, label):
         return True
     names = sorted(sources)
     emit("vba_macro", label + " " + ", ".join(names))
+    seen_src, total = set(), 0
     for nm in names:
+        raw = sources[nm]
+        key = (len(raw), zlib.crc32(raw))
+        if key in seen_src:
+            continue   # many directory entries can point at one chain; its text is read once
+        seen_src.add(key)
+        total += len(raw)
+        if total > 32 * 1048576 or out_of_time():
+            emit("incomplete", "VBA source past 32 MB or past the time budget was not read")
+            break
         text = sources[nm].decode("cp1252", "replace").replace("\r\n", "\n").replace("\r", "\n")
         auto = sorted({m.group(1) for m in AUTO_PROC.finditer(text)})
         danger = sorted({re.sub(r"\s+", " ", m.group(1))[:24] for m in VBA_DANGER.finditer(text)}
@@ -2902,7 +2919,7 @@ def parse_package(data):
 
 def package_findings(label, name, payload):
     base = os.path.basename(name.replace("\\", "/"))
-    kind = native_kind(payload[:HEAD])
+    kind = native_kind(payload[:65536])
     if EXEC_EXT.search(base) or kind or payload[:2] == b"#!":
         emit("embedded_executable", "%s %s%s" % (label, base, " (%s)" % kind if kind else ""))
     else:
@@ -2962,6 +2979,8 @@ def analyze_cfb(data, label, depth):
     except Exception:
         emit("unparseable", label or "document")
         return False
+    if cf.too_deep:
+        emit("incomplete", "storages nested more than 64 deep were not read")
     names = {p[-1] for p, _ in cf.streams()}
     known = bool(names & KNOWN_OFFICE_STREAMS) or any(len(p) >= 2 and p[-2].upper() == "VBA" for p, _ in cf.streams())
     if "EncryptedPackage" in names and "EncryptionInfo" in names:
@@ -3015,17 +3034,32 @@ def analyze_cfb(data, label, depth):
     for p, e in cf.streams():
         if p[-1] in ("Workbook", "Book") and len(p) == 1:
             wb = cf.read(e)
-            pos, sheets = 0, []
-            while pos + 4 <= len(wb) and len(sheets) < 512:
-                rid, size = struct.unpack_from("<HH", wb, pos)
-                if rid == 0x0085 and size >= 8:
-                    hidden, dt = wb[pos + 8], wb[pos + 9]
-                    nm = wb[pos + 12:pos + 12 + wb[pos + 10]].decode("latin-1", "replace") if size >= 8 else ""
-                    if dt == 1:
-                        sheets.append((nm, hidden & 3))
-                elif rid == 0x000A and pos > 0:
-                    break
-                pos += 4 + size
+            pos, sheets, nrec = 0, [], 0
+            try:
+                while pos + 4 <= len(wb) and len(sheets) < 512 and nrec < 400000:
+                    nrec += 1
+                    rid, size = struct.unpack_from("<HH", wb, pos)
+                    body = wb[pos + 4:pos + 4 + size]
+                    if rid == 0x0085 and len(body) >= 8:
+                        hidden, dt = body[4], body[5]
+                        nm = body[8:8 + body[6]].decode("latin-1", "replace")
+                        if dt == 1:
+                            sheets.append((nm, hidden & 3))
+                    elif rid == 0x01AE and len(body) >= 5:
+                        # SUPBOOK: the virtual path of an external workbook, or "application\x03topic" for a DDE link
+                        cch, flag = struct.unpack_from("<HB", body, 2)
+                        raw_path = body[5:5 + cch * (2 if flag & 1 else 1)]
+                        path = raw_path.decode("utf-16-le" if flag & 1 else "latin-1", "replace")
+                        if "\x03" in path:
+                            service, topic = path.split("\x03", 1)
+                            emit(dde_kind(service, topic), "%sSUPBOOK DDE %s" % (label, re.sub(r"[^\x20-\x7e]", "?", path)[:60]))
+                        else:
+                            classify_target(label + "SUPBOOK ", "externallink", re.sub(r"[\x00-\x1f]", "", path))
+                    elif rid == 0x000A and pos > 0:
+                        break
+                    pos += 4 + size
+            except (IndexError, struct.error):
+                emit("incomplete", "the Workbook stream ends inside a record")
             runs = XLM_RUNS.search(wb.replace(b"\x00", b""))
             for nm, hid in sheets:
                 if hid or runs:
@@ -3060,7 +3094,11 @@ def analyze_cfb(data, label, depth):
     for p, e in cf.streams():
         if p[-1] in ("WordDocument", "1Table", "0Table"):
             raw = cf.read(e).replace(b"\x00", b"")
-            m = re.search(rb"DDEAUTO\b|\bDDE\s+\"?(?:" + SHELLS.encode() + rb")", raw)
+            m = re.search(rb"(?i)DDEAUTO\b|\bDDE\s+\"?(?:[^\s\"]{0,200}[\\/])?(?:" + SHELLS.encode() + rb")\b", raw)
+            if not m:
+                m2 = re.search(rb"(?i)\bDDE\s+\"[^\"]{1,100}\"\s+\"([^\"]{0,300})\"", raw)
+                if m2 and HOSTILE_TOPIC.search(m2.group(1).decode("latin-1")):
+                    m = m2
             if m:
                 emit("dde", "%s%s: %s" % (label, p[-1], re.sub(rb"[^\x20-\x7e]", b"?", raw[m.start():m.start() + 60]).decode()))
             for t in re.findall(rb"[\x20-\x7e]{8,}", cf.read(e)[:1048576])[:4000]:
@@ -3196,6 +3234,19 @@ def rels_source(name):
     return None
 
 
+def links_to_program(target):
+    """A hyperlink whose target is an executable. `.com` is also a TLD: mailto:a@b.com and http://example.com
+    are web addresses, so it counts only for a file path."""
+    base = target.split("?")[0].strip()
+    m = EXEC_EXT.search(base)
+    if not m:
+        return False
+    if m.group(1).lower() == "com":
+        sch = SCHEME.match(base)
+        return bool(re.search(r"[\\/]", base)) and (not sch or sch.group(1).lower() == "file")
+    return True
+
+
 def analyze_rels(label, text, roles=None, source=None):
     """External relationships are classified; internal ones record what kind of part their target is
     (roles: {target part name in lower case: {relationship types}}), so a part is recognised by what
@@ -3210,14 +3261,15 @@ def analyze_rels(label, text, roles=None, source=None):
             for tgt in av(a, "target")[:4]:
                 if external:
                     classify_target(label, kind, tgt, hyperlink=(kind == "hyperlink"))
-                    if kind == "hyperlink" and EXEC_EXT.search(html.unescape(tgt).split("?")[0].strip()):
+                    if kind == "hyperlink" and links_to_program(html.unescape(tgt)):
                         emit("link_to_program", "%s%s" % (label, html.unescape(tgt)[:70]))
                 elif roles is not None and source is not None:
                     roles.setdefault(resolve_target(source, tgt).lower(), set()).add(kind)
 
 
+FORMULA_ELEMENT = re.compile(r"<(?:[^\s/<>:]+:)?f[\s>]")
 DDE_FIELD = re.compile(r"(?is)^\s*DDE(?:AUTO)?\b")
-FETCH_FIELD = re.compile(r"(?is)^\s*(?:INCLUDETEXT|INCLUDEPICTURE|LINK|IMPORT)\b")
+FETCH_FIELD = re.compile(r"(?is)^\s*(INCLUDETEXT|INCLUDEPICTURE|LINK|IMPORT|HYPERLINK)\b")
 FIELD_ARG = re.compile(r'"([^"]{0,2000})"|(\S{1,2000})')
 FIELD_SWITCH = re.compile(r"\\[A-Za-z*]")
 
@@ -3240,7 +3292,7 @@ def field_findings(label, f):
             if FIELD_SWITCH.match(arg):
                 continue
             for v in dict.fromkeys((arg, arg.replace("\\\\", "\\"))):
-                classify_target(label, "field", v)
+                classify_target(label, "field", v, hyperlink=(m.group(1).upper() == "HYPERLINK"))
 
 
 def tag_text(text, end):
@@ -3271,7 +3323,23 @@ def word_fields(label, text, stack):
                 field_findings(label, html.unescape(ins))
 
 
-DDE_FORMULA = re.compile(r"(?i)^\s*[=+@-]?\s*(?:" + SHELLS + r")(?:\.exe)?\s*\|")
+# A DDE formula is service|topic!item. The service is any name: =MSEXCEL|'..\\..\\cmd.exe /c calc'!A0 starts
+# a shell through the service that is always installed, so the topic is read as well.
+DDE_ANY = re.compile(r"(?i)^\s*[=+@-]?\s*([A-Za-z0-9_.-]{1,40})\s*\|\s*'?([^'!]*)")
+HOSTILE_TOPIC = re.compile(r"(?i)\b" + SHELLS + r"(?:\.exe)?\b|\.(?:exe|bat|cmd|com|ps1|vbs|js|hta|scr|dll)\b|\s/[ck]\s|\\system32\\")
+
+
+def dde_kind(service, topic):
+    """'dde' (blocks) when the service is a shell or the topic names a program or command line, else 'dde_declared'."""
+    s = html.unescape(service).strip().strip("'\"")
+    if re.match(r"(?i)^" + SHELLS + r"(\.exe)?$", s) or HOSTILE_TOPIC.search(html.unescape(topic or "")):
+        return "dde"
+    return "dde_declared"
+
+
+def dde_formula(f):
+    m = DDE_ANY.match(f)
+    return dde_kind(m.group(1), m.group(2)) if m else None
 XLM_CALL = re.compile(r"(?i)\b(EXEC|CALL|REGISTER|FOPEN|FWRITE|URLDownloadToFile\w*|RUN)\s*\(")
 
 
@@ -3286,24 +3354,27 @@ def xml_rules(label, name, text, stack, macrosheet=False):
     if "ddeLink" in text:
         for m in TAG.finditer(text):
             if local(m.group(1)) == "ddeLink":
-                for svc in av(attrs(m.group(2)), "ddeservice"):
-                    svc = html.unescape(svc)
-                    emit("dde" if re.match(r"(?i)^" + SHELLS + r"(\.exe)?$", svc.strip()) else "dde_declared",
-                         "%s service %s" % (shown, svc))
-    if "|" in text or macrosheet or "ormula" in text:
+                a = attrs(m.group(2))
+                for svc in av(a, "ddeservice"):
+                    emit(dde_kind(svc, " ".join(av(a, "ddetopic"))), "%s service %s" % (shown, html.unescape(svc)))
+    # The gate is the existence of an <f> element or a Formula attribute, not a character in its text: the
+    # pipe of a DDE formula can be written &#124;, and the raw text then never contains one.
+    if macrosheet or "ormula" in text or FORMULA_ELEMENT.search(text):
         for m in TAG.finditer(text):
             nm = local(m.group(1))
             if nm == "f" and not m.group(3):
                 f = html.unescape(tag_text(text, m.end()))
-                if DDE_FORMULA.match(f):
-                    emit("dde", "%s %s" % (shown, f.strip()[:60]))
+                kind = dde_formula(f)
+                if kind:
+                    emit(kind, "%s %s" % (shown, f.strip()[:60]))
                 elif macrosheet and XLM_CALL.search(f):
                     emit("xlm_dangerous", "%s %s" % (shown, f.strip()[:60]))
             else:
                 for fv in attrs(m.group(2)).get("formula", ()):   # Excel 2003 XML: ss:Formula="=cmd|'/c calc'!A0"
-                    if DDE_FORMULA.match(html.unescape(fv)):
-                        emit("dde", "%s %s" % (shown, html.unescape(fv).strip()[:60]))
-    if "ppaction://" in text:
+                    kind = dde_formula(fv)
+                    if kind:
+                        emit(kind, "%s %s" % (shown, fv.strip()[:60]))
+    if "action" in text:   # the attribute name is literal; its value ("ppaction:&#47;/program") may not be
         for m in TAG.finditer(text):
             for act in av(attrs(m.group(2)), "action"):
                 act = html.unescape(act).lower()
@@ -3327,6 +3398,8 @@ def scan_xml_part(label, name, chunks, macrosheet=False):
     stack = []
     first = True
     for text in chunks:
+        if not first and out_of_time():
+            break
         if first or "<!ENTITY" in text:
             ef = entity_findings(text)
             if ef:
@@ -3350,7 +3423,7 @@ def text_of(xml):
 # ── OpenDocument ─────────────────────────────────────────────────────────────
 AUTO_EVENTS = {"office:load", "office:new", "office:create", "office:view-created", "office:activate", "dom:load", "dom:domcontentloaded",
                "dom:domfocusin", "office:layout-finished", "office:page-count-change"}
-ODF_DDE_FORMULA = re.compile(r"(?i)\bDDE\s*\(\s*(?:&quot;|\")\s*(" + SHELLS + r")")
+ODF_DDE_CALL = re.compile(r'(?i)\bDDE\s*\(\s*"([^"]*)"\s*;\s*"([^"]*)"')
 ODF_DANGER = re.compile(
     r"(?i)(\bShell\s*\(|SystemShellExecute|os\.system|subprocess|\bsocket\b|urllib|requests\.|__import__|\bctypes\b|\bpty\b|"
     r"Runtime\.getRuntime\(\)\.exec|ProcessBuilder|powershell|\bcurl\b|\bwget\b|DownloadFile|\bcmd(?:\.exe)?\s*/[ck]|\bmshta\b)")
@@ -3374,8 +3447,7 @@ def analyze_odf_text(label, name, text, macros_embedded):
             continue
         for v in a.get("dde-application", []):
             app = html.unescape(v).strip()
-            emit("dde" if re.match(r"(?i)^" + SHELLS + r"(\.exe)?$", app) else "dde_declared",
-                 "%s%s application %s" % (label, name, app))
+            emit(dde_kind(app, " ".join(a.get("dde-topic", []))), "%s%s application %s" % (label, name, app))
         for href in [html.unescape(v).strip() for v in a.get("href", [])]:
             if not href or href.startswith("#") or not (SCHEME.match(href) or is_unc(href)):
                 continue
@@ -3390,8 +3462,9 @@ def analyze_odf_text(label, name, text, macros_embedded):
                 emit("unc_hyperlink" if hyper else "unc_path", "%s%s %s -> %s" % (label, name, tag, href[:60]))
             elif sch in ("http", "https", "ftp", "ftps", "file") and not hyper:
                 emit("odf_external", "%s%s %s -> %s" % (label, name, tag, href[:60]))
-    for m in ODF_DDE_FORMULA.finditer(text):
-        emit("dde", "%s%s DDE(%s)" % (label, name, m.group(1)))
+    if "DDE" in text.upper():
+        for m in ODF_DDE_CALL.finditer(html.unescape(text)):   # &quot; and &#34; are both a quote
+            emit(dde_kind(m.group(1), m.group(2)), "%s%s DDE(%s)" % (label, name, m.group(1)))
 
 
 SCRIPT_LIB = re.compile(r"(?i)(script|dialog)-l[cb]\.xml$")
@@ -3399,25 +3472,28 @@ ODF_READ = re.compile(r"(?i)^(content\.xml|styles\.xml|META-INF/manifest\.xml|ob
 ODF_SCRIPT = re.compile(r"(?i)^(Basic|Scripts)/.+\.(xml|py|js|bsh|java|rb|pl|sh)$")
 
 
+ODF_ENTITY_ONLY = re.compile(r"(?i)^(meta\.xml|settings\.xml)$")
+
+
 def analyze_odf_zip(z, infos, label, depth):
     """Macros, event bindings, DDE and external links. meta.xml and settings.xml are not searched
     for links: meta:template points at the file the document was made from, and every document
-    made from a template carries it."""
+    made from a template carries it. They are searched for an external entity like every other part."""
     macros = {i.filename for i in infos if ODF_SCRIPT.match(i.filename) and not SCRIPT_LIB.search(i.filename)}
-    for info in infos:
+
+    def one(info):
         n = info.filename
-        if info.is_dir() or state["budget"] <= 0 or not (ODF_READ.match(n) or n in macros):
-            continue
-        if out_of_time():
-            break
         data = entry_bytes(z, info, PART_CAP)
         state["budget"] -= len(data)
         is_xml = n.lower().endswith(".xml")
         text = xml_normalise(decode_xml(data)) if is_xml else data.decode("utf-8", "replace")
         if n == "META-INF/manifest.xml":
+            ef = entity_findings(text)
+            if ef:
+                emit(ef, label + n)
             if "encryption-data" in text:
                 emit("encrypted", label + "manifest declares encrypted parts")
-            continue
+            return
         if n in macros:
             src = html.unescape(re.sub(r"<[^<>]*>", "", text)) if is_xml else text
             danger = sorted({re.sub(r"\s+", " ", m.group(1))[:24] for m in ODF_DANGER.finditer(src)})
@@ -3426,13 +3502,26 @@ def analyze_odf_zip(z, infos, label, depth):
                 emit("odf_dangerous", "%s%s uses %s" % (label, n, ", ".join(danger[:5])))
             hostile(label + n, src)
             to_view(label + n, src)
-            continue
+            return
         ef = entity_findings(text)
         if ef:
             emit(ef, label + n)
+        if ODF_ENTITY_ONLY.match(n):
+            return
         analyze_odf_text(label, n, text, bool(macros))
         if n.lower().endswith("content.xml"):
             to_view(label + n, text_of(text))
+
+    for info in infos:
+        n = info.filename
+        if info.is_dir() or state["budget"] <= 0 or not (ODF_READ.match(n) or n in macros or ODF_ENTITY_ONLY.match(n)):
+            continue
+        if out_of_time():
+            break
+        try:
+            one(info)
+        except Exception:
+            emit("unreadable", label + n)   # one part nobody can read does not stop the others
 
 
 def analyze_zip_bytes(data, label, depth):
@@ -3475,11 +3564,21 @@ class Package:
             src = rels_source(info.filename)
             if out_of_time():
                 break
-            data = entry_bytes(z, info, 4 * 1048576)
-            state["budget"] -= len(data)
-            if info.file_size > 4 * 1048576:
-                emit("incomplete", "%s is larger than the read limit and was read only in part" % info.filename)
-            analyze_rels(label + info.filename + " ", xml_normalise(decode_xml(data)), self.roles, src)
+            if state["budget"] <= 0:
+                emit("incomplete", "read budget of %d MB exhausted" % (BUDGET >> 20))
+                break
+            try:
+                data = entry_bytes(z, info, 4 * 1048576)
+                state["budget"] -= len(data)
+                if info.file_size > 4 * 1048576:
+                    emit("incomplete", "%s is larger than the read limit and was read only in part" % info.filename)
+                text = xml_normalise(decode_xml(data))
+                ef = entity_findings(text)
+                if ef:
+                    emit(ef, label + info.filename)
+                analyze_rels(label + info.filename + " ", text, self.roles, src)
+            except Exception:
+                emit("unreadable", label + info.filename)
 
     def types(self, name):
         low = name.lower()
@@ -3526,9 +3625,11 @@ def analyze_zip(z, label, depth):
             mt = entry_bytes(z, i, 256)
             break
     lows = {n.lower() for n in names}
-    is_odf = mt.startswith(b"application/vnd.oasis.opendocument") or (
-        "[content_types].xml" not in lows and "content.xml" in lows and "meta-inf/manifest.xml" in lows)
-    if not (is_odf or any(n.lower() == "[content_types].xml" for n in names)):
+    has_ct = "[content_types].xml" in lows
+    # A package can be both (a stray mimetype entry in a .docx, a stray [Content_Types].xml in an .odt): the
+    # applications pick one, so both are read.
+    is_odf = mt.startswith(b"application/vnd.oasis.opendocument") or ("content.xml" in lows and "meta-inf/manifest.xml" in lows)
+    if not (is_odf or has_ct):
         if depth == 1:
             emit("not_office", "document zip")  # only the file itself can be "not an office document"
         return False
@@ -3539,17 +3640,17 @@ def analyze_zip(z, label, depth):
     state["parts"] += len(infos)
     if is_odf:
         analyze_odf_zip(z, infos, label, depth)
-    pkg = Package(z, [] if is_odf else infos)
-    if not is_odf:
+    pkg = Package(z, infos if has_ct else [])
+    if has_ct:
         pkg.finish(z, infos, label)
     macro_seen = False
     state["wb_hidden"] = False
-    macrosheets = [n for n in names if not is_odf and pkg.is_macrosheet(n)]
+    macrosheets = [n for n in names if has_ct and pkg.is_macrosheet(n)]
     for info in infos:
         if out_of_time():
             break
         try:
-            macro_seen = zip_part(z, info, label, depth, is_odf, macro_seen, pkg)
+            macro_seen = zip_part(z, info, label, depth, is_odf and not has_ct, macro_seen, pkg)
         except Exception:
             emit("unreadable", label + info.filename)
     if macrosheets and "xlm_dangerous" not in facts:
@@ -3566,7 +3667,8 @@ def zip_part(z, info, label, depth, is_odf, macro_seen, pkg):
     if info.is_dir():
         return macro_seen
     embedded = pkg.is_embedded(n) and not is_odf
-    xmlish = not is_odf and pkg.is_xml(n) and not low.endswith(".rels")
+    std_rels = low.endswith(".rels") and rels_source(n) is not None
+    xmlish = not is_odf and pkg.is_xml(n) and not std_rels
     activex = not is_odf and pkg.is_activex(n)
     altchunk = not is_odf and pkg.is_altchunk(n)
     vba = not is_odf and pkg.is_vba(n)
@@ -3589,7 +3691,7 @@ def zip_part(z, info, label, depth, is_odf, macro_seen, pkg):
         if EXEC_EXT.search(n) or low.endswith(".bin"):
             blob(label, n, data, depth)
         return macro_seen
-    if low.endswith(".rels"):
+    if std_rels:
         return macro_seen   # classified up front, with the rest of the package's relationships
     if vba:
         macro_seen = True
@@ -3821,6 +3923,10 @@ def analyze_rtf(data, label, depth):
             emit("incomplete", "more than 200 embedded objects, the rest were not read")
             break
         grp, closed = rtf_group(text, m.start())
+        state["rtf_read"] = state.get("rtf_read", 0) + len(grp)
+        if state["rtf_read"] > 96 * 1048576 or out_of_time():
+            emit("incomplete", "RTF objects beyond 96 MB (or past the time budget) were not read")
+            break
         if not closed:
             emit("incomplete", "an RTF object group is not closed; the rest of the file was not read as objects")
             break
@@ -3973,6 +4079,9 @@ scan_office() {
     # Not an office document at all. The extension decides only what happens next.
     if [[ -n "${fact_n[not_office]+x}" ]]; then
         rm -f "$view"
+        # Routed here only because its first kilobyte mentions {\rtf (a shell script with a comment, a
+        # note about the format): hand it back to the scanner its name and shebang call for.
+        [[ "${2:-}" == sniffed ]] && return 3
         case "${fact_d[not_office]}" in
             text)
                 case "$ext" in
@@ -5834,8 +5943,10 @@ scan_csharp() {
 # the 2003 XML formats from a .xml. The first bytes decide. `read -N` is a builtin, so the check costs no fork.
 _rtf_head() {
     local h=""
-    IFS= read -r -d '' -N 1024 h < "$1" 2>/dev/null || true
-    [[ "$h" == *'{\rtf'* ]]
+    IFS= read -r -d '' -N 16 h < "$1" 2>/dev/null || true
+    h="${h#"${h%%[![:space:]]*}"}"
+    # at the start: a shell script or a note that merely mentions {\rtf is not an RTF
+    [[ "$h" == '{\rtf'* ]]
 }
 _flat_office_head() {
     local h=""
@@ -5904,7 +6015,7 @@ classify_file() {
         .xml|.pom)
             scan_xml "$f"
             # Word and Excel open a Flat OPC package or a 2003 XML document from a .xml
-            if _flat_office_head "$f"; then scan_office "$f"; fi
+            if _flat_office_head "$f"; then scan_office "$f" sniffed || true; fi
             ;;
         .yml|.yaml)                       scan_yaml        "$f" ;;
         .tf|.tfvars|.hcl)               scan_terraform   "$f" ;;
@@ -5933,8 +6044,8 @@ classify_file() {
             fi
             ;;
         .md|.txt|.rst)
-            if _rtf_head "$f"; then
-                scan_office "$f"   # Word opens an RTF whatever it is called
+            if _rtf_head "$f" && scan_office "$f" sniffed; then
+                :   # Word opens an RTF whatever it is called
             elif grep_check \
                 '(password|secret|api_key)\s*[:=]\s*[^${[:space:]][^[:space:]]{4,}' "$f"; then
                 record_fail "$f" "CWE-798:hardcoded_credential_in_doc"
@@ -5942,7 +6053,7 @@ classify_file() {
                 record_pass "$f"
             fi
             ;;
-        *) if _rtf_head "$f"; then scan_office "$f"; else scan_unknown "$f"; fi ;;
+        *) if _rtf_head "$f" && scan_office "$f" sniffed; then :; else scan_unknown "$f"; fi ;;
     esac
 }
 

@@ -153,7 +153,7 @@ for t in betterleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 607/607 passed
+./tests/run_tests.sh          # Expected: ✔ 666/666 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1298,7 +1298,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 607/607 passed
+# Expected: ✔ 666/666 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -2310,11 +2310,11 @@ as a document as well as an XML file.
 | Blocks (FAIL) | Reported (WARN) |
 |---|---|
 | a VBA macro that starts a program or downloads (the module is decompressed and read) | any VBA macro, one that runs on open, one in a `.docx`/`.xlsx`/`.pptx` |
-| a DDE / `DDEAUTO` field, a `cmd\|'…'!A0` formula, a `ddeLink` to a shell | a DDE link to an ordinary program |
+| a DDE / `DDEAUTO` field, or a DDE formula, `ddeLink`, ODF `DDE()` call or legacy `.xls` SUPBOOK link whose service **or topic** names a shell or a program (`=MSEXCEL\|'..\cmd.exe /c …'!A0`) | a DDE link to an ordinary program |
 | an Excel 4.0 macro sheet that is hidden or calls `EXEC`/`CALL`/`REGISTER` | a visible Excel 4.0 macro sheet |
 | a remote `attachedTemplate`, or an `oleObject`/`frame`/`package` fetched from a remote host | content fetched from http(s) on open; a hyperlink to a file share |
 | an `ms-msdt:`, `mhtml:`, `search-ms:`, `javascript:` or `vbscript:` link | ActiveX controls, embedded OLE objects that cannot be read as an office document |
-| a UNC path (`\\host\share`, `smb://`) outside a hyperlink (NTLM leak); an `INCLUDETEXT`/`INCLUDEPICTURE`/`LINK` field aimed at a remote host or UNC path | an Equation object without a payload |
+| a UNC path (`\\host\share`, `smb://`) outside a hyperlink (NTLM leak); an `INCLUDETEXT`/`INCLUDEPICTURE`/`LINK` field aimed at a remote host or UNC path; a `HYPERLINK` field with an `ms-msdt:`/`javascript:` target | an Equation object without a payload |
 | an embedded executable or script, also under a document name | an alternate-format chunk; a bare `DOCTYPE` |
 | an Equation Editor object carrying a command or URL; a PowerPoint `ppaction://program` hyperlink; a legacy `.doc` object holding a URL moniker to a remote address | an ODF macro, or a hyperlink that runs one; a `ppaction://macro` action; a hyperlink to an executable |
 | an external `ENTITY`; a part named `../…` | an ODF resource linked from http(s) or a path |
@@ -2641,7 +2641,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 607/607 passed
+# Expected: ✔ 666/666 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -3080,7 +3080,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  607/607 passed
+  ✔  666/666 passed
 ```
 
 ### 17.1 What each layer covers

@@ -49,6 +49,15 @@ def _set_col_width(ws, col_letter: str, width: float) -> None:
     ws.column_dimensions[col_letter].width = width
 
 
+def _put(cell, value) -> None:
+    """Set a cell. Text that comes from the scanned repository (a file name, a finding message) is data: a name
+    like =HYPERLINK("http://x","click") must not become a live formula in the reviewer's Excel, so a string that
+    could be read as one is stored as a string."""
+    cell.value = value
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        cell.data_type = "s"
+
+
 def _header_cell(ws, row: int, col: int, value: str) -> None:
     cell = ws.cell(row=row, column=col, value=value)
     cell.font = FONT_WHITE
@@ -59,7 +68,8 @@ def _header_cell(ws, row: int, col: int, value: str) -> None:
 
 def _data_cell(ws, row: int, col: int, value: str,
                fill_color: str | None = None) -> None:
-    cell = ws.cell(row=row, column=col, value=value)
+    cell = ws.cell(row=row, column=col)
+    _put(cell, value)
     cell.font = FONT_NORMAL
     cell.alignment = Alignment(vertical="center", wrap_text=True)
     cell.border = THIN_BORDER
@@ -121,7 +131,8 @@ def build_sheet_summary(wb: Workbook, data: dict) -> None:
         label_cell.border = THIN_BORDER
         label_cell.alignment = Alignment(vertical="center")
 
-        value_cell = ws.cell(row=i, column=2, value=str(value))
+        value_cell = ws.cell(row=i, column=2)
+        _put(value_cell, str(value))
         value_cell.font   = FONT_NORMAL
         value_cell.border = THIN_BORDER
         value_cell.alignment = Alignment(vertical="center", wrap_text=True)

@@ -987,6 +987,38 @@ classes:
 The first round's verifiers were cut short by a usage limit, so nine of the thirteen were reproduced by hand
 instead; the survivors of both rounds are in `tests/fixtures/rules/office_rt_*` and `office_rt2_*`.
 
+**Third round.** Three more agents (robustness, format gaps, attacks on the fixes); a usage limit again cut the
+verification short, so the candidates were reproduced by hand. Eight of the gap findings and six of the
+robustness candidates were real:
+
+- **A gate on the raw text is a bug.** The DDE-formula rule ran only when the slice contained a `|`, and the
+  PowerPoint rule only when it contained `ppaction://`: written `&#124;` and `ppaction:&#47;/program` they never
+  ran. Gates now test for what cannot be encoded (an `<f>` element, the attribute name `action`).
+- **A DDE service is any name.** `=MSEXCEL|'..\..\cmd.exe /c calc'!A0` starts a shell through the service that is
+  always installed. A DDE formula, `ddeLink`, ODF `DDE()` call or `dde-application` now blocks when the service
+  **or the topic** names a shell or a program (`dde_kind`), and is a WARN for any other service. ODF formulas are
+  entity-decoded first (`&quot;` and `&#34;` are both a quote).
+- **HYPERLINK is a field.** `HYPERLINK "ms-msdt:…"` fails like the same address as a relationship; a `\\host` target is
+  a WARN. Legacy `.xls` DDE links and external workbooks live in `SUPBOOK` records (`application\x03topic`) and are
+  read; legacy `.doc` DDE is matched without regard to case and with a path before the shell.
+- **External entities in every part**, including `_rels/.rels`, ODF `meta.xml`, `settings.xml` and the manifest.
+- **Packages that are two things are both.** A `.docx` with a stray `mimetype` entry and an `.odt` with a stray
+  `[Content_Types].xml` are read as OOXML *and* as ODF; a part nobody can read no longer stops the others (an
+  ODF part, or a relationships part); a `.rels` outside `_rels/` is read as XML too.
+- **Executables.** `.xll`, `.url`, `.scf`, `.inf`, `.application`, `.settingcontent-ms` and friends join the list, and
+  a PE whose header lies past the first 4 KB is still a PE. `WinExec`, `CreateProcess`, `URLDownloadToCacheFile`,
+  `InternetOpenUrl` and `GetObject("script:…")` are program launchers or downloaders in a macro;
+  `CreateObject("MSXML2.DOMDocument")` parses XML and is not.
+- **False positives.** `mailto:a@b.com` and `http://example.com` were reported as "hyperlink targets a program"
+  (`.com` is also a TLD); a `.com` counts only for a file path.
+- **Bounds.** Storages nested more than 64 deep (a tuple path per entry: quadratic memory), 200 nested `\object`
+  groups around one large `objdata` (38 s), relationship parts that never counted against the read budget,
+  and VBA directory entries that share one module chain (read once, 32 MB in all) are bounded and reported.
+- **Routing.** A sniffed RTF must *start* with `{\rtf`: the first version took any file that mentioned it in its
+  first kilobyte, so an extensionless shell script with that text in a comment was never scanned as a script.
+- **The Excel report** wrote repository file names into cells, and `=HYPERLINK(…)` or `@SUM(…)` became a live formula
+  in the reviewer's Excel. Cells that could be read as one are now stored as text.
+
 Not on the report but found while fixing it: a tracked-deleted field instruction (`w:delInstrText`)
 returns when the change is rejected, so it is read; the slice-straddling test passed without the code it
 was written for (an instruction with no `begin` is reported anyway) and now splits `DD` from `EAUTO`
@@ -1011,6 +1043,9 @@ name used to be a "not an office document" WARN.
   declared in a `DOCTYPE` is reported as a bare `DOCTYPE` (WARN). Word itself refuses a DOCTYPE; other
   readers may not.
 - **Excel 2003 XML** is read for `ss:Formula` DDE only; its other constructs are not.
+- **Not parsed at all:** the attached template of a legacy `.doc` (`SttbfAssoc`), a mail-merge or query
+  connection string (`w:mailMerge`, `xl/connections.xml` `dbPr`), and `DATABASE` / `RD` fields. An external
+  *relationship* to any of them is read; a path held only in an attribute value or a field is not.
 - **Legacy macro-sheet formulas** are BIFF tokens, not text. The scanner reads the strings in the workbook
   stream (a command line, `URLDownloadToFile`, an `Auto_*` name) and the hidden flag of the sheet; a visible
   macro sheet that runs a program through tokens only (`EXEC` as a function id, built from pieces) is reported

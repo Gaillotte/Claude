@@ -1074,6 +1074,10 @@ for p,i in d.get('file_results',{}).items():
             "an INCLUDEPICTURE field in an RTF is checked like one in a .docx"
         assert_contains "$(line_for office_rt2_rtf_bin_brace_equation.rtf)" "CWE-94:office_equation_editor_object_carries_a_payload" \
             "a raw closing brace carried by a bin control word inside objdata is data and does not end the object"
+        assert_contains "$(line_for office_rt2_rtf_bin_braces_equation.rtf)" "CWE-94:office_equation_editor_object_carries_a_payload" \
+            "two raw closing braces carried by one bin control word do not end the object group"
+        assert_contains "$(line_for office_rt2_rtf_bin_unc.rtf)" "CWE-829:rtf_linked_object_updates_from_a_remote_source" \
+            "raw backslashes carried by a bin control word are part of the UNC target"
         assert_contains "$(line_for office_rt2_rtf_bin_brace_pe.rtf)" "CWE-506:office_embeds_an_executable_or_script" \
             "…for an OLE Package holding an .exe"
         assert_contains "$(line_for office_rt2_rtf_bin_brace_ole2link.rtf)" "CWE-829:rtf_linked_object_updates_from_a_remote_source" \
@@ -1089,6 +1093,94 @@ for p,i in d.get('file_results',{}).items():
         JPN=$(line_for office_rt2_plain_notes.txt)
         assert_not_contains "$JPN" "office:" \
             "a plain .txt that merely mentions RTF is not routed to the office scanner"
+        # Third round of red-teaming
+        assert_contains "$(line_for office_rt3_dde_pipe_cref.xlsx)" "$DDE_MSG" \
+            "a DDE formula whose pipe is written &#124; is still found (the gate cannot read the raw text)"
+        assert_contains "$(line_for office_rt3_dde_msexcel.xlsx)" "$DDE_MSG" \
+            "=MSEXCEL|'..\\cmd.exe /c ...'!'' starts a shell through the service that is always installed"
+        JDC=$(line_for office_rt3_dde_calc.xlsx)
+        assert_contains "$JDC" "office:dde_connection_declared" \
+            "a DDE formula to an ordinary program is reported"
+        assert_not_contains "$JDC" "[FAIL]" \
+            "…and is not blocked"
+        assert_contains "$(line_for office_rt3_ddelink_msexcel.xlsx)" "$DDE_MSG" \
+            "an Excel ddeLink to MSEXCEL whose topic is a command line is flagged"
+        assert_contains "$(line_for office_rt3_ppaction_cref.pptx)" "CWE-78:office_presentation_action_runs_a_program" \
+            "action=\"ppaction:&#47;/program\" is still a program action"
+        assert_contains "$(line_for office_rt3_ods_dde_cref.ods)" "$DDE_MSG" \
+            "an ODF DDE() call with the quotes written &#34; is decoded and flagged"
+        JOC=$(line_for office_rt3_ods_dde_calc.ods)
+        assert_contains "$JOC" "office:dde_connection_declared" \
+            "…and a DDE() call to an ordinary service is reported"
+        assert_not_contains "$JOC" "[FAIL]" \
+            "…without blocking"
+        XXE_MSG="CWE-611:office_part_declares_an_external_entity"
+        assert_contains "$(line_for office_rt3_xxe_rels.docx)" "$XXE_MSG" \
+            "an external entity in _rels/.rels is flagged"
+        assert_contains "$(line_for office_rt3_xxe_odf_meta.odt)" "$XXE_MSG" \
+            "…in an ODF meta.xml"
+        assert_contains "$(line_for office_rt3_xxe_odf_settings.odt)" "$XXE_MSG" \
+            "…in settings.xml"
+        assert_contains "$(line_for office_rt3_xxe_odf_manifest.odt)" "$XXE_MSG" \
+            "…and in META-INF/manifest.xml"
+        URI_MSG="CWE-94:office_link_uses_a_script_or_diagnostic_uri_scheme"
+        assert_contains "$(line_for office_rt3_hyperlink_msdt.docx)" "$URI_MSG" \
+            "a HYPERLINK field to ms-msdt: fails like the same address as a relationship"
+        assert_contains "$(line_for office_rt3_hyperlink_js.docx)" "$URI_MSG" \
+            "…a fldSimple HYPERLINK to javascript:"
+        assert_contains "$(line_for office_rt3_hyperlink_unc.docx)" "office:hyperlink_to_a_unc_path" \
+            "…and a HYPERLINK field to a file share is reported"
+        assert_not_contains "$(line_for office_rt3_hyperlink_ok.docx)" "office:" \
+            "a HYPERLINK field to an https address is not reported"
+        assert_not_contains "$(line_for office_rt3_link_dotcom.docx)" "hyperlink_targets_a_program" \
+            "mailto:a@b.com and http://example.com are web addresses, not links to a .com program"
+        assert_contains "$(line_for office_rt3_link_dotcom_path.docx)" "office:hyperlink_targets_a_program" \
+            "…while file:///C:/Users/a/run.com still is one"
+        assert_contains "$(line_for office_rt3_dde_lower.doc)" "$DDE_MSG" \
+            "a legacy .doc with ddeauto in lower case is flagged"
+        assert_contains "$(line_for office_rt3_dde_path.doc)" "$DDE_MSG" \
+            "…and DDE \"C:\\...\\cmd.exe\" \"/c calc\""
+        assert_not_contains "$(line_for office_rt3_dde_prose.doc)" "[FAIL]" \
+            "prose that mentions DDE and cmd is not a DDE field"
+        assert_contains "$(line_for office_rt3_xls_supbook_dde.xls)" "$DDE_MSG" \
+            "a legacy .xls SUPBOOK record holding a DDE link to cmd is flagged"
+        assert_contains "$(line_for office_rt3_xls_supbook_unc.xls)" "CWE-522:office_references_a_unc_path_ntlm_leak" \
+            "…and an external workbook on a file share"
+        assert_not_contains "$(line_for office_rt3_xls_supbook_local.xls)" "office:" \
+            "…while a link to a workbook on a local path is not reported"
+        assert_contains "$(line_for office_rt3_truncated_workbook.doc)" "$DDE_MSG" \
+            "a Workbook stream that ends inside a record does not stop the analysis of the rest"
+        assert_contains "$(line_for office_rt3_polyglot_docx_odf.docx)" "$DDE_MSG" \
+            "a .docx that also carries an ODF mimetype entry is still read as OOXML"
+        assert_contains "$(line_for office_rt3_polyglot_odt_ooxml.odt)" "$ODFMSG" \
+            "an .odt that also carries a [Content_Types].xml is still read as ODF"
+        JSU=$(line_for office_rt3_stray_unreadable.odt)
+        assert_contains "$JSU" "$ODFMSG" \
+            "one ODF part that cannot be read does not stop the macro in another from being found"
+        assert_contains "$JSU" "office:parts_could_not_be_read" \
+            "…and is reported"
+        assert_contains "$(line_for office_rt3_main_as_rels.docx)" "$DDE_MSG" \
+            "a main part stored under a .rels name outside _rels/ is read as XML"
+        assert_contains "$(line_for office_rt3_vba_winexec.docm)" "$VBA_MSG" \
+            "a macro that declares WinExec starts a program"
+        JVD=$(line_for office_rt3_vba_msxml_dom.xlsm)
+        assert_not_contains "$JVD" "[FAIL]" \
+            "CreateObject(\"MSXML2.DOMDocument\") parses XML and is not a download"
+        assert_contains "$JVD" "office:vba_macro_runs_when_the_document_opens" \
+            "…but its Workbook_Open is reported"
+        PKG_MSG="CWE-506:office_embeds_an_executable_or_script"
+        assert_not_contains "$(line_for office_rt3_script_mentions_rtf)" "not_an_office_document" \
+            "an extensionless script that mentions {\\rtf in a comment is not reported as a broken office file"
+        assert_contains "$(line_for office_rt3_script_mentions_rtf)" "[FAIL]" \
+            "…it is scanned as the shell script it is (curl | sh)"
+        assert_contains "$(line_for office_rt3_notes_mentions_rtf.txt)" "CWE-798" \
+            "a .txt note that mentions {\\rtf still gets the document credential check"
+        assert_contains "$(line_for office_rt3_pkg_xll.doc)" "$PKG_MSG" \
+            "an OLE Package named addin.xll (an Excel add-in that runs on load) is an executable"
+        assert_contains "$(line_for office_rt3_pkg_far_pe.doc)" "$PKG_MSG" \
+            "a PE whose header lies past the first 4 KB is still a PE"
+        assert_contains "$(line_for office_rt3_pkg_text.doc)" "office:contains_embedded_object" \
+            "an OLE Package holding text is reported and not blocked"
         assert_contains "$(line_for office_rt_vba_declare_continued.docm)" "$VBA_MSG" \
             "a declaration whose API name is on a continuation line is judged as one statement"
         assert_contains "$(line_for office_rt_vba_declare_ntdll.docm)" "$VBA_MSG" \
@@ -1556,6 +1648,11 @@ cases = {
     "adv_entity_spaces.docx": m.docx(doc_xml=m.CT_HEAD + "<!DOCTYPE d [" + ("<!ENTITY a" + " " * 3000) * 1000 + f"]><w:document {m.NS_W}/>"),
     "adv_entity_pairs.docx": m.docx(doc_xml=m.CT_HEAD + "<!DOCTYPE d [" + "<!ENTITY x y " * 300000 + f"]><w:document {m.NS_W}/>"),
     # a Flat OPC package of 200000 part openers, and one of 50000 binary parts
+    # 200 nested \object groups around one large objdata, each of which used to be re-read; and a compound file whose
+    # storages nest 200 deep (paths are tuples, so depth costs quadratic memory)
+    "adv_rtf_nested.rtf": m.rtf("{\\object" * 200 + "{\\*\\objdata " + "00" * 1000000 + "}" + "}" * 200),
+    "adv_cfb_deep.doc": m.cfb({"WordDocument": b"\xec\xa5\xc1\x00" + b"\x00" * 60, "ObjectPool": __import__("functools").reduce(lambda acc, i: {"s%d" % i: acc}, range(200), {"x": b"1"})}),
+    "adv_rels_many.docx": m.docx(extra={"word/_rels/r%d.xml.rels" % i: b"<Relationships>" + b'<Relationship Id="r" Type="x/image" Target="a/b.png"/>' * 5000 + b"</Relationships>" for i in range(40)}),
     "adv_flat_opc.docx": ('<?xml version="1.0"?><pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">' + '<pkg:part pkg:name="/a" pkg:contentType="x">' * 200000 + "</pkg:package>").encode(),
     "adv_flat_parts.docx": ('<?xml version="1.0"?><pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">' + '<pkg:part pkg:name="/a" pkg:contentType="x"><pkg:binaryData>QUJD</pkg:binaryData></pkg:part>' * 50000 + "</pkg:package>").encode(),
     "adv_instr.docx": m.docx(doc_xml=m.CT_HEAD + f"<w:document {m.NS_W}><w:body>" + "<w:instrText>" * 300000 + "</w:body></w:document>"),
@@ -1603,15 +1700,27 @@ ADVEOF
     for _adv in adv_instr.docx adv_angle.odt adv_template.rtf adv_objects.rtf adv_rels.docx adv_entity.docx adv_basic_tags.odt adv_flat_modules.fodt \
                 adv_vba_blank.docm adv_vba_blank_spaces.docm adv_vba_lib.docm adv_vba_continued.docm adv_vba_powershell.docm adv_objpool.doc \
                 adv_comments.docx adv_cdata_open.docx adv_pi.docx adv_mixed_openers.docx adv_entity_spaces.docx adv_entity_pairs.docx \
-                adv_flat_opc.docx adv_flat_parts.docx; do
+                adv_flat_opc.docx adv_flat_parts.docx adv_rtf_nested.rtf adv_cfb_deep.doc adv_rels_many.docx; do
         OFFSLOW=$(timeout 20 python3 -I "$OFFPY" "${SCRATCH}/${_adv}" "${SCRATCH}/view.txt" "${_adv##*.}" 2>&1 || true)
         assert_contains "$OFFSLOW" "FACT done" \
             "adversarial input finishes inside 20 s (no quadratic pattern): ${_adv}"
+        if [[ "$_adv" == adv_cfb_deep.doc ]]; then
+            assert_contains "$OFFSLOW" "FACT incomplete" \
+                "storages nested 200 deep are read only to a depth of 64, and the file says so"
+        fi
+        if [[ "$_adv" == adv_rtf_nested.rtf ]]; then
+            assert_contains "$OFFSLOW" "FACT incomplete" \
+                "200 nested object groups around one objdata are read to a bound, and the file says so"
+        fi
         if [[ "$_adv" == adv_objpool.doc ]]; then
             assert_contains "$OFFSLOW" "FACT incomplete" \
                 "a compound file with 20000 embedded objects is read only in part, and says so"
         fi
     done
+    # Relationship parts are charged to the read budget like every other part (forty of them, a megabyte budget).
+    OFFRELS=$(OFFICE_READ_BUDGET_MB=1 python3 -I "$OFFPY" "${SCRATCH}/adv_rels_many.docx" "${SCRATCH}/view.txt" docx 2>&1 || true)
+    assert_contains "$OFFRELS" "read budget" \
+        "relationship parts count against the read budget, and an exhausted budget is reported"
 fi
 
 group "Layer B — end-to-end verdicts"
@@ -1978,6 +2087,24 @@ print(','.join(load_workbook('$XLSX').sheetnames))")
             assert_contains "$SHEETS" "Findings" "Excel report has a Findings tab"
         else
             fail_test "Excel report generates" "generate_excel_report.py failed"
+        fi
+        # A repository file named like a formula must be a string in the report, not a live formula.
+        INJ="${SCRATCH}/xlsx_inject"
+        rm -rf "$INJ"; mkdir -p "$INJ"
+        printf 'AKIA%s\n' "ABCDEFGHIJKLMNOP" > "$INJ/=HYPERLINK(\"http:--attacker.example\",\"click\").txt"
+        printf 'x\n' > "$INJ/@SUM(1+1).txt"
+        run_pipeline "$INJ" --quiet
+        if [[ -n "$RUN_JSON" ]] && python3 "${ROOT_DIR}/generate_excel_report.py" "$RUN_JSON" "${SCRATCH}/inject.xlsx" >/dev/null 2>&1; then
+            XLF=$(python3 -c "
+from openpyxl import load_workbook
+wb = load_workbook('${SCRATCH}/inject.xlsx')
+n = [c.coordinate for ws in wb for row in ws.iter_rows() for c in row if c.data_type == 'f']
+t = [c.value for ws in wb for row in ws.iter_rows() for c in row if isinstance(c.value, str) and c.value.startswith('=')]
+print('formulas=%d strings=%d' % (len(n), len(t)))")
+            assert_contains "$XLF" "formulas=0" "no cell of the Excel report is a live formula, whatever the file names say"
+            assert_not_contains "$XLF" "strings=0" "…and the names that look like formulas are kept as text"
+        else
+            fail_test "Excel report with formula-like file names generates" "generate_excel_report.py failed"
         fi
     else
         skip_test "Excel report" "openpyxl not installed"
