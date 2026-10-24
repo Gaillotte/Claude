@@ -1105,6 +1105,11 @@ def main() -> None:
     with zipfile.ZipFile(io.BytesIO(base_docx)) as z1:
         items = [(i.filename, z1.read(i.filename)) for i in z1.infolist()] + [("mimetype", b"application/vnd.oasis.opendocument.text")]
     write(R / "office_rt3_polyglot_docx_odf.docx", zbytes(items, first_stored=None))
+    # …and the relationships still apply to the OOXML half: the embedded package is named only by its relationship
+    emb_docx = docx(doc_rels=[("rId9", "package", "data/inner.dat", False)], extra={"word/data/inner.dat": inner_pkg})
+    with zipfile.ZipFile(io.BytesIO(emb_docx)) as z1b:
+        items_b = [(i.filename, z1b.read(i.filename)) for i in z1b.infolist()] + [("mimetype", b"application/vnd.oasis.opendocument.text")]
+    write(R / "office_rt3_polyglot_docx_odf_rel.docx", zbytes(items_b))
     macro_odt = odf_macro_doc("office:load")
     with zipfile.ZipFile(io.BytesIO(macro_odt)) as z2:
         items = [(i.filename, z2.read(i.filename)) for i in z2.infolist() if i.filename != "mimetype"]

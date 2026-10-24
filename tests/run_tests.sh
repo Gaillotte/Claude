@@ -1152,6 +1152,8 @@ for p,i in d.get('file_results',{}).items():
             "a Workbook stream that ends inside a record does not stop the analysis of the rest"
         assert_contains "$(line_for office_rt3_polyglot_docx_odf.docx)" "$DDE_MSG" \
             "a .docx that also carries an ODF mimetype entry is still read as OOXML"
+        assert_contains "$(line_for office_rt3_polyglot_docx_odf_rel.docx)" "$VBA_MSG" \
+            "…including the relationships that name an embedded package"
         assert_contains "$(line_for office_rt3_polyglot_odt_ooxml.odt)" "$ODFMSG" \
             "an .odt that also carries a [Content_Types].xml is still read as ODF"
         JSU=$(line_for office_rt3_stray_unreadable.odt)
