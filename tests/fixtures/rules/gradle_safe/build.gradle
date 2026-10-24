@@ -1,0 +1,43 @@
+// POM metadata. `url = 'http://…'` matched 21 of 6249 real build scripts and
+// almost none were repositories: licences, developers and project homepages.
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            pom {
+                url = 'http://www.example.com/library'
+                licenses {
+                    license {
+                        name = 'The Apache License, Version 2.0'
+                        url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'jane'
+                        url = 'http://example.com/users/jane'
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A local include is by far the most common form (14 of 6249 real scripts, all
+// local). Only a URL here is a download-and-run.
+apply from: rootProject.file('gradle/common.gradle')
+apply from: "$rootDir/gradle/publish.gradle"
+
+repositories {
+    mavenCentral()
+    maven { url 'https://repo.example.test/maven2' }
+}
+
+// `.execute()` on a Gradle API object is not a process spawn; neither is a
+// property whose name merely begins with commandLine, nor a call ending in
+// ...ant.get( such as rootVariant.get(.
+def deps = query.execute()
+def pats = commandLineIncludePatterns
+def v = rootVariant.get()
+
+// An ordinary build step: reported, not blocked.
+def rev = providers.exec { commandLine 'git', 'rev-parse', 'HEAD' }

