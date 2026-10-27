@@ -85,6 +85,10 @@ python3 build_doc.py
 
 # English Word doc
 python3 build_doc_en.py
+
+# Top 40 file extensions for Claude Code projects (ranking is computed from top40_extensions_data.json;
+# the "Pipeline today" column is read from build_pdf_filetypes.FAMILIES)
+python3 build_pdf_top_extensions.py
 ```
 
 All PDF builders use **ReportLab**; Word docs use **python-docx**. Install with:
