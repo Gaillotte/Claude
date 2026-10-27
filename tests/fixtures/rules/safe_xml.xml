@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<!-- Every construct here appears in real XML and must not be reported.
+
+     A bare <!DOCTYPE was failing 736 of 3362 real XML files (22%) - the
+     doctypes on this host are toolbar (390), feature (82), rss (50) and
+     node (45). A bare <!ENTITY was failing 8 more, and all 8 were a text
+     shortcut or a W3C HTML DTD reference, never an attack. -->
+<!DOCTYPE toolbar PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "toolbar.dtd" [
+  <!ENTITY nbsp "&#160;">
+  <!ENTITY ERROR_GENERAL "org.freedesktop.PackageKit.Denied">
+]>
+<toolbar>
+  <!-- The old credential rule let [^>]*> run from an ATTRIBUTE name across
+       the rest of the tag and into a later element's closing tag, so these
+       checkstyle lines matched as "credentials". -->
+  <module name="Checker">
+    <property name="tokens" value="LITERAL_DO,LITERAL_ELSE,LITERAL_WHILE"/>
+    <property name="tokens" value="EXPR, IDENT, NUM_DOUBLE, NUM_FLOAT"/>
+  </module>
+  <method id="secrets" direction="out"/>
+  <resource path="token_target-page-resource"/>
+
+  <!-- Correct credential forms: a variable reference, a Maven-encrypted
+       value, a documentation placeholder, and a PATH to a key rather than
+       the key itself. -->
+  <server>
+    <password>${env.RELEASE_TRAIN_MAVEN_REPOSITORY_PASSWORD}</password>
+  </server>
+  <server>
+    <password>{3iRQQyaIUgQHwH8uzTvr9/52pZAjLOTWz/SlWDB7CM4=}</password>
+  </server>
+  <server>
+    <token>9cbaf023786cd7...</token>
+  </server>
+  <server>
+    <password>changeit</password>
+    <privateKey>/path/to/private/key</privateKey>
+  </server>
+
+  <!-- Example, commented out - Maven's own shipped settings.xml documents its
+       credentials exactly like this, and a line-based rule cannot see the
+       comment boundary:
+  <server>
+    <id>example</id>
+    <password>RealLookingPassw0rd123</password>
+  </server>
+  -->
+</toolbar>

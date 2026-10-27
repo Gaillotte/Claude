@@ -1,0 +1,7 @@
+# Ordinary pins, a commit-pinned VCS requirement, and the two options that
+# are legitimate but worth a reviewer's attention.
+requests==2.31.0
+flask>=2.0,<3
+-e git+https://github.com/org/pkg.git@4f9c1d2e#egg=pkg
+--trusted-host pypi.corp.example
+--extra-index-url https://pypi.corp.example/simple

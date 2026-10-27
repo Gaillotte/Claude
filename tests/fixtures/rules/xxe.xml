@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<!-- An entity that actually references an external resource. This is the XXE
+     primitive; a bare <!DOCTYPE is not. -->
+<!DOCTYPE data [
+  <!ENTITY leak SYSTEM "file:///etc/passwd">
+]>
+<data>&leak;</data>
