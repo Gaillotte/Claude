@@ -1946,7 +1946,8 @@ EOF
     # Offline with nothing staged: both layers must be reported as not run.
     rm -f "${STUBS}"/*_calls.txt
     RUN_WORK="${SCRATCH}/off_bare"; mkdir -p "$RUN_WORK"
-    OUT=$(cd "$ROOT_DIR" && PATH="${STUBS}:$PATH" WORK_DIR="$RUN_WORK" \
+    # Layer 3 (dependency CVEs) is switched off by default; these checks are about it.
+    OUT=$(cd "$ROOT_DIR" && PATH="${STUBS}:$PATH" WORK_DIR="$RUN_WORK" RUN_SCA=true \
           OUTPUT_DIR="${RUN_WORK}/out" timeout 300 ./ai_transit.sh --offline \
           "${FIXTURES}/clean" 2>&1)
 
@@ -1979,7 +1980,7 @@ EOF
     done
     touch "${CACHE}/trivy-db/db/trivy.db"
     RUN_WORK="${SCRATCH}/off_staged"; mkdir -p "$RUN_WORK"
-    (cd "$ROOT_DIR" && PATH="${STUBS}:$PATH" WORK_DIR="$RUN_WORK" \
+    (cd "$ROOT_DIR" && PATH="${STUBS}:$PATH" WORK_DIR="$RUN_WORK" RUN_SCA=true \
      OUTPUT_DIR="${RUN_WORK}/out" OFFLINE_CACHE="$CACHE" \
      timeout 300 ./ai_transit.sh --offline "${FIXTURES}/clean" >/dev/null 2>&1) || true
 
@@ -2209,6 +2210,123 @@ if ! _skipping; then
             skip_test "local copy excludes .git" "no fetched directory found"
         fi
     fi
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+# LAYER G — The customised deployment
+# scan_pipeline.sh takes an optional report directory and scanning name, has no
+# online mode, secret-scans with gitleaks, writes one structured record per FAIL,
+# ships layers 3 and 6 switched off (and says so in the coverage block), and exits
+# non-zero unless the verdict is PASS.
+# ═════════════════════════════════════════════════════════════════════════════
+group "Layer G — report directory, offline-only, gitleaks, layers 3 and 6"
+if ! _skipping; then
+    GW="${SCRATCH}/g_work"; GR="${SCRATCH}/g_reports"; mkdir -p "$GW" "$GR"
+    g_scan() {   # g_scan <dir> [args…]; sets GOUT, GEC
+        GOUT=$(cd "$ROOT_DIR" && WORK_DIR="$GW" timeout 300 bash ./scan_pipeline.sh "$@" 2>&1); GEC=$?
+    }
+    g_json() { python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+for k in sys.argv[2].split('.'):
+    d=d.get(k) if isinstance(d,dict) else None
+print(d if d is not None else '')
+" "$1" "$2" 2>/dev/null || echo ""; }
+
+    # <dir> <report_dir> <name>, with a flag after them as callers have always passed one.
+    g_scan "${FIXTURES}/vulnerable" "$GR" nightly --quiet
+    GJ="${GR}/report_scan_nightly.json"
+    assert_file_exists "$GJ" "report dir + name: the JSON report is report_scan_<name>.json"
+    assert_file_exists "${GR}/report_scan_nightly.html" "report dir + name: so is the HTML report"
+    assert_eq "FAIL" "$(printf '%s\n' "$GOUT" | tail -n 1)" "the verdict is still the last line of output"
+    assert_eq "1" "$GEC" "a FAIL verdict is also the exit status"
+    assert_eq "REJECTED" "$(g_json "$GJ" decision)" "report: decision is REJECTED for a FAIL"
+    assert_eq "#B02A37"  "$(g_json "$GJ" status_color)" "report: status colour for a rejection"
+    assert_eq "#F8D7DA"  "$(g_json "$GJ" status_background)" "report: status background for a rejection"
+    assert_eq "nightly"  "$(g_json "$GJ" scan_name)" "report: scan_name is the third argument"
+    assert_contains "$(g_json "$GJ" source.directory)" "vulnerable" "report: source names the scanned directory"
+    assert_eq "64" "$(g_json "$GJ" source.sha256 | tr -d '\n' | wc -c | tr -d ' ')" "report: source carries a SHA-256"
+    SHAPE=$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+need={'tool','category','severity','rule_id','rule_name','file','message'}
+f=d['findings']
+print(type(f).__name__, type(d['findings_by_file']).__name__, all(need <= set(r) for r in f), len(f) > 0)
+" "$GJ" 2>/dev/null || echo "unreadable")
+    assert_eq "list dict True True" "$SHAPE" \
+        "report: findings are structured records; the per-file dictionary is findings_by_file"
+    assert_eq "0" "$(ls "$GW"/findings_*.jsonl 2>/dev/null | wc -l | tr -d ' ')" \
+        "the temporary findings file does not outlive the scan"
+
+    # A PASS is APPROVED and exits 0.
+    g_scan "${FIXTURES}/clean" "$GR" calm
+    assert_eq "0" "$GEC" "a PASS verdict exits 0"
+    assert_eq "APPROVED" "$(g_json "${GR}/report_scan_calm.json" decision)" "report: decision is APPROVED for a PASS"
+    assert_eq "#198754"  "$(g_json "${GR}/report_scan_calm.json" status_color)" "report: status colour for an approval"
+
+    # Without the optional arguments the report stays where ai_transit.sh reads it.
+    g_scan "${FIXTURES}/clean" --quiet
+    assert_eq "0" "$GEC" "the one-argument form still works, with a flag after it"
+    assert_eq "1" "$(ls "$GW"/reports/report_2*.json 2>/dev/null | wc -l | tr -d ' ')" \
+        "one-argument form: the report is still ${GW##*/}/reports/report_<timestamp>.json"
+
+    # The arguments are checked.
+    g_scan "${FIXTURES}/clean" "$GR" "../escape"
+    assert_eq "1" "$GEC" "a scanning name with a slash is refused"
+    assert_contains "$GOUT" "scanning_name must not contain" "…and says why"
+    g_scan "${FIXTURES}/clean" "${SCRATCH}/no_such_dir" x
+    assert_eq "1" "$GEC" "a report directory that does not exist is refused"
+
+    # Layers 3 and 6 are off by default, and the report says so instead of omitting them.
+    assert_contains "$(g_json "${GR}/report_scan_calm.json" coverage.L3_dependency_cve)" "skipped:disabled" \
+        "layer 3 is recorded as skipped (disabled), not left out"
+    assert_contains "$(g_json "${GR}/report_scan_calm.json" coverage.L6_licence)" "skipped:disabled" \
+        "layer 6 is recorded as skipped (disabled), not left out"
+    assert_contains "$(g_json "${GR}/report_scan_calm.json" coverage_gaps)" "L3_dependency_cve" \
+        "a disabled layer is a coverage gap"
+    g_scan "${FIXTURES}/clean" "$GR" both_on
+    GEC_BOTH=$(cd "$ROOT_DIR" && WORK_DIR="$GW" RUN_SCA=true RUN_SCANCODE=true timeout 300 bash ./scan_pipeline.sh \
+        "${FIXTURES}/clean" "$GR" both_on >/dev/null 2>&1; echo $?)
+    assert_not_contains "$(g_json "${GR}/report_scan_both_on.json" coverage.L3_dependency_cve)" "disabled" \
+        "RUN_SCA=true runs layer 3 again"
+    assert_not_contains "$(g_json "${GR}/report_scan_both_on.json" coverage.L6_licence)" "disabled" \
+        "RUN_SCANCODE=true runs layer 6 again"
+
+    # No online mode.
+    g_scan "${FIXTURES}/clean" "$GR" calm2
+    assert_contains "$GOUT" "Offline mode: no scanner will attempt a network call" "offline mode is on without being asked"
+    OUT_ONLINE=$(cd "$ROOT_DIR" && OFFLINE=false WORK_DIR="$GW" timeout 300 bash ./scan_pipeline.sh "${FIXTURES}/clean" 2>&1)
+    assert_contains "$OUT_ONLINE" "OFFLINE=false ignored" "asking for OFFLINE=false is refused with a warning"
+    assert_contains "$OUT_ONLINE" "Offline mode: no scanner will attempt a network call" "…and the scan is offline anyway"
+
+    # gitleaks replaces betterleaks. A stub records how it is called and what it returns.
+    GST="${SCRATCH}/g_stubs"; mkdir -p "$GST"
+    cat > "${GST}/gitleaks" <<EOF
+#!/bin/sh
+echo "\$@" >> "${GST}/calls.txt"
+exit \${GITLEAKS_STUB_EXIT:-0}
+EOF
+    chmod +x "${GST}/gitleaks"
+    rm -f "${GST}/calls.txt"
+    OUT_GL=$(cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=1 WORK_DIR="$GW" timeout 300 \
+        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" leaks 2>&1); EC_GL=$?
+    assert_eq "1" "$EC_GL" "gitleaks exiting 1 (leaks found) fails the scan"
+    assert_contains "$OUT_GL" "gitleaks:secrets_detected" "…with the gitleaks finding"
+    assert_contains "$(cat "${GST}/calls.txt" 2>/dev/null)" "detect --no-git --source ${FIXTURES}/clean" \
+        "gitleaks is called as: detect --no-git --source <dir>"
+    REC=$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+r=[x for x in d['findings'] if x['tool']=='gitleaks']
+print(len(r), r[0]['category'], r[0]['severity'], r[0]['file']) if r else print('none')
+" "${GR}/report_scan_leaks.json" 2>/dev/null || echo unreadable)
+    assert_eq "1 secret CRITICAL ." "$REC" "the gitleaks finding is a structured record about the whole directory"
+    assert_eq "ran" "$(g_json "${GR}/report_scan_leaks.json" coverage.L1_secrets_gitleaks)" "coverage names L1_secrets_gitleaks"
+    OUT_GL0=$(cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=0 WORK_DIR="$GW" timeout 300 \
+        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" noleaks 2>&1); EC_GL0=$?
+    assert_eq "0" "$EC_GL0" "gitleaks exiting 0 (nothing found) leaves a clean repo passing"
+    assert_eq "0" "$(grep -c 'betterleaks' "${ROOT_DIR}/scan_pipeline.sh" | tr -d ' ')" \
+        "scan_pipeline.sh no longer refers to betterleaks"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════

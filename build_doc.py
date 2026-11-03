@@ -1897,7 +1897,7 @@ add_table_header(t, ["Groupe", "Outils", "Comportement hors ligne"])
 set_col_widths(t, [3.5, 6, 8])
 rows = [
     ("Aucune préparation",
-     "betterleaks, detect-secrets, YARA, règles de motifs, Bandit, ShellCheck, "
+     "gitleaks, detect-secrets, YARA, règles de motifs, Bandit, ShellCheck, "
      "cppcheck, hadolint",
      "Pleinement fonctionnels ; les règles sont locales"),
     ("Données à pré-positionner",

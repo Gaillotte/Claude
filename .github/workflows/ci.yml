@@ -93,11 +93,11 @@ jobs:
           set -euo pipefail
           trivy=$(grep -oP 'ARG TRIVY_VERSION=\K[0-9.]+'   Dockerfile)
           hado=$(grep -oP 'ARG HADOLINT_VERSION=\K[0-9.]+' Dockerfile)
-          bl=$(grep -oP 'ARG BETTERLEAKS_VERSION=\K[0-9.]+' Dockerfile || echo "")
+          gl=$(grep -oP 'ARG GITLEAKS_VERSION=\K[0-9.]+' Dockerfile || echo "")
           echo "trivy=$trivy"     >> "$GITHUB_OUTPUT"
           echo "hadolint=$hado"   >> "$GITHUB_OUTPUT"
-          echo "betterleaks=$bl"  >> "$GITHUB_OUTPUT"
-          echo "Pinned: trivy=$trivy hadolint=$hado betterleaks=${bl:-unset}"
+          echo "gitleaks=$gl"     >> "$GITHUB_OUTPUT"
+          echo "Pinned: trivy=$trivy hadolint=$hado gitleaks=${gl:-unset}"
 
       - name: Resolve pinned digests from the Dockerfile
         id: digests
@@ -158,17 +158,17 @@ jobs:
             echo "hadolint digest matches the pin."
           fi
 
-      - name: betterleaks module resolves
+      - name: gitleaks module resolves
         continue-on-error: true
         run: |
-          v='${{ steps.pins.outputs.betterleaks }}'
-          if [ -z "$v" ]; then echo "No betterleaks pin found — skipping."; exit 0; fi
-          echo "Querying the Go module proxy for betterleaks v${v} …"
-          code=$(curl -sSL -o /tmp/bl.info -w '%{http_code}' \
-            "https://proxy.golang.org/github.com/betterleaks/betterleaks/@v/v${v}.info" || true)
-          echo "HTTP $code"; cat /tmp/bl.info 2>/dev/null || true
+          v='${{ steps.pins.outputs.gitleaks }}'
+          if [ -z "$v" ]; then echo "No gitleaks pin found — skipping."; exit 0; fi
+          echo "Querying the Go module proxy for gitleaks v${v} …"
+          code=$(curl -sSL -o /tmp/gl.info -w '%{http_code}' \
+            "https://proxy.golang.org/github.com/zricethezav/gitleaks/v8/@v/v${v}.info" || true)
+          echo "HTTP $code"; cat /tmp/gl.info 2>/dev/null || true
           if [ "$code" != "200" ]; then
-            echo "::warning::betterleaks v${v} did not resolve on the Go module proxy."
+            echo "::warning::gitleaks v${v} did not resolve on the Go module proxy."
             echo "::warning::If this module is private or renamed, the Docker build will fail."
           fi
 

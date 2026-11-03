@@ -1226,13 +1226,13 @@ TOOL_CATALOG = [
     # (tool_name, layer_label, layer_color, install_cmd, purpose, offline, scan_cmd,
     #  pass_condition, fail_condition, warn_condition)
     (
-        "betterleaks", "Layer 1 — Secrets & Credentials", L1_COLOR,
-        "go install github.com/betterleaks/betterleaks@latest\n  brew install betterleaks",
+        "gitleaks", "Layer 1 — Secrets & Credentials", L1_COLOR,
+        "go install github.com/zricethezav/gitleaks/v8@latest\n  brew install gitleaks",
         "Detects secrets, credentials and API keys embedded in source files.\n"
-        "Successor to gitleaks — maintained by the same author with a more\n"
-        "expressive allowlist system. Scans all file types, not just git history.",
+        "Detection rules are compiled into the binary, so it works fully offline.\n"
+        "Scans all file types, not just git history (--no-git).",
         True,   # offline
-        "betterleaks dir <repo_dir> -v",
+        "gitleaks detect --no-git --source <repo_dir> -v",
         "Exit code 0 — no secrets or credentials detected in any file.",
         "Exit code ≠ 0 — at least one secret pattern matched (API key, token,\n"
         "password, private key …). → Pipeline verdict: FAIL.",
@@ -1241,7 +1241,7 @@ TOOL_CATALOG = [
     (
         "detect-secrets", "Layer 1 — Secrets & Credentials", L1_COLOR,
         "pip install detect-secrets",
-        "Entropy-based secret detector — complements betterleaks with a\n"
+        "Entropy-based secret detector — complements gitleaks with a\n"
         "different detection engine. Uses Shannon entropy and regex rules\n"
         "to find high-entropy strings that look like secrets.",
         True,
@@ -1525,7 +1525,7 @@ for tool_data in TOOL_CATALOG:
 # ═══════════════════════════════════════════════════════════════════════════════
 SUMMARY_TOOLS = [
     # (tool, layer, offline, pass_short, fail_short, warn_short)
-    ("betterleaks",       "L1", True,
+    ("gitleaks",          "L1", True,
      "Exit 0 — no secrets",
      "Secret/key detected → FAIL",
      "Not installed → WARN"),
@@ -1831,7 +1831,7 @@ text_block(cv, [
 
 groups = [
     ("No preparation", HexColor("#2E7D32"),
-     ["betterleaks, detect-secrets", "YARA, pattern rules", "Bandit, ShellCheck", "cppcheck, hadolint"],
+     ["gitleaks, detect-secrets", "YARA, pattern rules", "Bandit, ShellCheck", "cppcheck, hadolint"],
      "Rules are local"),
     ("Needs staged data", HexColor("#C06010"),
      ["Semgrep  (ruleset YAML)", "trivy  (CVE database)", "ClamAV  (signatures)", "checkov, ScanCode"],

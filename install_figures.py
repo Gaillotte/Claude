@@ -46,7 +46,7 @@ def _arrow_right(g, x, y, length, colour):
 # ═══════════════════════════════════════════════════════════════════════════════
 LAYERS = [
     ("L1", "Secrets & malware",
-     "betterleaks · detect-secrets · ClamAV · YARA",
+     "gitleaks · detect-secrets · ClamAV · YARA",
      "credential or malware found"),
     ("L2", "OWASP Top 10 · CWE Top 25",
      "Semgrep  (4 rulesets, one pass)",
@@ -220,7 +220,7 @@ def offline_tool_groups(avail):
 
     groups = [
         ("GROUP A", "Works offline as installed", HexColor("#2E7D32"),
-         ["betterleaks", "detect-secrets", "YARA", "grep rules (L4)",
+         ["gitleaks", "detect-secrets", "YARA", "grep rules (L4)",
           "Bandit", "ShellCheck", "cppcheck", "hadolint"],
          "nothing to stage"),
         ("GROUP B", "Needs staged data", HexColor("#B45309"),
@@ -271,7 +271,7 @@ def two_bundles(avail):
     for i, (tag, colour, life, items, cadence) in enumerate([
         ("INSTALL BUNDLE", HexColor("#0F6FA8"), "STATIC",
          [".deb system packages", "Python wheels",
-          "betterleaks · trivy · hadolint", "pipeline scripts"],
+          "gitleaks · trivy · hadolint", "pipeline scripts"],
          "Rebuild only when a tool version changes"),
         ("OFFLINE CACHE", HexColor("#B45309"), "PERISHABLE",
          ["Semgrep ruleset YAML", "trivy CVE database",

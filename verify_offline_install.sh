@@ -86,7 +86,7 @@ printf '#!/bin/sh\necho "$1"\n' > "${SCRATCH}/probe.sh"
 printf 'int main(){return 0;}\n' > "${SCRATCH}/probe.c"
 printf 'FROM ubuntu:22.04\nUSER root\n' > "${SCRATCH}/Dockerfile"
 
-check_simple betterleaks    "betterleaks dir '${SCRATCH}' -v; true"
+check_simple gitleaks       "gitleaks detect --no-git --source '${SCRATCH}' -v; true"
 check_simple detect-secrets "detect-secrets scan '${SCRATCH}'"
 check_simple bandit         "bandit -q '${SCRATCH}/clean.py'; true"
 check_simple shellcheck     "shellcheck '${SCRATCH}/probe.sh'; true"
@@ -228,11 +228,13 @@ for layer, state in sorted(d.get("coverage", {}).items()):
     print(f"      [{mark}] {layer:26} {state}")
 PY
     echo
-    # The five layers a verdict actually rests on.
+    # The layers a verdict actually rests on. Layer 3 (dependency CVEs) is switched off
+    # unless RUN_SCA=true, so it is required only when it was asked to run.
     GAPS=$(python3 - "$REPORT" <<'PY'
-import json, sys
-REQUIRED = ["L1_secrets_betterleaks","L1_malware","L2_owasp_cwe",
-            "L3_dependency_cve","L5_per_language_sast"]
+import json, os, sys
+REQUIRED = ["L1_secrets_gitleaks","L1_malware","L2_owasp_cwe","L5_per_language_sast"]
+if os.environ.get("RUN_SCA") == "true":
+    REQUIRED.insert(3, "L3_dependency_cve")
 cov = json.load(open(sys.argv[1])).get("coverage", {})
 print(" ".join(l for l in REQUIRED if not cov.get(l,"missing").startswith("ran")))
 PY

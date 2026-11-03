@@ -46,7 +46,7 @@ bash -n ai_transit.sh fetch_repo.sh scan_pipeline.sh && echo "scripts OK"
 # Expected: ✔ 666/666 passed
 
 # 3. Record which scanners are present
-for t in betterleaks detect-secrets clamscan yara semgrep trivy \
+for t in gitleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
@@ -216,19 +216,21 @@ verdict          : PASS
 coverage_complete: False
 
   OK   L1_malware                 ran
-  OK   L1_secrets_betterleaks     ran
+  OK   L1_secrets_gitleaks        ran
   OK   L1_secrets_entropy         ran
   GAP  L1_ioc_yara                skipped:yara or rules directory missing
   OK   L2_owasp_cwe               ran
-  OK   L3_dependency_cve          ran
+  GAP  L3_dependency_cve          skipped:disabled (RUN_SCA is not true)
   OK   L4_patterns                ran
   OK   L5_per_language_sast       ran
-  OK   L6_licence                 ran
+  GAP  L6_licence                 skipped:disabled (RUN_SCANCODE is not true)
 ```
 
 `L1_ioc_yara` is a legitimate gap if you have not written custom IOC rules —
 YARA rules are yours to supply, and having none is a configuration choice rather
-than a failure. Every other layer should read `ran`.
+than a failure. Layers 3 and 6 read `skipped:disabled` because they are switched
+off by default (`RUN_SCA=true` and `RUN_SCANCODE=true` turn them on); every other
+layer should read `ran`.
 
 ### The acceptance gate
 
@@ -237,14 +239,15 @@ result is not trustworthy regardless of what it says.
 
 ```bash
 python3 - "$REPORT" <<'PY'
-import json, sys
+import json, os, sys
 REQUIRED = [
-    "L1_secrets_betterleaks",   # credential leakage
+    "L1_secrets_gitleaks",      # credential leakage
     "L1_malware",               # malware signatures
     "L2_owasp_cwe",             # OWASP Top 10 / CWE Top 25
-    "L3_dependency_cve",        # dependency vulnerabilities
     "L5_per_language_sast",     # per-language static analysis
 ]
+if os.environ.get("RUN_SCA") == "true":
+    REQUIRED.append("L3_dependency_cve")   # dependency vulnerabilities (layer 3 is off by default)
 cov  = json.load(open(sys.argv[1])).get("coverage", {})
 gaps = [l for l in REQUIRED if not cov.get(l, "missing").startswith("ran")]
 if gaps:
@@ -264,7 +267,7 @@ that rests on layers which never executed.
 
 | Layer | Offline status |
 |-------|----------------|
-| L1 secrets — betterleaks, detect-secrets | Full |
+| L1 secrets — gitleaks, detect-secrets | Full |
 | L1 malware — ClamAV | Full **if** signatures staged |
 | L1 IOC — YARA | Full (your own rules) |
 | L2 OWASP/CWE — Semgrep | Full **if** rulesets staged |
@@ -373,15 +376,16 @@ Save as `gate.py` next to the pipeline:
 ```python
 #!/usr/bin/env python3
 """Reject an offline scan whose verdict rests on layers that never ran."""
-import json, sys
+import json, os, sys
 
 REQUIRED = [
-    "L1_secrets_betterleaks",   # credential leakage
+    "L1_secrets_gitleaks",      # credential leakage
     "L1_malware",               # malware signatures
     "L2_owasp_cwe",             # OWASP Top 10 / CWE Top 25
-    "L3_dependency_cve",        # dependency vulnerabilities
     "L5_per_language_sast",     # per-language static analysis
 ]
+if os.environ.get("RUN_SCA") == "true":
+    REQUIRED.append("L3_dependency_cve")   # dependency vulnerabilities (layer 3 is off by default)
 
 report = json.load(open(sys.argv[1]))
 cov    = report.get("coverage", {})

@@ -17,7 +17,7 @@ Container: `docker-run.sh` · `Dockerfile`
 4. [Core System Packages](#core-system-packages)
 5. [Python Environment](#python-environment)
 6. [Tool-by-Tool Installation](#tool-by-tool)
-   - 6.1 [betterleaks — secret detection (L1)](#betterleaks)
+   - 6.1 [gitleaks — secret detection (L1)](#gitleaks)
    - 6.2 [detect-secrets — entropy scanning (L1)](#detect-secrets)
    - 6.3 [ClamAV — antivirus (L1)](#clamav)
    - 6.4 [YARA — custom IOC rules (L1)](#yara)
@@ -54,7 +54,7 @@ The AI Transit Pipeline is a 6-layer security gateway that scans AI-generated co
 
 | Layer | Tools | Blocks on |
 |-------|-------|-----------|
-| L1 — Secrets & AV | betterleaks, detect-secrets, ClamAV, YARA | Secret/credential/malware detected |
+| L1 — Secrets & AV | gitleaks, detect-secrets, ClamAV, YARA | Secret/credential/malware detected |
 | L2 — OWASP/CWE | Semgrep | ERROR/WARNING severity finding |
 | L3 — SCA/CVE | trivy, pip-audit, safety, npm audit | HIGH/CRITICAL CVE in dependency |
 | L4 — Patterns | grep (built-in) | CWE-798/22/918/327/338 match |
@@ -127,8 +127,8 @@ pip install openpyxl reportlab python-docx detect-secrets bandit \
             pip-audit safety semgrep checkov scancode-toolkit
 
 # A4 — Go tool
-go install github.com/betterleaks/betterleaks@latest
-sudo cp ~/go/bin/betterleaks /usr/local/bin/
+go install github.com/zricethezav/gitleaks/v8@latest
+sudo cp ~/go/bin/gitleaks /usr/local/bin/
 
 # A4 — standalone binaries (pin versions; see §19.1 for digests)
 curl -sfL "https://github.com/aquasecurity/trivy/releases/download/v0.58.2/trivy_0.58.2_Linux-64bit.tar.gz" \
@@ -149,7 +149,7 @@ sudo chmod 700 /opt/ai-transit/quarantine
 **A7 — confirm every tool is actually present before going further:**
 
 ```bash
-for t in betterleaks detect-secrets clamscan yara semgrep trivy \
+for t in gitleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
@@ -168,7 +168,7 @@ cannot work offline at all. This is the table that matters:
 
 | Tool | Layer | Offline requirement | How it is satisfied |
 |------|-------|--------------------|---------------------|
-| betterleaks | L1 | None — rules compiled in | — |
+| gitleaks | L1 | None — rules compiled in | — |
 | detect-secrets | L1 | None — rules embedded | — |
 | **ClamAV** | L1 | **Signature database** | `freshclam`, then signatures copied to the cache |
 | YARA | L1 | Your own `.yar` files | Copy them to `$WORK_DIR/yara-rules/` |
@@ -245,7 +245,7 @@ Expected output on a correctly prepared machine:
   ✔ Network is unreachable — this is a genuine offline test.
 
 ── Group A — no staged data required
-  ✔ betterleaks works offline
+  ✔ gitleaks works offline
   ✔ detect-secrets works offline
   ✔ bandit works offline
   ...
@@ -374,66 +374,67 @@ Each section covers: finding the latest version, installing, verifying, offline 
 
 ---
 
-### 6.1 betterleaks — Secret Detection (Layer 1) {#betterleaks}
+### 6.1 gitleaks — Secret Detection (Layer 1) {#gitleaks}
 
-**What it does:** scans all file types for secrets, API keys, credentials and tokens. Successor to gitleaks with a more expressive allowlist system.
+**What it does:** scans all file types for secrets, API keys, credentials and tokens. The pipeline runs it on the directory, not on git history (`--no-git`).
 
 #### Find the latest version
 ```bash
-# Query GitHub API for latest release tag
-curl -s https://api.github.com/repos/betterleaks/betterleaks/releases/latest \
-    | jq -r '.tag_name'
+# Query the Go module proxy for the latest release
+curl -s https://proxy.golang.org/github.com/zricethezav/gitleaks/v8/@latest | jq -r '.Version'
 ```
 
-#### Install (Go — recommended, produces a static binary)
+#### Install (Go — recommended, produces a static binary with `CGO_ENABLED=0`)
 ```bash
-go install github.com/betterleaks/betterleaks@latest
-sudo cp ~/go/bin/betterleaks /usr/local/bin/betterleaks
+go install github.com/zricethezav/gitleaks/v8@latest
+sudo cp ~/go/bin/gitleaks /usr/local/bin/gitleaks
 ```
+Use the module path exactly as written: it is the one declared in gitleaks' `go.mod`,
+and `go install` refuses `github.com/gitleaks/gitleaks/v8`. v8.30.1 needs Go 1.24.11 or
+newer; a Go 1.21+ toolchain downloads the newer one on its own.
 
 #### Install (Homebrew — macOS / Linux with brew)
 ```bash
-brew install betterleaks
-```
-
-#### Install (Fedora / RHEL)
-```bash
-sudo dnf install betterleaks
+brew install gitleaks
 ```
 
 #### Verify installation
 ```bash
-betterleaks --version
-# Expected output: betterleaks version x.y.z
+gitleaks version
+# A release build prints its version. A build made with `go install` prints:
+#   version is set by build process
 ```
 
 #### Offline operation
-betterleaks has **no external database** — all detection rules are embedded in the binary. Once installed, it works fully offline.
+gitleaks has **no external database** — all detection rules are embedded in the binary. Once installed, it works fully offline.
 
 #### Functional test
 ```bash
-# Create a test file with a fake secret
-mkdir /tmp/bl-test
-echo 'AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"' \
-    > /tmp/bl-test/config.py
+# Create a test file with a fake AWS access key id. It is assembled at run time so
+# that this document never holds a contiguous token for a secret scanner to flag.
+mkdir /tmp/gl-test
+printf 'aws_access_key_id = "AKIA%s"\n' "QYLPMN5HHHFPZAM2" > /tmp/gl-test/config.py
 
-betterleaks dir /tmp/bl-test -v
-# Expected: non-zero exit code, finding reported for config.py
+gitleaks detect --no-git --source /tmp/gl-test -v
+# Expected: exit code 1, finding reported for config.py
 
 # Clean file — should PASS
-echo 'import os; key = os.environ["AWS_SECRET_ACCESS_KEY"]' \
-    > /tmp/bl-test/config_clean.py
-betterleaks dir /tmp/bl-test/config_clean.py -v
+echo 'import os; key = os.environ["AWS_ACCESS_KEY_ID"]' \
+    > /tmp/gl-test/config_clean.py
+gitleaks detect --no-git --source /tmp/gl-test/config_clean.py -v
 # Expected: exit code 0
 
-rm -rf /tmp/bl-test
+rm -rf /tmp/gl-test
 ```
+
+AWS's own documentation key (`AKIAIOSFODNN7EXAMPLE`) is deliberately allowlisted by gitleaks and
+by the pipeline, so it is not a usable test value.
 
 ---
 
 ### 6.2 detect-secrets — Entropy Scanning (Layer 1) {#detect-secrets}
 
-**What it does:** complements betterleaks with Shannon entropy analysis and regex-based patterns to find high-entropy strings that look like secrets.
+**What it does:** complements gitleaks with Shannon entropy analysis and regex-based patterns to find high-entropy strings that look like secrets.
 
 #### Find the latest version
 ```bash
@@ -1459,7 +1460,7 @@ python3 -c "import reportlab" 2>/dev/null \
 
 echo ""
 echo "=== Layer 1 — Secrets & AV ==="
-check "betterleaks"     betterleaks
+check "gitleaks"        gitleaks
 check "detect-secrets"  detect-secrets
 check "ClamAV"          clamscan
 check "YARA"            yara
@@ -1518,13 +1519,15 @@ result, which looks exactly like a clean one. Full walkthrough: §2, Stage C.
 
 ## 11. Air-Gapped Operation {#offline}
 
-The pipeline supports fully disconnected operation through `--offline`. This
-section is the reference for what each tool needs in that mode.
+`scan_pipeline.sh` has **no online mode**: the scan layers always run disconnected, on
+locally staged data. `ai_transit.sh --offline` therefore only decides whether a remote
+URL may be fetched (it is refused). This section is the reference for what each tool
+needs.
 
-### 11.1 Why `--offline` is required, and not merely advisable
+### 11.1 Why the scan is offline-only
 
 Several scanners reach the network at **scan** time, not just at install time.
-Without `--offline` on an isolated host those calls are still attempted. They do
+Allowed to go online on an isolated host, those calls are still attempted. They do
 not crash the run — each is individually guarded — but they block on DNS and TCP
 timeouts and then return nothing.
 
@@ -1532,10 +1535,16 @@ The consequence is worse than slowness. Layer 2 (OWASP/CWE) and Layer 3 (CVE)
 contribute no findings, while the report still presents them as having run. The
 verdict can be **PASS on a repository that was never meaningfully scanned**.
 
-`--offline` changes that: each tool is pointed at locally staged data and given
+Offline operation changes that: each tool is pointed at locally staged data and given
 the flags that suppress update attempts and telemetry, and any layer that
 genuinely cannot run is recorded as an explicit `OFFLINE:` warning naming what
-did not execute. A silent gap becomes a stated one.
+did not execute. A silent gap becomes a stated one. A caller that sets
+`OFFLINE=false` gets a warning and an offline scan.
+
+**Layers 3 and 6 are switched off by default.** Dependency CVE scanning (layer 3) and
+ScanCode licences (layer 6) are skipped unless `RUN_SCA=true` / `RUN_SCANCODE=true` is set.
+The report records each as `skipped:disabled`, so `coverage_complete` is false until
+they are enabled: a layer that did not run must not read as one that found nothing.
 
 ```bash
 export OFFLINE_CACHE=/opt/ai-transit/offline-cache
@@ -1556,7 +1565,7 @@ tool; nothing to stage, no flags required.
 
 | Tool | Layer | Notes |
 |------|-------|-------|
-| betterleaks | L1 | Detection rules embedded in the binary |
+| gitleaks | L1 | Detection rules embedded in the binary |
 | detect-secrets | L1 | Entropy and regex rules embedded |
 | YARA | L1 | Reads your own `.yar` files from `$WORK_DIR/yara-rules/` |
 | grep built-ins | L4 | CWE-798/22/918/327/338 patterns, entirely local |
@@ -2439,7 +2448,7 @@ examined", and offline that distinction is easy to lose.
 
 ```json
 "coverage": {
-  "L1_secrets_betterleaks": "ran",
+  "L1_secrets_gitleaks": "ran",
   "L1_malware":             "skipped:no ClamAV signatures available",
   "L2_owasp_cwe":           "ran",
   "L3_dependency_cve":      "skipped:trivy database not staged for offline use",
@@ -2571,7 +2580,7 @@ It stages four groups:
 |-----------|----------|---------------------|
 | `deb/` | System packages and their dependencies | `apt-get install --download-only` |
 | `wheels/` | Python packages | `pip3 download` |
-| `bin/` | betterleaks, trivy, hadolint | Copied from the build host's `PATH` |
+| `bin/` | gitleaks, trivy, hadolint | Copied from the build host's `PATH` |
 | `pipeline/` | Scripts, tests, documentation | Copied from the repository |
 
 `bin/` is populated from the tools already installed on the build host, so
@@ -2614,7 +2623,7 @@ pip install --no-index --find-links=wheels \
     pip-audit safety semgrep checkov scancode-toolkit
 
 # 3. Binaries
-sudo cp bin/* /usr/local/bin/ && sudo chmod +x /usr/local/bin/{betterleaks,trivy,hadolint}
+sudo cp bin/* /usr/local/bin/ && sudo chmod +x /usr/local/bin/{gitleaks,trivy,hadolint}
 
 # 4. Pipeline
 sudo mkdir -p /opt/ai-transit
@@ -2634,7 +2643,7 @@ network access, hiding the fact that the bundle was incomplete.
 cd /opt/ai-transit
 
 # 1. Which tools actually made it
-for t in betterleaks detect-secrets clamscan yara semgrep trivy \
+for t in gitleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
@@ -2730,12 +2739,13 @@ mkdir -p /tmp/fail-secret
 
 cat > /tmp/fail-secret/config.py << 'EOF'
 # Bad practice: hardcoded credential
-AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
-AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 EOF
+# The key is assembled at run time, so this document never holds a contiguous token.
+# (AWS's documentation key, AKIAIOSFODNN7EXAMPLE, is allowlisted by every scanner.)
+printf 'AWS_ACCESS_KEY_ID = "AKIA%s"\n' "QYLPMN5HHHFPZAM2" >> /tmp/fail-secret/config.py
 
 ./ai_transit.sh /tmp/fail-secret
-# Expected: FAIL — betterleaks or detect-secrets detects the AWS keys
+# Expected: FAIL — gitleaks and the known-credential-format rule (CWE-798) both detect the AWS key
 # Files moved to /opt/ai-transit/quarantine/
 
 rm -rf /tmp/fail-secret
@@ -3005,7 +3015,7 @@ tmpfs /opt/ai-transit/quarantine tmpfs rw,noexec,nosuid,nodev,size=2G 0 0
 freshclam
 trivy image --download-db-only
 source /opt/ai-transit/venv/bin/activate
-pip install --upgrade betterleaks detect-secrets semgrep bandit \
+pip install --upgrade detect-secrets semgrep bandit \
     pip-audit safety checkov scancode-toolkit
 ```
 
@@ -3027,7 +3037,7 @@ pip install --upgrade betterleaks detect-secrets semgrep bandit \
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| `betterleaks: command not found` | Binary not in PATH | `sudo cp ~/go/bin/betterleaks /usr/local/bin/` |
+| `gitleaks: command not found` | Binary not in PATH | `sudo cp ~/go/bin/gitleaks /usr/local/bin/` |
 | `freshclam: connect refused` | clamav-freshclam not running | `sudo systemctl start clamav-freshclam` |
 | `semgrep: network error` | No internet — first run | Pre-download rules (see §11) |
 | `trivy: DB not found` | First run without internet | `trivy image --download-db-only` |
@@ -3145,7 +3155,7 @@ pin; update `ARG TRIVY_VERSION` / `ARG TRIVY_SHA256` accordingly.
 
 ## 19. Docker Image — Build Arguments & Integrity {#docker-build}
 
-The image is a two-stage build: a `builder` stage compiles betterleaks with Go,
+The image is a two-stage build: a `builder` stage compiles gitleaks with Go,
 and the runtime stage copies only the resulting binary, so the Go toolchain never
 reaches the final image. It runs as the non-root user `transit`.
 
@@ -3157,7 +3167,7 @@ reaches the final image. It runs as the non-root user `transit`.
 | `TRIVY_SHA256` | _(empty)_ | SHA-256 of the trivy tarball; empty disables verification |
 | `HADOLINT_VERSION` | `2.12.0` | hadolint release to install |
 | `HADOLINT_SHA256` | `56de6d5e…` | SHA-256 of the hadolint binary (verified) |
-| `BETTERLEAKS_VERSION` | `0.1.0` | betterleaks module version |
+| `GITLEAKS_VERSION` | `8.30.1` | gitleaks module version |
 
 ```bash
 docker build -t ai-transit:latest \
@@ -3215,9 +3225,9 @@ pip install --upgrade pip
 pip install openpyxl reportlab detect-secrets bandit pip-audit safety \
     semgrep checkov scancode-toolkit
 
-# Step 3: betterleaks
-go install github.com/betterleaks/betterleaks@latest
-sudo cp ~/go/bin/betterleaks /usr/local/bin/betterleaks
+# Step 3: gitleaks
+go install github.com/zricethezav/gitleaks/v8@latest
+sudo cp ~/go/bin/gitleaks /usr/local/bin/gitleaks
 
 # Step 4: trivy
 curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \

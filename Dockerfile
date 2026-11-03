@@ -3,23 +3,21 @@
 ##
 ## Build args (override to pin different versions):
 ##   --build-arg TRIVY_VERSION=0.58.2
-##   --build-arg BETTERLEAKS_VERSION=0.1.0
+##   --build-arg GITLEAKS_VERSION=8.30.1
 ##   --build-arg HADOLINT_VERSION=2.12.0
 
-# ── Stage 1: builder — compile betterleaks (Go binary) ────────────────────────
-FROM ubuntu:22.04 AS builder
+# ── Stage 1: builder — compile gitleaks (Go binary) ───────────────────────────
+# gitleaks v8.30.1 needs Go 1.24.11 or newer (its go.mod), which Ubuntu 22.04's
+# golang-go package (1.18) is far too old for, so the builder is the Go image.
+# CGO_ENABLED=0 gives a static binary: the runtime stage is a different distribution
+# from this one, and a dynamically linked binary would depend on this one's libc.
+# The module path is the one declared in gitleaks' go.mod, zricethezav/gitleaks/v8.
+FROM golang:1.24-bookworm AS builder
 
-ARG BETTERLEAKS_VERSION=0.1.0
+ARG GITLEAKS_VERSION=8.30.1
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    golang-go \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN go install github.com/betterleaks/betterleaks@v${BETTERLEAKS_VERSION} \
-    && cp /root/go/bin/betterleaks /usr/local/bin/betterleaks
+RUN CGO_ENABLED=0 go install github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERSION} \
+    && cp /go/bin/gitleaks /usr/local/bin/gitleaks
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM ubuntu:22.04
@@ -63,8 +61,8 @@ RUN pip3 install --no-cache-dir \
     checkov \
     scancode-toolkit
 
-# ── betterleaks (pre-built binary from builder stage) ─────────────────────────
-COPY --from=builder /usr/local/bin/betterleaks /usr/local/bin/betterleaks
+# ── gitleaks (pre-built binary from builder stage) ────────────────────────────
+COPY --from=builder /usr/local/bin/gitleaks /usr/local/bin/gitleaks
 
 # ── trivy (pinned version + integrity check) ──────────────────────────────────
 # A pinned version alone only defends against "wrong version", not "wrong

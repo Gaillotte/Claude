@@ -433,7 +433,7 @@ UNKNOWN_SHEBANG = [
 ]
 
 LAYERS = [
-    ("L1", "Global", "Whole directory", "betterleaks · detect-secrets · ClamAV · YARA"),
+    ("L1", "Global", "Whole directory", "gitleaks · detect-secrets · ClamAV · YARA"),
     ("L2", "Semgrep", "Whole directory", "p/owasp-top-ten · p/cwe-top-25 · p/security-audit · p/secrets"),
     ("L3", "Dependencies", "Manifests", "trivy · pip-audit · safety · npm audit"),
     ("L4", "Universal patterns", "EVERY file", "Credentials · 18 known token formats · PEM keys · traversal · SSRF · weak crypto / PRNG"),
@@ -601,7 +601,7 @@ def render() -> None:
             x += w + 8
         return x
 
-    EVERY = ("Also applied to every file: L1 betterleaks · detect-secrets · ClamAV · YARA   |   L2 Semgrep   |   "
+    EVERY = ("Also applied to every file: L1 gitleaks · detect-secrets · ClamAV · YARA   |   L2 Semgrep   |   "
              "L4 universal patterns (credentials, key material, traversal, SSRF, weak crypto)   |   L6 ScanCode")
 
     # ── slide numbers are needed by the index before the slides exist ─────────
@@ -719,7 +719,7 @@ def render() -> None:
     x2 = 36 + col_w + 20
     rect(x2, bottom, col_w, top - bottom, GRN_BG, EDGE, 8)
     txt("STILL APPLIED", x2 + 14, top - 24, 13, FB, GRN)
-    bullets(["L1  betterleaks, detect-secrets, ClamAV and YARA — whole directory",
+    bullets(["L1  gitleaks, detect-secrets, ClamAV and YARA — whole directory",
              "L2  Semgrep rulesets — whole directory",
              "L4  universal patterns on this very file: hardcoded credentials, the 18 known token formats, PEM private keys, path traversal in three contexts, SSRF, weak crypto and PRNG, debug artefacts, logging suppression",
              "L6  ScanCode licences and CVEs",

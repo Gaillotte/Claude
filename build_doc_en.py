@@ -2596,7 +2596,7 @@ add_table_header(t, ["Group", "Tools", "Offline behaviour"])
 set_col_widths(t, [3.5, 6, 8])
 rows = [
     ("No preparation",
-     "betterleaks, detect-secrets, YARA, pattern rules, Bandit, ShellCheck, "
+     "gitleaks, detect-secrets, YARA, pattern rules, Bandit, ShellCheck, "
      "cppcheck, hadolint",
      "Fully functional; rules are local"),
     ("Requires staged data",

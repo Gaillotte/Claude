@@ -30,11 +30,13 @@ GITHUB_TOKEN=ghp_... ./ai_transit.sh https://github.com/org/private-repo
 ./docker-run.sh --build                              # build image once
 ./docker-run.sh https://github.com/org/repo [branch]
 
-# Scan pipeline only (already-fetched directory)
+# Scan pipeline only (already-fetched directory). The report directory and a name are optional:
+# with them the reports are <report_dir>/report_scan_<name>.json and .html
 WORK_DIR=/opt/ai-transit bash scan_pipeline.sh /path/to/fetched/repo
+WORK_DIR=/opt/ai-transit bash scan_pipeline.sh /path/to/repo /path/to/reports nightly
 ```
 
-Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantine/` + JSON + HTML reports in `$WORK_DIR/reports/`.
+Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantine/` + JSON + HTML reports in `$WORK_DIR/reports/`. `scan_pipeline.sh` itself exits 1 unless the verdict is PASS (`ai_transit.sh` reads the verdict from a sidecar file and tolerates that).
 
 ## Key environment variables
 
@@ -47,7 +49,8 @@ Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantin
 | `MIN_SEVERITY` | `high` | Minimum severity to FAIL (`low\|medium\|high\|critical`) |
 | `VERBOSITY` | `normal` | Log verbosity (`quiet\|normal\|verbose`) |
 | `SINCE_COMMIT` | _(unset)_ | Diff mode: only scan files changed since this commit SHA |
-| `OFFLINE` | `false` | Air-gapped: no scanner attempts a network call |
+| `OFFLINE` | `true` (forced) | `scan_pipeline.sh` has no online mode: no scanner attempts a network call, and `OFFLINE=false` is ignored with a warning. `ai_transit.sh --offline` only governs fetching |
+| `RUN_SCA`, `RUN_SCANCODE` | `false`, `false` | Layer 3 (dependency CVEs) and layer 6 (ScanCode) are off by default; `true` turns each back on. A disabled layer is recorded as `skipped:disabled` in the coverage block |
 | `OFFLINE_CACHE` | `$WORK_DIR/offline-cache` | Staged Semgrep rules, trivy DB, ClamAV signatures |
 | `JAR_MAX_ENTRIES`, `JAR_READ_BUDGET_MB`, `JAR_VIEW_MB`, `JAR_MAX_UNCOMPRESSED_MB`, `JAR_TIME_BUDGET_S` | `50000`, `64`, `32`, `1024`, `90` | Limits of the Java archive scanner; each one reached is reported (see "Java archives") |
 | `OFFICE_MAX_ENTRIES`, `OFFICE_READ_BUDGET_MB`, `OFFICE_TIME_BUDGET_S` | `20000`, `256`, `90` | Limits of the office-document scanner; each one reached is reported (see "Office documents") |
@@ -107,7 +110,7 @@ ai_transit.sh          ← orchestrator: flag parsing, phase 1 → fetch, phase 
 generate_excel_report.py  ← report_<ts>.json → .xlsx (Summary / Files / Findings tabs)
 selfcheck.py              ← self-check integrity report → PDF/JSON report (7 checks)
 docker-run.sh             ← Docker wrapper; auto-builds; forwards env vars to container
-Dockerfile                ← multi-stage image (builder: Go/betterleaks; runtime: 16 tools)
+Dockerfile                ← multi-stage image (builder: Go/gitleaks; runtime: 16 tools)
 ```
 
 ## scan_pipeline.sh internals
@@ -116,12 +119,12 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 
 | Layer | Function region | Tools |
 |-------|----------------|-------|
-| L1 | `~line 75–360` | betterleaks, detect-secrets, ClamAV, YARA |
+| L1 | `~line 75–360` | gitleaks, detect-secrets, ClamAV, YARA |
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
-| L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit |
+| L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit — off by default (`RUN_SCA=true`) |
 | L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09), plus known credential formats (18 providers) |
 | L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_bat** (bat/cmd), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_jar** (jar/war/ear/aar — structure, constant pools, wrapper shape), **scan_office** (docx/xlsx/pptx and macro/template variants, doc/xls/ppt, odt/ods/odp and flat/template variants, rtf — macros, DDE, remote relationships, embedded objects), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
-| L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL |
+| L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL — off by default (`RUN_SCANCODE=true`) |
 
 **Verdict helpers:**
 - `record_pass file` / `record_warn file msg` / `record_fail file msg`
@@ -135,12 +138,12 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 
 ## Air-gapped operation
 
-`--offline` exists because several scanners fetch at **scan** time (semgrep pulls
-rulesets, trivy downloads a CVE database, pip-audit/safety/npm audit query advisory
-services, ScanCode's `--vulnerability` queries VulnerableCode). Without it on an
-isolated host those calls block on timeouts and return nothing, so L2 and L3 quietly
-contribute no findings while the report still shows them as having run — a PASS that
-means very little.
+`scan_pipeline.sh` has no online mode because several scanners fetch at **scan** time
+(semgrep pulls rulesets, trivy downloads a CVE database, pip-audit/safety/npm audit
+query advisory services, ScanCode's `--vulnerability` queries VulnerableCode). Allowed
+online on an isolated host, those calls block on timeouts and return nothing, so L2 and
+L3 quietly contribute no findings while the report still shows them as having run — a
+PASS that means very little. `OFFLINE` was opt-in (`--offline`); it is now always true.
 
 Two separate bundles, with different lifetimes: `prepare_offline_install.sh` stages
 the **software** (apt packages, Python wheels, binaries, scripts — rebuild only when a
@@ -152,7 +155,7 @@ scanning. `verify_offline_install.sh` is the final acceptance step: it checks ea
 tool individually before running the pipeline, because a tool that cannot work
 offline yields an empty result that looks exactly like a clean one.
 
-`--offline` points each tool at staged data (`prepare_offline_cache.sh` builds it),
+The scan points each tool at staged data (`prepare_offline_cache.sh` builds it),
 passes update-suppressing flags, and records an explicit `OFFLINE:` warning for any
 layer that could not run. pip-audit, safety, npm audit and ScanCode's CVE lookup have
 no offline mode at all; the staged trivy database is the only offline CVE coverage.
@@ -162,7 +165,16 @@ including the acceptance gate: OFFLINE_RUNBOOK.md.
 The JSON report carries a `coverage` block naming, per layer, whether it ran, plus
 `coverage_complete` and `coverage_gaps`. A verdict alone cannot distinguish "clean"
 from "nothing was examined" — automated consumers should gate on coverage, not on
-the verdict.
+the verdict. Layers 3 and 6 are off by default and appear there as `skipped:disabled`,
+so `coverage_complete` is false until `RUN_SCA` / `RUN_SCANCODE` are set.
+
+Other report fields: `decision` (`APPROVED` for a PASS, else `REJECTED`) with
+`status_color` / `status_background`, `scan_name`, and `source` (`directory`, `sha256`).
+`findings` is a **list of records**, one per FAIL (`tool`, `category`, `severity`, `rule_id`,
+`rule_name`, `file`, `line`, `message`, `references`), written as JSON lines while the scan
+runs (`_emit_finding`) and folded in at the end; the per-file dictionary `findings` used to
+be is now `findings_by_file`. A finding about the whole directory (gitleaks, ClamAV) has
+`file` `.`.
 
 ## WARN vs FAIL semantics
 

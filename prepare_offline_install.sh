@@ -92,7 +92,7 @@ fi
 
 # ── 3. Standalone binaries ────────────────────────────────────────────────────
 info "[3/5] Standalone binaries"
-for tool in betterleaks trivy hadolint; do
+for tool in gitleaks trivy hadolint; do
     if has_cmd "$tool"; then
         cp "$(command -v "$tool")" "${BUNDLE}/bin/" 2>/dev/null \
             && ok "  ${tool} copied from $(command -v "$tool")" \
