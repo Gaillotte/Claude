@@ -133,8 +133,11 @@ else
     skip "semgrep" "not installed"
 fi
 
-# trivy: must scan using the staged DB with every update path disabled.
-if has_cmd trivy; then
+# trivy: must scan using the staged DB with every update path disabled. Layer 3 is switched
+# off unless RUN_SCA=true, in which case there is nothing for trivy to be checked against.
+if [[ "${RUN_SCA:-false}" != "true" ]]; then
+    skip "trivy" "layer 3 is disabled (RUN_SCA is not true)"
+elif has_cmd trivy; then
     if [[ -d "$TRIVY_CACHE_DIR" ]] && compgen -G "${TRIVY_CACHE_DIR}/db/*" >/dev/null 2>&1; then
         if run_t 240 "trivy fs --quiet --exit-code 0 --format json \
                        --skip-db-update --skip-java-db-update --offline-scan \
@@ -173,7 +176,9 @@ fi
 
 check_simple checkov "checkov -f '${SCRATCH}/Dockerfile' --quiet --skip-download; true"
 
-if has_cmd scancode; then
+if [[ "${RUN_SCANCODE:-false}" != "true" ]]; then
+    skip "scancode" "layer 6 is disabled (RUN_SCANCODE is not true)"
+elif has_cmd scancode; then
     if run_t 300 "scancode --license --copyright --json-pp '${SCRATCH}/sc.json' --quiet --timeout 60 '${SCRATCH}'"; then
         pass "scancode detects licences offline (CVE lookup correctly omitted)"
     else
@@ -229,13 +234,14 @@ for layer, state in sorted(d.get("coverage", {}).items()):
 PY
     echo
     # The layers a verdict actually rests on. Layer 3 (dependency CVEs) is switched off
-    # unless RUN_SCA=true, so it is required only when it was asked to run.
+    # unless RUN_SCA=true. The gate reads the report, not the environment: layer 3 is required
+    # unless the report says it was disabled, so an enabled layer that could not run still fails.
     GAPS=$(python3 - "$REPORT" <<'PY'
 import json, os, sys
-REQUIRED = ["L1_secrets_gitleaks","L1_malware","L2_owasp_cwe","L5_per_language_sast"]
-if os.environ.get("RUN_SCA") == "true":
-    REQUIRED.insert(3, "L3_dependency_cve")
+REQUIRED = ["L1_secrets_gitleaks","L1_malware","L2_owasp_cwe","L3_dependency_cve","L5_per_language_sast"]
 cov = json.load(open(sys.argv[1])).get("coverage", {})
+# A layer the report records as deliberately disabled is not a gap in the installation.
+REQUIRED = [l for l in REQUIRED if not cov.get(l, "").startswith("skipped:disabled")]
 print(" ".join(l for l in REQUIRED if not cov.get(l,"missing").startswith("ran")))
 PY
 )

@@ -89,9 +89,19 @@ fi
 # Variables from the host shell are automatically propagated when set.
 DOCKER_ENV_ARGS=(-e OUTPUT_DIR=/output)
 for _var in WORK_DIR MAX_SIZE_MB MIN_SEVERITY VERBOSITY GITHUB_TOKEN SINCE_COMMIT \
-             OFFLINE OFFLINE_CACHE SEMGREP_RULES_DIR TRIVY_CACHE_DIR CLAMAV_DB_DIR; do
+             OFFLINE RUN_SCA RUN_SCANCODE SEMGREP_RULES_DIR TRIVY_CACHE_DIR CLAMAV_DB_DIR; do
     [[ -n "${!_var:-}" ]] && DOCKER_ENV_ARGS+=(-e "${_var}=${!_var}")
 done
+
+# The offline cache (Semgrep rules, trivy database, ClamAV signatures) lives on the host, and
+# the scan is always offline, so without it layer 2 cannot run. Mount it read-only and point
+# the container at the mount point; a host path would mean nothing inside the container.
+CACHE_MOUNT=()
+if [[ -n "${OFFLINE_CACHE:-}" ]]; then
+    [[ -d "$OFFLINE_CACHE" ]] || die "OFFLINE_CACHE is not a directory: $OFFLINE_CACHE"
+    CACHE_MOUNT=(-v "$(realpath "$OFFLINE_CACHE"):/offline-cache:ro")
+    DOCKER_ENV_ARGS+=(-e OFFLINE_CACHE=/offline-cache)
+fi
 
 # ── Decide: remote URL or local path ─────────────────────────────────────────
 DOCKER_ARGS=()
@@ -105,6 +115,7 @@ if [[ "$REPO_INPUT" =~ ^https?:// ]]; then
     info "Scanning remote repo : $REPO_INPUT"
     docker run --rm \
         -v "${OUTPUT_DIR}:/output" \
+        ${CACHE_MOUNT[@]+"${CACHE_MOUNT[@]}"} \
         "${DOCKER_ENV_ARGS[@]}" \
         "$IMAGE" "${DOCKER_ARGS[@]}" || EXIT_CODE=$?
 else
@@ -122,6 +133,7 @@ else
     docker run --rm \
         -v "${OUTPUT_DIR}:/output" \
         -v "${LOCAL_PATH}:${CONTAINER_PATH}:ro" \
+        ${CACHE_MOUNT[@]+"${CACHE_MOUNT[@]}"} \
         "${DOCKER_ENV_ARGS[@]}" \
         "$IMAGE" "${DOCKER_ARGS[@]}" || EXIT_CODE=$?
 fi

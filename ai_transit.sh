@@ -123,7 +123,7 @@ ok "Repository available: $FETCH_DIR"
 # scan_pipeline.sh has no online mode: its layers always run on staged data, whatever
 # --offline says about fetching.
 SCAN_OUTPUT=$(REPO_INPUT="$REPO_INPUT" WORK_DIR="$WORK_DIR" VERBOSITY="$VERBOSITY" \
-    MIN_SEVERITY="$MIN_SEVERITY" OFFLINE=true \
+    MIN_SEVERITY="$MIN_SEVERITY" OFFLINE=true SINCE_COMMIT="$SINCE_COMMIT" \
     bash "${SCRIPT_DIR}/scan_pipeline.sh" "$FETCH_DIR" 2>&1) || true
 
 # Read verdict and report path from sidecar files written by scan_pipeline.sh.
