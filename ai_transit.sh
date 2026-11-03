@@ -10,7 +10,7 @@ VERBOSITY="normal"    # quiet | normal | verbose
 MIN_SEVERITY="high"   # low | medium | high | critical
 SINCE_COMMIT=""       # diff mode: only scan files changed since this commit SHA
 REPORT_ONLY=false     # when true: always exit 0 even on FAIL (observation mode)
-OFFLINE=false         # when true: no scanner attempts any network call
+OFFLINE=false         # when true: refuse remote URLs (air-gapped host). The scan itself is always offline
 MAKE_ZIP=true         # when false: skip archive creation (CI: reports only)
 MAKE_EXCEL=true       # when false: skip Excel report generation
 
@@ -120,8 +120,10 @@ ok "Repository available: $FETCH_DIR"
 
 # ── Phase 2: Security scan ────────────────────────────────────────────────────
 [[ "$VERBOSITY" != "quiet" ]] && echo -e "${BOLD}── Phase 2: Security scan ──────────────────────${RESET}" || true
+# scan_pipeline.sh has no online mode: its layers always run on staged data, whatever
+# --offline says about fetching.
 SCAN_OUTPUT=$(REPO_INPUT="$REPO_INPUT" WORK_DIR="$WORK_DIR" VERBOSITY="$VERBOSITY" \
-    MIN_SEVERITY="$MIN_SEVERITY" OFFLINE="$OFFLINE" \
+    MIN_SEVERITY="$MIN_SEVERITY" OFFLINE=true \
     bash "${SCRIPT_DIR}/scan_pipeline.sh" "$FETCH_DIR" 2>&1) || true
 
 # Read verdict and report path from sidecar files written by scan_pipeline.sh.
@@ -231,7 +233,7 @@ else
               "  Fail    : " + (.summary.fail | tostring),
               "",
               "  Findings:",
-              (.findings | to_entries[] | "    - " + .key + " → " + .value)
+              ((.findings_by_file // {}) | to_entries[] | "    - " + .key + " → " + .value)
             ' "$LATEST_REPORT" | tr '\001-\011\013-\037\177' '?' >&2
         else
             tr '\001-\011\013-\037\177' '?' < "$LATEST_REPORT" >&2

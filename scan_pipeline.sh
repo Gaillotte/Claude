@@ -47,30 +47,55 @@ has_cmd() { command -v "$1" &>/dev/null; }
 declare -A LAYER_COVERAGE
 record_layer() { LAYER_COVERAGE["$1"]="$2"; }   # "ran" | "skipped:<reason>"
 
-# ── Argument ─────────────────────────────────────────────────────────────────
-if [[ $# -lt 1 ]]; then
-    fail "Usage: $0 <directory_to_scan>  [VERBOSITY=quiet|normal|verbose]"
+# ── Arguments ────────────────────────────────────────────────────────────────
+#   scan_pipeline.sh <directory_to_scan> [directory_for_report] [scanning_name]
+# The two optional arguments choose where the reports are written and what they are
+# called: <directory_for_report>/report_scan_<scanning_name>.json and .html. Without
+# them the reports go to ${WORK_DIR}/reports/report_<timestamp>.*, which is where
+# ai_transit.sh looks. Words that start with -- (callers have passed --quiet) are not
+# positional arguments and are ignored.
+_POS=()
+for _a in "$@"; do
+    [[ "$_a" == --* ]] || _POS+=("$_a")
+done
+if [[ ${#_POS[@]} -lt 1 ]]; then
+    fail "Usage: $0 <directory_to_scan> [directory_for_report] [scanning_name]  [VERBOSITY=quiet|normal|verbose]"
 fi
 
-SCAN_DIR="$1"
+SCAN_DIR="${_POS[0]}"
 [[ -d "$SCAN_DIR" ]] || fail "Directory not found: $SCAN_DIR"
 
-# ── Offline / air-gapped operation ───────────────────────────────────────────
+REPORT_DIR="${_POS[1]:-}"
+if [[ -n "$REPORT_DIR" ]]; then
+    [[ -d "$REPORT_DIR" ]] || fail "Directory not found: $REPORT_DIR"
+fi
+
+# The name becomes part of a file name, so it must not be able to leave REPORT_DIR.
+SCANNING_NAME="${_POS[2]:-}"
+[[ "$SCANNING_NAME" != */* ]] || fail "scanning_name must not contain '/': $SCANNING_NAME"
+SCANNING_NAME="${SCANNING_NAME:-$TIMESTAMP}"
+
+# ── Offline operation — the only mode ────────────────────────────────────────
 # Several scanners reach out to the network at SCAN time, not just install time:
 # semgrep fetches rulesets from its registry, trivy downloads a vulnerability
 # database, pip-audit/safety/npm audit query advisory services, and ScanCode's
 # --vulnerability option queries VulnerableCode.
 #
-# Without OFFLINE=true those calls are still attempted on an isolated host. They
-# do not crash the run (each is guarded), but they block on DNS and TCP timeouts
-# and then yield nothing — so Layer 2 and Layer 3 quietly contribute no findings
-# while the report still presents them as having run. A PASS produced that way
-# means very little, which is the dangerous part.
+# Online, those calls are still attempted on an isolated host. They do not crash
+# the run (each is guarded), but they block on DNS and TCP timeouts and then yield
+# nothing — so Layer 2 and Layer 3 quietly contribute no findings while the report
+# still presents them as having run. A PASS produced that way means very little,
+# which is the dangerous part.
 #
-# OFFLINE=true instead: points each tool at locally staged data, passes the
-# flags that suppress update attempts and telemetry, and records an explicit
-# WARN naming any layer that genuinely cannot run without a network.
-OFFLINE="${OFFLINE:-false}"
+# This scanner therefore has no online mode. OFFLINE is always true: each tool is
+# pointed at locally staged data, the flags that suppress update attempts and
+# telemetry are passed, and an explicit WARN names any layer that genuinely cannot
+# run without a network. It used to be opt-in; a caller that still asks for
+# OFFLINE=false gets a warning and offline operation.
+if [[ "${OFFLINE:-true}" != "true" ]]; then
+    warn "OFFLINE=${OFFLINE} ignored: scan_pipeline.sh has no online mode"
+fi
+OFFLINE=true
 
 # Locations of pre-staged offline assets (see INSTALL.md §10).
 OFFLINE_CACHE="${OFFLINE_CACHE:-${WORK_DIR}/offline-cache}"
@@ -173,8 +198,25 @@ FAIL_COUNT=0
 mkdir -p "${WORK_DIR}/reports" "${WORK_DIR}/quarantine" "${WORK_DIR}/approved"
 chmod 700 "${WORK_DIR}/quarantine"
 
-REPORT_JSON="${WORK_DIR}/reports/report_${TIMESTAMP}.json"
-REPORT_HTML="${WORK_DIR}/reports/report_${TIMESTAMP}.html"
+if [[ -n "$REPORT_DIR" ]]; then
+    REPORT_JSON="${REPORT_DIR}/report_scan_${SCANNING_NAME}.json"
+    REPORT_HTML="${REPORT_DIR}/report_scan_${SCANNING_NAME}.html"
+else
+    REPORT_JSON="${WORK_DIR}/reports/report_${TIMESTAMP}.json"
+    REPORT_HTML="${WORK_DIR}/reports/report_${TIMESTAMP}.html"
+fi
+
+# Structured findings, one JSON object per line; folded into the JSON report at the
+# end. A temporary file, removed on exit.
+FINDINGS_JL=$(mktemp "${WORK_DIR}/findings_XXXXXX.jsonl")
+trap 'rm -f "$FINDINGS_JL"' EXIT
+
+# Layers 3 (dependency CVEs) and 6 (ScanCode) are off in this deployment. They are
+# recorded as skipped in the coverage block rather than left out of it: a layer that
+# did not run must not read as one that found nothing. RUN_SCA=true / RUN_SCANCODE=true
+# turn them back on.
+RUN_SCA="${RUN_SCA:-false}"
+RUN_SCANCODE="${RUN_SCANCODE:-false}"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 record_pass() {
@@ -199,6 +241,89 @@ record_warn() {
     # [WARN]/[FAIL] tag: a file's overall status must not be attributed to every
     # individual message (a missing-tool WARN is not a HIGH severity finding).
     FILE_MSG["$file"]+="[WARN] $* | "
+}
+
+# ── Structured finding records ───────────────────────────────────────────────
+# Every FAIL is also written as one JSON object per line to $FINDINGS_JL, so a
+# consumer gets tool, category, severity, rule and location as fields instead of
+# parsing the message. The JSON is built by Python, never by string concatenation:
+# file names and messages come from the scanned repository.
+# Args: tool category severity rule_id rule_name file line column message [references]
+_write_finding() {
+    local tool="$1" category="$2" severity="$3" rule_id="$4" rule_name="$5"
+    local file="$6" line="$7" column="$8" message="$9"
+    shift 9
+    local refs="${*:-}"
+    python3 -c "
+import json, sys
+rec = dict(tool=sys.argv[1], category=sys.argv[2], severity=sys.argv[3],
+           rule_id=sys.argv[4], rule_name=sys.argv[5], file=sys.argv[6],
+           line=int(sys.argv[7]) if sys.argv[7] else None,
+           column=int(sys.argv[8]) if sys.argv[8] else None,
+           message=sys.argv[9],
+           references=sys.argv[10].split(',') if sys.argv[10] else [])
+print(json.dumps(rec, ensure_ascii=False))
+" "$tool" "$category" "$severity" "$rule_id" "$rule_name" "$file" \
+      "$line" "$column" "$message" "$refs" >> "$FINDINGS_JL" 2>/dev/null || true
+}
+
+# Work out the structured fields from the message, whose shape depends on the
+# producer: "tool:detail", "CWE-NNN:description", "semgrep[ruleset]:rule:lineN:SEV:msg".
+_emit_finding() {
+    local file="$1" msg="$2"
+    local tool="" rule_id="" rule_name="" severity="HIGH" category="security"
+    local line="" refs=""
+
+    if [[ "$msg" == semgrep\[* ]]; then
+        tool="semgrep"; category="sast"
+        rule_id="${msg#*]:}"; rule_id="${rule_id%%:*}"
+        # Semgrep reports ERROR / WARNING / INFO; the other layers use HIGH / MEDIUM / LOW.
+        case "$msg" in
+            *:CRITICAL:*)         severity="CRITICAL" ;;
+            *:HIGH:*|*:ERROR:*)   severity="HIGH" ;;
+            *:MEDIUM:*|*:WARNING:*) severity="MEDIUM" ;;
+            *:LOW:*)              severity="LOW" ;;
+            *:INFO:*)             severity="INFO" ;;
+        esac
+        if [[ "$msg" =~ :line([0-9]+): ]]; then line="${BASH_REMATCH[1]}"; fi
+    elif [[ "$msg" == detect-secrets:* ]]; then
+        tool="detect-secrets"; category="secret"; severity="HIGH"
+        rule_id="high_entropy_string"; rule_name="High Entropy String"; refs="CWE-798"
+    elif [[ "$msg" == clamav:* ]]; then
+        tool="clamav"; category="malware"; severity="CRITICAL"
+        rule_id="${msg#clamav:}"; rule_name="Malware Detected"
+    elif [[ "$msg" == gitleaks:* ]]; then
+        tool="gitleaks"; category="secret"; severity="CRITICAL"
+        rule_id="${msg#gitleaks:}"; rule_name="Secret Detected"
+    elif [[ "$msg" == yara:* ]]; then
+        tool="yara"; category="ioc"; severity="HIGH"
+        rule_id="${msg#yara:}"; rule_name="IOC Match"
+    elif [[ "$msg" == bandit:* ]]; then
+        tool="bandit"; category="sast"
+        rule_id="${msg#bandit:*:}"; rule_name="Bandit Finding"
+        [[ "$msg" == *:MEDIUM:* ]] && severity="MEDIUM"
+    elif [[ "$msg" == cppcheck:* ]]; then
+        tool="cppcheck"; category="sast"; severity="MEDIUM"
+        rule_id="${msg#cppcheck:}"; rule_name="Cppcheck Finding"
+    elif [[ "$msg" == shellcheck:* ]]; then
+        tool="shellcheck"; category="sast"; severity="HIGH"
+        rule_id="${msg%%:*}"; rule_name="${msg#*:}"
+    elif [[ "$msg" == CWE-*:* ]]; then
+        tool="grep-pattern"; category="cwe"; severity="HIGH"
+        rule_id="${msg%%:*}"; rule_name="${msg#*:}"; refs="${msg%%:*}"
+    elif [[ "$msg" == OWASP-*:* ]]; then
+        tool="grep-pattern"; category="owasp"; severity="MEDIUM"
+        rule_id="${msg%%:*}"; rule_name="${msg#*:}"
+    fi
+
+    [[ -z "$rule_name" ]] && rule_name="$msg"
+    [[ -z "$tool" ]] && tool="unknown"
+
+    # A finding about the whole directory (gitleaks, ClamAV) has no file: say ".".
+    local rel="${file#"$SCAN_DIR/"}"
+    [[ "$rel" == "$SCAN_DIR" ]] && rel="."
+    _write_finding "$tool" "$category" "$severity" "$rule_id" "$rule_name" \
+                   "$rel" "$line" "" "$msg" "$refs"
 }
 
 record_fail() {
@@ -239,6 +364,7 @@ record_fail() {
         return
     fi
 
+    _emit_finding "$file" "$msg"
     FINDINGS["$file"]+="${msg} | "
     FILE_STATUS["$file"]="FAIL"
     FILE_MSG["$file"]+="[FAIL] ${msg} | "
@@ -347,18 +473,20 @@ KNOWN_CRED_EXCL='EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{
 scan_global() {
     info "=== Layer 1: Global (AV, secrets, IOC) ==="
 
-    if has_cmd betterleaks; then
-        info "betterleaks…"
-        if ! betterleaks dir "$SCAN_DIR" -v 2>/dev/null; then
-            record_fail "$SCAN_DIR" "betterleaks:secrets_detected"
+    if has_cmd gitleaks; then
+        info "gitleaks…"
+        # `detect --no-git --source` is the form every gitleaks v8 release accepts
+        # (newer ones also have `dir`). Exit 0 = nothing found, 1 = leaks found.
+        if ! gitleaks detect --no-git --source "$SCAN_DIR" -v; then
+            record_fail "$SCAN_DIR" "gitleaks:secrets_detected"
         else
             record_pass "$SCAN_DIR"
-            ok "betterleaks: no secrets"
+            ok "gitleaks: no secrets"
         fi
-        record_layer L1_secrets_betterleaks "ran"
+        record_layer L1_secrets_gitleaks "ran"
     else
-        record_warn "__global__" "betterleaks missing — secret scan skipped"
-        record_layer L1_secrets_betterleaks "skipped:betterleaks not installed"
+        record_warn "__global__" "gitleaks missing — secret scan skipped"
+        record_layer L1_secrets_gitleaks "skipped:gitleaks not installed"
     fi
 
     if has_cmd detect-secrets; then
@@ -6249,11 +6377,13 @@ generate_report_json() {
     REPORT_TS="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     REPORT_REPO_INPUT="${REPO_INPUT:-}" \
     REPORT_SCAN_DIR="$SCAN_DIR" \
+    REPORT_SCANNING_NAME="$SCANNING_NAME" \
     REPORT_HASH="$repo_hash" \
     REPORT_PASS="$PASS_COUNT" \
     REPORT_WARN="$WARN_COUNT" \
     REPORT_FAIL="$FAIL_COUNT" \
     REPORT_OUT="$REPORT_JSON" \
+    REPORT_FINDINGS_JL="$FINDINGS_JL" \
     python3 - "$_findings_k" "$_findings_v" "$_status_k" "$_status_s" "$_status_m" \
              "$_cov_k" "$_cov_v" <<'PYEOF'
 import json, os, sys
@@ -6278,13 +6408,26 @@ def _read_nul(path):
         parts.pop()
     return [p.decode("utf-8", errors="replace") for p in parts]
 
+# Structured findings: one JSON object per line, written by _emit_finding.
+records = []
+_fjl = os.environ.get("REPORT_FINDINGS_JL", "")
+if _fjl and os.path.exists(_fjl):
+    with open(_fjl, "r", encoding="utf-8") as fh:
+        for _ln in fh:
+            _ln = _ln.strip()
+            if _ln:
+                try:
+                    records.append(json.loads(_ln))
+                except json.JSONDecodeError:
+                    pass
+
 fk = _read_nul(sys.argv[1]); fv = _read_nul(sys.argv[2])
 sk = _read_nul(sys.argv[3]); ss = _read_nul(sys.argv[4]); sm = _read_nul(sys.argv[5])
 ck = _read_nul(sys.argv[6]); cv = _read_nul(sys.argv[7])
 while len(sm) < len(sk):
     sm.append("")
 
-findings     = dict(zip(fk, fv))
+findings_by_file = dict(zip(fk, fv))
 file_results = {
     k: {"status": s, "message": m.rstrip(" | ")}
     for k, s, m in zip(sk, ss, sm)
@@ -6295,8 +6438,19 @@ coverage = dict(zip(ck, cv))
 # the verdict rests on less analysis than it appears to.
 incomplete = sorted(k for k, v in coverage.items() if not v.startswith("ran"))
 
+# The decision a pipeline stage acts on, with the colours a dashboard shows it in.
+approved = os.environ["REPORT_VERDICT"] == "PASS"
+
 report = {
     "verdict":      os.environ["REPORT_VERDICT"],
+    "decision":     "APPROVED" if approved else "REJECTED",
+    "status_color":      "#198754" if approved else "#B02A37",
+    "status_background": "#D1E7DD" if approved else "#F8D7DA",
+    "scan_name":    os.environ["REPORT_SCANNING_NAME"],
+    "source": {
+        "directory": os.environ["REPORT_SCAN_DIR"],
+        "sha256":    os.environ["REPORT_HASH"],
+    },
     "coverage":           coverage,
     "coverage_complete":  not incomplete,
     "coverage_gaps":      incomplete,
@@ -6311,12 +6465,16 @@ report = {
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
                      "fail": int(os.environ["REPORT_FAIL"])},
-    "findings":     findings,
+    # One record per FAIL (tool, category, severity, rule, file, line, message ...).
+    "findings":     records,
+    # The same FAIL messages grouped by file, which is what "findings" used to be.
+    "findings_by_file": findings_by_file,
     "file_results": file_results,
 }
 
 with open(os.environ["REPORT_OUT"], "w", encoding="utf-8") as fh:
     json.dump(report, fh, ensure_ascii=False, indent=2)
+    fh.write("\n")
 PYEOF
 }
 
@@ -6390,10 +6548,20 @@ info "Standards: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding · SCA"
 
 scan_global             # Layer 1: AV + secrets + IOC
 scan_owasp_cwe          # Layer 2: Semgrep OWASP/CWE rulesets
-scan_dependencies       # Layer 3: SCA — vulnerable dependency CVEs
+if [[ "$RUN_SCA" == "true" ]]; then
+    scan_dependencies   # Layer 3: SCA — vulnerable dependency CVEs
+else
+    info "Layer 3 (dependency CVEs) is disabled — set RUN_SCA=true to run it"
+    record_layer L3_dependency_cve "skipped:disabled (RUN_SCA is not true)"
+fi
                         # Layer 4: universal patterns run inside classify_file()
 scan_by_type            # Layer 5: per-language SAST
-scan_scancode           # Layer 6: licence, copyright & vulnerability (ScanCode)
+if [[ "$RUN_SCANCODE" == "true" ]]; then
+    scan_scancode       # Layer 6: licence, copyright & vulnerability (ScanCode)
+else
+    info "Layer 6 (ScanCode licences) is disabled — set RUN_SCANCODE=true to run it"
+    record_layer L6_licence "skipped:disabled (RUN_SCANCODE is not true)"
+fi
 
 generate_report_json
 generate_report_html
@@ -6405,3 +6573,7 @@ info "HTML report : $REPORT_HTML"
 echo "$GLOBAL_VERDICT" > "${WORK_DIR}/.scan_verdict"
 echo "$REPORT_JSON"    > "${WORK_DIR}/.scan_report_json"
 echo "$GLOBAL_VERDICT"
+
+# A verdict other than PASS is also the exit status, so a CI stage can gate on it.
+# ai_transit.sh reads the verdict from the sidecar file and tolerates this.
+[[ "$GLOBAL_VERDICT" == "PASS" ]] || exit 1
