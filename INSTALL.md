@@ -114,7 +114,7 @@ Condensed, for a fresh Ubuntu 22.04 / 24.04 host:
 sudo apt-get update && sudo apt-get install -y \
     bash git curl ca-certificates wget gpg rsync \
     jq zip unzip file coreutils \
-    python3 python3-pip python3-venv build-essential golang-go \
+    python3 python3-pip python3-venv build-essential \
     nodejs npm shellcheck cppcheck clamav clamav-daemon clamav-freshclam yara
 
 # A3 — virtual environment
@@ -126,8 +126,9 @@ pip install --upgrade pip
 pip install openpyxl reportlab python-docx detect-secrets bandit \
             pip-audit safety semgrep checkov scancode-toolkit
 
-# A4 — Go tool
-go install github.com/zricethezav/gitleaks/v8@latest
+# A4 — Go tool. gitleaks needs Go 1.24.11 or newer: install Go from https://go.dev/dl/
+# (the distribution's golang-go package is far too old on Ubuntu 22.04 and Debian 12)
+CGO_ENABLED=0 go install github.com/zricethezav/gitleaks/v8@latest
 sudo cp ~/go/bin/gitleaks /usr/local/bin/
 
 # A4 — standalone binaries (pin versions; see §19.1 for digests)
@@ -204,13 +205,12 @@ ls -1 clamav/            # expect *.cvd or *.cld
 date -u +%Y-%m-%d > .cache_built_on
 ```
 
-**Make offline the default**, so a later operator who forgets the flag still gets
-offline behaviour instead of a scan that hangs on network timeouts:
+**Set the working directories once.** The scan itself is always offline (there is no
+online mode); `--offline` only makes `ai_transit.sh` refuse a remote URL:
 
 ```bash
 cat >> ~/.bashrc <<'EOF'
 export WORK_DIR=/opt/ai-transit
-export OFFLINE=true
 export OFFLINE_CACHE=/opt/ai-transit/offline-cache
 EOF
 source ~/.bashrc
@@ -331,7 +331,7 @@ sudo apt-get install -y \
     bash git curl ca-certificates wget gpg \
     jq zip unzip file coreutils \
     python3 python3-pip python3-venv \
-    build-essential golang-go \
+    build-essential \
     nodejs npm
 ```
 
@@ -386,7 +386,7 @@ curl -s https://proxy.golang.org/github.com/zricethezav/gitleaks/v8/@latest | jq
 
 #### Install (Go — recommended, produces a static binary with `CGO_ENABLED=0`)
 ```bash
-go install github.com/zricethezav/gitleaks/v8@latest
+CGO_ENABLED=0 go install github.com/zricethezav/gitleaks/v8@latest
 sudo cp ~/go/bin/gitleaks /usr/local/bin/gitleaks
 ```
 Use the module path exactly as written: it is the one declared in gitleaks' `go.mod`,
@@ -1599,8 +1599,9 @@ air-gapped operation worth configuring properly.
 | ScanCode | L6 | Nothing for licence/copyright | `--vulnerability` is **dropped**; licence and copyright detection are local and still run |
 
 **Group C — no offline mode exists.** These query a remote advisory service by
-design and cannot be staged. Under `--offline` they are not attempted, and each
-emits an `OFFLINE:` warning so the gap is on the record.
+design and cannot be staged. The scan is always offline, so they are not attempted
+(layers 3 and 6 are in any case off unless `RUN_SCA=true` / `RUN_SCANCODE=true`), and each
+emits an `OFFLINE:` warning when it would have run, so the gap is on the record.
 
 | Tool | Layer | Why | Mitigation |
 |------|-------|-----|------------|
@@ -1611,7 +1612,8 @@ emits an `OFFLINE:` warning so the gap is on the record.
 | GitHub API size check | fetch | Needs `api.github.com` | Not applicable: `--offline` accepts local paths only |
 
 The single practical consequence: **trivy is the only dependency-CVE coverage
-you have offline.** If its database is not staged, Layer 3 contributes nothing.
+you have offline**, and only when layer 3 is enabled (`RUN_SCA=true`). If its database
+is not staged, Layer 3 contributes nothing.
 
 ### 11.2.1 Build files — `Makefile`, `.mk`, `.mak`
 
@@ -2419,8 +2421,9 @@ cd /opt/ai-transit/offline-cache && sha256sum --check .cache_manifest.sha256
 export OFFLINE_CACHE=/opt/ai-transit/offline-cache
 ./ai_transit.sh --offline /path/to/repo
 
-# Docker (the wrapper forwards OFFLINE and the cache paths)
-OFFLINE=true OFFLINE_CACHE=/opt/ai-transit/offline-cache \
+# Docker: the wrapper mounts OFFLINE_CACHE read-only at /offline-cache in the container.
+# The image stages no Semgrep rules, so layer 2 only runs when the cache is mounted.
+OFFLINE_CACHE=/opt/ai-transit/offline-cache \
   ./docker-run.sh --offline /path/to/repo
 ```
 
@@ -2439,6 +2442,9 @@ grep -o 'OFFLINE:[^|]*' "$WORK_DIR"/reports/report_*.json
 | `trivy database not staged` | No dependency CVE coverage at all | Stage the trivy DB |
 | `ClamAV signature database is empty` | Malware scan found nothing because it had no signatures | Stage `*.cvd` files |
 | `Python/JavaScript dependency CVE scan unavailable` | Expected — see Group C | None; trivy covers this |
+
+The `trivy database not staged` and dependency-CVE warnings only appear when layer 3 is
+enabled (`RUN_SCA=true`); by default it is recorded as `skipped:disabled` instead.
 
 ### 11.8 Coverage — proving the scan actually ran
 
@@ -3057,7 +3063,7 @@ pip install --upgrade detect-secrets semgrep bandit \
 | Diff mode scans everything | `--since` commit unreachable in a shallow clone | The pipeline warns and falls back to a full scan; fetch more history or use a local path |
 | Docker build fails downloading trivy | Pinned version no longer published | Update `ARG TRIVY_VERSION` / `TRIVY_SHA256` (see §19.1); the `pins` CI job prints the correct digest |
 | ZIP contains `tmp/…/fetch/repo_…` paths | Archive built by a pre-P8 version | Upgrade; archives are now rooted at the repository |
-| Scan hangs for minutes on an isolated host | Running without `--offline`; tools are blocking on network timeouts | Use `--offline` (see §11) |
+| Fetching hangs for minutes on an isolated host | The fetch step (not the scan) is waiting for the network | Use `--offline` with a local path (see §11); the scan itself is always offline |
 | Offline run passes suspiciously fast with few findings | Layers 2 and 3 had no staged data | Check for `OFFLINE:` warnings in the report; stage the cache (§11.4) |
 | `OFFLINE:Layer 2 skipped entirely` | Semgrep rulesets not staged | Run `prepare_offline_cache.sh` on a connected host |
 | `OFFLINE:trivy database not staged` | No dependency CVE coverage offline | Stage the trivy DB; it is the only offline CVE source |
@@ -3104,7 +3110,8 @@ Expected output on a healthy installation:
 | Java archive limits | The `JAR_*` environment limits of `scan_jar`, each reached and reported on an 11 KB fixture, plus the archive helper's behaviour on a file that cannot be opened |
 | Office document limits | The `OFFICE_*` limits of `scan_office`, six adversarial inputs that must finish inside 20 s (quadratic patterns), and a DDE field whose instruction lies in a later 4 MB slice than its `begin` |
 | E — diff mode | `--since` scans exactly the changed files; `.git` excluded from local copies |
-| F — static | Parse checks, shellcheck, and lint rules for seven bug classes that have already shipped (six silent-failure classes and `echo -e` on repository text) |
+| G — customised deployment | Optional `report_dir` / `scanning_name`, no online mode, gitleaks run on the pipeline's terms (a repository's own `.gitleaks.toml`, `.gitleaksignore` and inline allow comments are ignored), structured findings and the new report fields, layers 3 and 6 off by default and recorded as `skipped:disabled`, exit status 1 unless PASS, hostile inputs (non-UTF-8 names, stale `.diff_files`, empty allowlist, trailing slash, unusable names) |
+| F — static | Parse checks, shellcheck, and lint rules for the bug classes that have already shipped (six silent-failure classes, `echo -e` on repository text, and an associative array measured with `${#…}` without being initialised) |
 
 ### 17.2 Fixtures
 
@@ -3191,8 +3198,10 @@ without a separate download. The `pins` CI job prints the same value.
 
 ### 19.3 Running through the wrapper
 
-`docker-run.sh` forwards pipeline flags into the container, so the Docker and
-native interfaces behave identically:
+`docker-run.sh` forwards pipeline flags into the container, forwards `RUN_SCA` and
+`RUN_SCANCODE`, and mounts `OFFLINE_CACHE` read-only at `/offline-cache`. The image itself
+stages no Semgrep rulesets, so without that mount layer 2 does not run (the report says so).
+With the cache mounted the Docker and native interfaces behave alike:
 
 ```bash
 ./docker-run.sh --build                                          # build once
@@ -3215,7 +3224,7 @@ Environment variables (`WORK_DIR`, `MAX_SIZE_MB`, `MIN_SEVERITY`, `VERBOSITY`,
 # Step 1: system packages
 sudo apt-get update && sudo apt-get install -y \
     bash git curl jq zip unzip file coreutils wget gpg \
-    python3 python3-pip python3-venv build-essential golang-go \
+    python3 python3-pip python3-venv build-essential \
     nodejs npm shellcheck cppcheck clamav clamav-daemon yara
 
 # Step 2: Python venv + packages
@@ -3225,8 +3234,8 @@ pip install --upgrade pip
 pip install openpyxl reportlab detect-secrets bandit pip-audit safety \
     semgrep checkov scancode-toolkit
 
-# Step 3: gitleaks
-go install github.com/zricethezav/gitleaks/v8@latest
+# Step 3: gitleaks (needs Go 1.24.11 or newer from https://go.dev/dl/, not the distribution package)
+CGO_ENABLED=0 go install github.com/zricethezav/gitleaks/v8@latest
 sudo cp ~/go/bin/gitleaks /usr/local/bin/gitleaks
 
 # Step 4: trivy

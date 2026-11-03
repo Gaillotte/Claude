@@ -9,6 +9,12 @@
 # On the air-gapped host:
 #   export OFFLINE_CACHE=/opt/ai-transit/offline-cache
 #   ./ai_transit.sh --offline /path/to/repo
+#
+# The scan itself is always offline (scan_pipeline.sh has no online mode); the
+# --offline flag only makes the fetch step refuse a remote URL. Of the four asset
+# groups below, the trivy database is read only when the scan runs with
+# RUN_SCA=true (layer 3 is off by default). It is staged regardless, so enabling
+# layer 3 later does not need a trip back to a connected host.
 set -euo pipefail
 
 CACHE="${1:-$(pwd)/offline-cache}"
@@ -55,7 +61,9 @@ else
 fi
 
 # ── 2. Trivy vulnerability database ───────────────────────────────────────────
-info "[2/4] Trivy vulnerability database"
+# Layer 3 (dependency CVEs) is off by default; this database is read only when
+# the scan runs with RUN_SCA=true.
+info "[2/4] Trivy vulnerability database (used only with RUN_SCA=true)"
 if has_cmd trivy; then
     if trivy fs --download-db-only --cache-dir "${CACHE}/trivy-db" 2>/dev/null; then
         ok "  database downloaded ($(du -sh "${CACHE}/trivy-db" | cut -f1))"
@@ -65,7 +73,7 @@ if has_cmd trivy; then
         (( SKIPPED++ )) || true
     fi
 else
-    warn "  trivy not installed — Layer 3 dependency CVEs will not run offline"
+    warn "  trivy not installed — Layer 3 dependency CVEs cannot run (only matters with RUN_SCA=true)"
     (( SKIPPED++ )) || true
 fi
 
@@ -110,19 +118,24 @@ echo
 echo "Copy this directory to the air-gapped host, then:"
 echo "    export OFFLINE_CACHE=/opt/ai-transit/offline-cache"
 echo "    ./ai_transit.sh --offline /path/to/repo"
+echo "The scan is offline either way; --offline makes the fetch step refuse a remote URL."
+echo "Layers 3 and 6 are off by default: add RUN_SCA=true / RUN_SCANCODE=true to use the"
+echo "staged trivy database / ScanCode."
 echo
 echo "Verify the transfer on arrival:"
 echo "    cd \$OFFLINE_CACHE && sha256sum --check .cache_manifest.sha256"
 echo
 
-# These three have no offline mode at all; say so plainly rather than letting
-# the air-gapped operator discover it from a silently empty report.
+# These four have no offline mode at all, and the scan has no online mode, so the
+# pipeline never runs them; say so plainly rather than letting the air-gapped
+# operator discover it from a silently empty report.
 echo -e "${YELLOW}Not available offline under any configuration:${RESET}"
 echo "  pip-audit   — queries a remote advisory service"
 echo "  safety      — queries a remote advisory service"
 echo "  npm audit   — queries the npm registry"
 echo "  ScanCode --vulnerability — queries VulnerableCode"
 echo
-echo "Python and JavaScript dependency CVEs are covered by the staged trivy"
-echo "database instead. ScanCode licence and copyright detection is unaffected."
+echo "With layer 3 enabled (RUN_SCA=true), Python and JavaScript dependency CVEs are"
+echo "covered by the staged trivy database instead; with it off, they are not examined."
+echo "ScanCode licence and copyright detection (layer 6, RUN_SCANCODE=true) is unaffected."
 echo

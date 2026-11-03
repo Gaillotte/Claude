@@ -57,13 +57,15 @@ if [[ $# -lt 1 ]]; then
     echo "    $0 --since abc1234 https://github.com/org/repo        # diff mode"
     echo "    $0 --report-only https://github.com/org/repo          # never block (observe)"
     echo "    $0 --no-zip --no-excel https://github.com/org/repo     # reports only, no archive"
-    echo "    $0 --offline /local/path/to/repo                       # air-gapped host"
+    echo "    $0 --offline /local/path/to/repo                       # air-gapped host: refuse remote URLs"
     echo
     echo "  Environment variables:"
     echo "    WORK_DIR      (default: /opt/ai-transit)   working directory"
     echo "    OUTPUT_DIR    (default: <script_dir>/Good) approved ZIP destination"
     echo "    GITHUB_TOKEN                               for private GitHub repos"
     echo "    MAX_SIZE_MB   (default: 500)               repository size limit"
+    echo "    RUN_SCA       (default: false)             run layer 3 (dependency CVEs)"
+    echo "    RUN_SCANCODE  (default: false)             run layer 6 (ScanCode licences)"
     echo
     echo "  Result:"
     echo "    PASS → ZIP archive in ./Good/"

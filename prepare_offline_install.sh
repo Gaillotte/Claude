@@ -74,6 +74,9 @@ fi
 
 # ── 2. Python wheels ──────────────────────────────────────────────────────────
 info "[2/5] Python packages"
+# pip-audit and safety are staged for completeness only: they have no offline mode and
+# the scan has no online mode, so the pipeline never runs them. scancode-toolkit is
+# used only with RUN_SCANCODE=true (layer 6 is off by default).
 PIP_PKGS=(openpyxl reportlab python-docx detect-secrets bandit
           pip-audit safety semgrep checkov scancode-toolkit)
 if has_cmd pip3; then
@@ -92,6 +95,8 @@ fi
 
 # ── 3. Standalone binaries ────────────────────────────────────────────────────
 info "[3/5] Standalone binaries"
+# trivy is used only with RUN_SCA=true (layer 3 is off by default), and then reads the
+# database staged by prepare_offline_cache.sh.
 for tool in gitleaks trivy hadolint; do
     if has_cmd "$tool"; then
         cp "$(command -v "$tool")" "${BUNDLE}/bin/" 2>/dev/null \
@@ -146,4 +151,6 @@ echo
 echo "Transfer this directory to the air-gapped host, then follow INSTALL.md §11."
 echo "Remember the scan-data cache is a SEPARATE, perishable bundle:"
 echo "    ./prepare_offline_cache.sh"
+echo "The scan is always offline; layers 3 (RUN_SCA=true) and 6 (RUN_SCANCODE=true) are off"
+echo "by default and need trivy / ScanCode installed only if you enable them."
 echo

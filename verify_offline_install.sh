@@ -10,6 +10,10 @@
 #   ./verify_offline_install.sh                 # verify
 #   ./verify_offline_install.sh --simulate      # also block network, to prove
 #                                               # nothing silently reaches out
+#
+# The scan is always offline, so this checks that each tool has what it needs staged.
+# Layers 3 (trivy) and 6 (ScanCode) are off by default: their checks, and the
+# end-to-end gate on layer 3, apply only with RUN_SCA=true / RUN_SCANCODE=true.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -134,9 +138,10 @@ else
 fi
 
 # trivy: must scan using the staged DB with every update path disabled. Layer 3 is switched
-# off unless RUN_SCA=true, in which case there is nothing for trivy to be checked against.
+# off unless RUN_SCA=true and the scan never calls trivy then, so it is checked only when
+# the layer is going to be used.
 if [[ "${RUN_SCA:-false}" != "true" ]]; then
-    skip "trivy" "layer 3 is disabled (RUN_SCA is not true)"
+    skip "trivy" "layer 3 is disabled (RUN_SCA is not true); set RUN_SCA=true to check it"
 elif has_cmd trivy; then
     if [[ -d "$TRIVY_CACHE_DIR" ]] && compgen -G "${TRIVY_CACHE_DIR}/db/*" >/dev/null 2>&1; then
         if run_t 240 "trivy fs --quiet --exit-code 0 --format json \
@@ -177,7 +182,7 @@ fi
 check_simple checkov "checkov -f '${SCRATCH}/Dockerfile' --quiet --skip-download; true"
 
 if [[ "${RUN_SCANCODE:-false}" != "true" ]]; then
-    skip "scancode" "layer 6 is disabled (RUN_SCANCODE is not true)"
+    skip "scancode" "layer 6 is disabled (RUN_SCANCODE is not true); set RUN_SCANCODE=true to check it"
 elif has_cmd scancode; then
     if run_t 300 "scancode --license --copyright --json-pp '${SCRATCH}/sc.json' --quiet --timeout 60 '${SCRATCH}'"; then
         pass "scancode detects licences offline (CVE lookup correctly omitted)"
@@ -192,12 +197,13 @@ fi
 hdr "Group C — no offline mode (expected to be unavailable)"
 for t in pip-audit safety npm; do
     if has_cmd "$t"; then
-        echo -e "  ${BLUE}i${RESET} ${t} is installed but is never invoked under --offline"
+        echo -e "  ${BLUE}i${RESET} ${t} is installed but is never invoked: the scan has no online mode"
     else
         echo -e "  ${BLUE}i${RESET} ${t} not installed — no impact offline"
     fi
 done
-echo -e "    ${DIM}Python and JavaScript dependency CVEs are covered by the staged trivy database.${RESET}"
+echo -e "    ${DIM}With layer 3 enabled (RUN_SCA=true), Python and JavaScript dependency CVEs are covered by${RESET}"
+echo -e "    ${DIM}the staged trivy database; with it off (the default) they are not examined.${RESET}"
 
 # ── End-to-end pipeline run ───────────────────────────────────────────────────
 hdr "End-to-end — pipeline scan with coverage check"
@@ -237,7 +243,7 @@ PY
     # unless RUN_SCA=true. The gate reads the report, not the environment: layer 3 is required
     # unless the report says it was disabled, so an enabled layer that could not run still fails.
     GAPS=$(python3 - "$REPORT" <<'PY'
-import json, os, sys
+import json, sys
 REQUIRED = ["L1_secrets_gitleaks","L1_malware","L2_owasp_cwe","L3_dependency_cve","L5_per_language_sast"]
 cov = json.load(open(sys.argv[1])).get("coverage", {})
 # A layer the report records as deliberately disabled is not a gap in the installation.
@@ -256,9 +262,14 @@ fi
 echo
 echo -e "${BOLD}───────────────────────────────────────────────${RESET}"
 TOTAL=$(( PASS_N + FAIL_N ))
+# Layers 3 and 6 are off by default; a pass says nothing about them unless they were switched on.
 if (( FAIL_N == 0 )); then
     echo -e "${GREEN}${BOLD}  ✔  ${PASS_N}/${TOTAL} checks passed${RESET}  (${SKIP_N} skipped)"
     $NET_UP && echo -e "${YELLOW}     Network was reachable — re-run disconnected to confirm.${RESET}"
+    [[ "${RUN_SCA:-false}" != "true" ]] && \
+        echo -e "${DIM}     Layer 3 (dependency CVEs) not checked: disabled by default. Set RUN_SCA=true to verify it.${RESET}"
+    [[ "${RUN_SCANCODE:-false}" != "true" ]] && \
+        echo -e "${DIM}     Layer 6 (ScanCode) not checked: disabled by default. Set RUN_SCANCODE=true to verify it.${RESET}"
     echo
     exit 0
 else

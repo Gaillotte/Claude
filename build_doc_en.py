@@ -2580,13 +2580,15 @@ para(doc, (
     "services, and ScanCode's vulnerability option queries VulnerableCode."
 ))
 para(doc, (
-    "On an isolated host without --offline those calls are still attempted. They "
+    "Allowed online on an isolated host, those calls are still attempted. They "
     "do not abort the run, because each is individually guarded. They block on "
     "connection timeouts and then return nothing, so Layer 2 and Layer 3 "
     "contribute no findings while the report still presents them as having run. "
     "The pipeline can therefore report PASS on a repository that was never "
-    "meaningfully examined. Preventing that outcome is the entire purpose of the "
-    "mode."
+    "meaningfully examined. Preventing that outcome is why scan_pipeline.sh has no "
+    "online mode: the scan is always offline, layers 3 and 6 are off unless "
+    "RUN_SCA / RUN_SCANCODE are set, and --offline only makes ai_transit.sh refuse "
+    "remote URLs."
 ))
 
 heading(doc, "14.2 Tool behaviour offline", level=2)

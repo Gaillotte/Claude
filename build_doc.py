@@ -1881,13 +1881,15 @@ para(doc, (
     "vulnerability de ScanCode interroge VulnerableCode."
 ))
 para(doc, (
-    "Sur une machine isolée sans --offline, ces appels sont malgré tout tentés. "
+    "Autorisés à sortir sur une machine isolée, ces appels seraient malgré tout tentés. "
     "Ils n'interrompent pas l'exécution, chacun étant protégé individuellement. "
     "Ils bloquent sur des délais de connexion puis ne renvoient rien : les "
     "couches 2 et 3 ne produisent alors aucun résultat, alors que le rapport les "
     "présente toujours comme ayant été exécutées. Le pipeline peut donc conclure "
-    "PASS sur un dépôt qui n'a jamais été réellement analysé. Éviter ce résultat "
-    "est l'objet même de ce mode."
+    "PASS sur un dépôt qui n'a jamais été réellement analysé. C'est pourquoi "
+    "scan_pipeline.sh n'a pas de mode en ligne : le scan est toujours hors ligne, "
+    "les couches 3 et 6 sont désactivées sauf RUN_SCA / RUN_SCANCODE, et --offline "
+    "sert seulement à refuser les URL distantes dans ai_transit.sh."
 ))
 
 heading(doc, "12.2 Comportement des outils hors ligne", level=2)

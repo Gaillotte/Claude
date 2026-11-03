@@ -958,8 +958,8 @@ txt(sl, "Contrôles par dépôt", Inches(0.5), Inches(5.0), Inches(6), Inches(0.
 txt_lines(sl, [
     ".transitignore  —  motifs gitignore, fichiers exclus de toutes les couches",
     ".transit-allow.json  —  rétrograde un FAIL connu en WARN, avec justification",
-    "--offline  —  environnement isolé : règles et bases pré-positionnées ; le bloc coverage",
-    "                indique, couche par couche, si elle a réellement été exécutée",
+    "scan toujours hors ligne : règles et bases pré-positionnées ; couches 3 et 6 off par défaut ;",
+    "                le bloc coverage indique, couche par couche, si elle a réellement été exécutée",
 ], Inches(0.5), Inches(5.35), Inches(12.3), Inches(1.4), size=11.5, color=C_GRAY)
 
 txt(sl, "Une suite qu'on n'a jamais vue échouer n'apporte aucune preuve.",

@@ -57,7 +57,10 @@ python3 selfcheck.py --write-manifest
 
 A tool listed as `MISSING` will be reported as a WARN on every scan and will
 never contribute findings. Decide now whether that is acceptable; do not
-discover it in a report six weeks later.
+discover it in a report six weeks later. `trivy` and `scancode` are the
+exception: they are called only when you switch on layers 3 and 6
+(`RUN_SCA=true`, `RUN_SCANCODE=true`; see Phase 3), so with those layers off
+their absence is not reported.
 
 ---
 
@@ -77,12 +80,15 @@ cd /tmp/offline-cache
 ls -1 semgrep-rules/          # expect: owasp-top-ten, cwe-top-25,
                               #         security-audit, secrets, javascript (.yaml)
 du -sh trivy-db/              # expect: several hundred MB, not a few KB
+                              #         (read only when you run with RUN_SCA=true)
 ls -1 clamav/                 # expect: *.cvd or *.cld files
 ls -1 yara-rules/             # your own rules; may legitimately be empty
 ```
 
-A `trivy-db` of a few kilobytes means the database did not download. That is the
-single most consequential thing to get right — see the note in Phase 5.
+A `trivy-db` of a few kilobytes means the database did not download. If you will
+enable layer 3 (`RUN_SCA=true`), that is the single most consequential thing to
+get right — see the note in Phase 5. With layer 3 off, which is the default, the
+database is not read.
 
 **Date the cache.** The scan operator cannot tell how old the data is otherwise:
 
@@ -139,22 +145,34 @@ cannot judge whether its vulnerability data is current.
 # Persist for the scan operator's shell
 cat >> ~/.bashrc <<'EOF'
 export WORK_DIR=/opt/ai-transit
-export OFFLINE=true
 export OFFLINE_CACHE=/opt/ai-transit/offline-cache
 EOF
 source ~/.bashrc
 ```
 
-Setting `OFFLINE=true` in the environment means an operator who forgets the
-`--offline` flag still gets offline behaviour rather than a scan that hangs on
-timeouts. This is deliberate: make the safe path the default one.
+The scan is always offline. `scan_pipeline.sh` has no online mode: it points each
+tool at the staged cache whatever the environment says, and `ai_transit.sh` always
+runs it with `OFFLINE=true`, so there is nothing to switch on and an operator who
+forgets a flag cannot get a scan that hangs on timeouts. `OFFLINE_CACHE` is the
+variable that matters. The `--offline` flag (Phase 4) governs only the fetch
+step, where it makes `ai_transit.sh` refuse a remote URL immediately;
+`ai_transit.sh` does not read an `OFFLINE` environment variable.
+
+**Layers 3 and 6 are off by default.** Layer 3 (dependency CVEs: trivy) runs only
+with `RUN_SCA=true`, and layer 6 (ScanCode licences) only with
+`RUN_SCANCODE=true`. Export them in the same way if you want those layers; layer 3
+then reads the trivy database staged in Phase 1. While they are off, the report
+records `skipped:disabled` for them and `coverage_complete` stays `False`
+(Phase 5).
 
 ---
 
 ## Phase 4 — Run the scan
 
 Remote URLs cannot be fetched without a network. Bring the repository to the
-host and scan the directory.
+host and scan the directory. Pass `--offline` so that a remote URL is refused at
+once (`Cannot clone ... without a network`) instead of attempted; the scan itself
+is offline with or without it.
 
 ```bash
 ./ai_transit.sh --offline /path/to/repo
@@ -172,7 +190,9 @@ Common variants:
 # Reports only, no archive
 ./ai_transit.sh --offline --no-zip --no-excel /path/to/repo
 
-# Through Docker (the wrapper forwards OFFLINE and the cache paths)
+# Through Docker (with OFFLINE_CACHE set, the wrapper mounts that directory
+# read-only at /offline-cache and forwards RUN_SCA / RUN_SCANCODE; the image
+# stages no Semgrep rulesets, so layer 2 runs in the container only with the cache)
 ./docker-run.sh --offline /path/to/repo
 ```
 
@@ -215,10 +235,10 @@ Typical output for a correctly staged offline host:
 verdict          : PASS
 coverage_complete: False
 
-  OK   L1_malware                 ran
-  OK   L1_secrets_gitleaks        ran
-  OK   L1_secrets_entropy         ran
   GAP  L1_ioc_yara                skipped:yara or rules directory missing
+  OK   L1_malware                 ran
+  OK   L1_secrets_entropy         ran
+  OK   L1_secrets_gitleaks        ran
   OK   L2_owasp_cwe               ran
   GAP  L3_dependency_cve          skipped:disabled (RUN_SCA is not true)
   OK   L4_patterns                ran
@@ -229,26 +249,34 @@ coverage_complete: False
 `L1_ioc_yara` is a legitimate gap if you have not written custom IOC rules —
 YARA rules are yours to supply, and having none is a configuration choice rather
 than a failure. Layers 3 and 6 read `skipped:disabled` because they are switched
-off by default (`RUN_SCA=true` and `RUN_SCANCODE=true` turn them on); every other
-layer should read `ran`.
+off by default (`RUN_SCA=true` and `RUN_SCANCODE=true` turn them on), which is
+also why `coverage_complete` cannot read `True` until they are enabled; every
+other layer should read `ran`.
 
 ### The acceptance gate
 
 These five layers are the ones a verdict rests on. If any is not `ran`, the
 result is not trustworthy regardless of what it says.
 
+The one exception is a layer the report itself records as deliberately switched
+off: layer 3 reads `skipped:disabled` unless `RUN_SCA=true`, and the gate leaves
+it out in exactly that case. The gate reads the **report**, not the environment,
+so a layer 3 that was enabled but could not run (for instance
+`skipped:trivy database not staged for offline use`) is still a rejection.
+
 ```bash
 python3 - "$REPORT" <<'PY'
-import json, os, sys
+import json, sys
 REQUIRED = [
     "L1_secrets_gitleaks",      # credential leakage
     "L1_malware",               # malware signatures
     "L2_owasp_cwe",             # OWASP Top 10 / CWE Top 25
+    "L3_dependency_cve",        # dependency vulnerabilities (off by default)
     "L5_per_language_sast",     # per-language static analysis
 ]
-if os.environ.get("RUN_SCA") == "true":
-    REQUIRED.append("L3_dependency_cve")   # dependency vulnerabilities (layer 3 is off by default)
 cov  = json.load(open(sys.argv[1])).get("coverage", {})
+# A layer the report records as deliberately disabled is not a gap in the installation.
+REQUIRED = [l for l in REQUIRED if not cov.get(l, "").startswith("skipped:disabled")]
 gaps = [l for l in REQUIRED if not cov.get(l, "missing").startswith("ran")]
 if gaps:
     print("REJECT — these layers did not run:", file=sys.stderr)
@@ -271,17 +299,19 @@ that rests on layers which never executed.
 | L1 malware — ClamAV | Full **if** signatures staged |
 | L1 IOC — YARA | Full (your own rules) |
 | L2 OWASP/CWE — Semgrep | Full **if** rulesets staged |
-| L3 dependency CVEs | **trivy only** — see below |
+| L3 dependency CVEs | Off by default (`RUN_SCA=true` enables it); then **trivy only** — see below |
 | L4 pattern rules | Full, always |
 | L5 per-language SAST | Full |
-| L6 licence and copyright | Full |
+| L6 licence and copyright | Off by default (`RUN_SCANCODE=true` enables it); then Full |
 | L6 package CVEs | Not available |
 
-**The one asymmetry worth internalising:** offline, the staged trivy database is
-your *only* dependency-CVE coverage. Connected, four tools overlap on that job
-(trivy, pip-audit, safety, npm audit) and one failing is survivable. Offline,
-there is no redundancy — if the trivy database is missing or stale, dependency
-vulnerabilities simply go unreported.
+**The one asymmetry worth internalising:** with layer 3 enabled, the staged trivy
+database is your *only* dependency-CVE coverage. pip-audit, safety and npm audit
+have no offline mode and are never run by the scan, which records an `OFFLINE:`
+warning when it finds a manifest they would have examined. There is no
+redundancy — if the trivy database is missing or stale, dependency
+vulnerabilities simply go unreported. With layer 3 off, the default, they are not
+examined at all, and the report says so.
 
 ---
 
@@ -293,7 +323,7 @@ notice because the report looks normal.
 
 | Asset | Suggested cadence | Consequence of staleness |
 |-------|-------------------|--------------------------|
-| trivy database | **Weekly** | Recent CVEs unreported |
+| trivy database (layer 3 only) | **Weekly** | Recent CVEs unreported |
 | ClamAV signatures | **Weekly** | Recent malware undetected |
 | Semgrep rulesets | Monthly | Missing newer rules; existing ones still valid |
 | YARA rules | On change | Your own IOC coverage |
@@ -331,8 +361,9 @@ SKIP or WARN offline. That is expected.
 
 | Symptom | Cause | Resolution |
 |---------|-------|------------|
-| Scan hangs several minutes per layer | Running without `--offline` | Set `OFFLINE=true` or pass `--offline` |
+| A remote URL is attempted instead of refused | `--offline` not passed; it is the only thing that makes the fetch step refuse (the scan itself is always offline) | Pass `--offline`, and give a local path |
 | `Cannot clone ... without a network` | Remote URL in offline mode | Copy the repository locally, pass its path |
+| `L3_dependency_cve` / `L6_licence` read `skipped:disabled` | Layers 3 and 6 are off by default | Export `RUN_SCA=true` / `RUN_SCANCODE=true` if you want them; stage the trivy database first for layer 3 |
 | Scan finishes suspiciously fast, few findings | Cache not staged | Run the Phase 5 check |
 | `sha256sum -c` fails on arrival | Corrupt or tampered transfer | Do not extract; request a fresh transfer |
 | `.cache_built_on` missing | Cache built without dating | Treat CVE results as untrusted; rebuild |
@@ -356,8 +387,10 @@ AIR-GAPPED HOST
   cd /opt/ai-transit/offline-cache
   sha256sum --check .cache_manifest.sha256          # must pass
 
-  export OFFLINE=true OFFLINE_CACHE=/opt/ai-transit/offline-cache
-  ./ai_transit.sh --offline /path/to/repo
+  export OFFLINE_CACHE=/opt/ai-transit/offline-cache
+  # optional, off by default: export RUN_SCA=true RUN_SCANCODE=true
+  ./ai_transit.sh --offline /path/to/repo       # the scan is offline regardless;
+                                                # --offline makes the fetch refuse a URL
 
   REPORT=$(ls -t $WORK_DIR/reports/report_*.json | head -1)
   python3 gate.py "$REPORT"                        # ALWAYS do this
@@ -376,19 +409,20 @@ Save as `gate.py` next to the pipeline:
 ```python
 #!/usr/bin/env python3
 """Reject an offline scan whose verdict rests on layers that never ran."""
-import json, os, sys
+import json, sys
 
 REQUIRED = [
     "L1_secrets_gitleaks",      # credential leakage
     "L1_malware",               # malware signatures
     "L2_owasp_cwe",             # OWASP Top 10 / CWE Top 25
+    "L3_dependency_cve",        # dependency vulnerabilities (off by default)
     "L5_per_language_sast",     # per-language static analysis
 ]
-if os.environ.get("RUN_SCA") == "true":
-    REQUIRED.append("L3_dependency_cve")   # dependency vulnerabilities (layer 3 is off by default)
 
 report = json.load(open(sys.argv[1]))
 cov    = report.get("coverage", {})
+# A layer the report records as deliberately disabled is not a gap in the installation.
+REQUIRED = [l for l in REQUIRED if not cov.get(l, "").startswith("skipped:disabled")]
 gaps   = [l for l in REQUIRED if not cov.get(l, "missing").startswith("ran")]
 
 if gaps:
@@ -402,6 +436,9 @@ print(f"ACCEPT — all required layers ran (verdict: {report['verdict']})")
 
 Adjust `REQUIRED` to your policy. Removing a layer from that list is a decision
 to accept scans that do not cover it — make it deliberately, not by omission.
+The `skipped:disabled` line works the other way: it accepts a layer 3 that was
+never switched on. If your policy requires dependency scanning on every scan,
+delete that line, and a disabled layer 3 is rejected too.
 
 ---
 
