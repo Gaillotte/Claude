@@ -1,0 +1,39 @@
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>widget</artifactId>
+  <version>1.0-SNAPSHOT</version>
+
+  <!-- The default Maven archetype writes this homepage over plain http. It is
+       a project URL, not a repository, so it must not be reported; a rule on
+       a bare <url>http:// would fail every generated Maven project. -->
+  <url>http://maven.apache.org</url>
+
+  <repositories>
+    <repository>
+      <id>central-mirror</id>
+      <url>https://repo.example.test/maven2</url>
+    </repository>
+  </repositories>
+
+  <dependencies>
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.13.2-SNAPSHOT</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <configuration>
+          <executable>java</executable>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

