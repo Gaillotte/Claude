@@ -117,6 +117,8 @@ for f in ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh \
          Dockerfile INSTALL.md OFFLINE_RUNBOOK.md CLAUDE.md; do
     [[ -f "$f" ]] && cp "$f" "${BUNDLE}/pipeline/" 2>/dev/null || true
 done
+# The Python helpers scan_pipeline.sh runs by path: without them every helper-backed scanner reports nothing.
+[[ -d transit ]] && cp -r transit "${BUNDLE}/pipeline/" 2>/dev/null || true
 [[ -d tests ]] && cp -r tests "${BUNDLE}/pipeline/" 2>/dev/null || true
 ok "  $(find "${BUNDLE}/pipeline" -type f | wc -l) file(s) staged"
 (( STAGED++ )) || true

@@ -118,6 +118,8 @@ RUN freshclam --quiet 2>&1 || { \
 WORKDIR /app
 COPY fetch_repo.sh scan_pipeline.sh ai_transit.sh prepare_offline_cache.sh prepare_offline_install.sh verify_offline_install.sh \
      generate_excel_report.py selfcheck.py ./
+# The Python helpers scan_pipeline.sh runs by path (office, jar, PDF, manifests, report writer, tool readers)
+COPY transit ./transit
 RUN chmod +x *.sh
 
 # ── Work directories ───────────────────────────────────────────────────────────

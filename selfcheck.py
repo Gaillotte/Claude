@@ -93,7 +93,7 @@ def check_meta_scan(bundle_dir: Path) -> CheckResult:
     warnings = []
 
     sh_files = list(bundle_dir.glob("*.sh"))
-    py_files = list(bundle_dir.glob("*.py"))
+    py_files = list(bundle_dir.glob("*.py")) + list(bundle_dir.glob("transit/**/*.py"))
 
     # ShellCheck
     if _has("shellcheck"):
@@ -397,10 +397,12 @@ def bundle_files(bundle_dir: Path) -> list[Path]:
     """Files the manifest covers, as paths relative to the bundle directory.
 
     Covers the executable surface of the bundle: shell scripts, Python
-    modules, and the Dockerfile. Sorted for a stable manifest.
+    modules, the Dockerfile, and the helpers below transit/ (they run inside
+    every scan, so code that is not hashed would be a hole in the check).
+    Sorted for a stable manifest.
     """
     names: list[Path] = []
-    for pattern in ("*.sh", "*.py", "Dockerfile"):
+    for pattern in ("*.sh", "*.py", "Dockerfile", "transit/**/*.py"):
         names += [p.relative_to(bundle_dir) for p in bundle_dir.glob(pattern)]
     return sorted(set(names), key=str)
 

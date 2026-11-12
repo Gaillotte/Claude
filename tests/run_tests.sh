@@ -1557,8 +1557,9 @@ if ! _skipping; then
     # and the time budget is only checked between entries. 50000 repetitions of a
     # PEM-header fragment took the first version tens of seconds.
     JARPY="${SCRATCH}/jar_facts.py"
-    awk '/^_jar_facts\(\) \{/{f=1;next} f&&/<<.PYEOF.*/{g=1;next} g&&/^PYEOF$/{exit} g{print}' \
-        "${ROOT_DIR}/scan_pipeline.sh" > "$JARPY"
+    # The helper lives in transit/containers/jar.py (it used to be a heredoc in scan_pipeline.sh);
+    # the tests work on a copy so the mutation checks below never touch the real file.
+    cp "${ROOT_DIR}/transit/containers/jar.py" "$JARPY"
     JARGONE=$(python3 -I "$JARPY" "${SCRATCH}/no_such.jar" "${SCRATCH}/view.txt" 2>&1 || true)
     assert_contains "$JARGONE" "FACT unreadable_file" \
         "a file that cannot be opened is reported as unreadable"
@@ -1612,8 +1613,7 @@ if ! _skipping; then
         "OFFICE_TIME_BUDGET_S: an exceeded time budget is reported"
 
     OFFPY="${SCRATCH}/office_facts.py"
-    awk '/^_office_facts\(\) \{/{f=1;next} f&&/<<.PYEOF.*/{g=1;next} g&&/^PYEOF$/{exit} g{print}' \
-        "${ROOT_DIR}/scan_pipeline.sh" > "$OFFPY"
+    cp "${ROOT_DIR}/transit/containers/office.py" "$OFFPY"
     OFFGONE=$(python3 -I "$OFFPY" "${SCRATCH}/no_such.docx" "${SCRATCH}/view.txt" docx 2>&1 || true)
     assert_contains "$OFFGONE" "FACT unreadable_file" \
         "a file that cannot be opened is reported as unreadable"
@@ -2459,6 +2459,50 @@ print('differs' if a['source']['sha256']!=b['source']['sha256'] else 'same', 'sa
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+# LAYER H — The Python helpers in transit/
+# The office, jar, PDF and manifest readers, the report writer and the tool result readers used to be
+# heredocs inside scan_pipeline.sh. They are files under transit/ now, run by path by the bash engine and
+# importable by the Python engine (PYTHON_PORT_PLAN.md, phase 1). These checks keep that arrangement honest.
+# ═════════════════════════════════════════════════════════════════════════════
+group "Layer H — shared Python helpers (transit/)"
+if ! _skipping; then
+    HELPERS="containers/jar.py containers/office.py containers/pdf.py scanners/manifests.py tools/gitleaks.py tools/scancode.py report_json.py"
+    for _h in $HELPERS; do
+        assert_file_exists "${ROOT_DIR}/transit/${_h}" "helper exists: transit/${_h}"
+        if python3 -m py_compile "${ROOT_DIR}/transit/${_h}" 2>/dev/null; then
+            ok_test "transit/${_h} compiles"
+        else
+            fail_test "transit/${_h} compiles" "py_compile failed"
+        fi
+        assert_contains "$(grep -c "TRANSIT_DIR/${_h}" "${ROOT_DIR}/scan_pipeline.sh")" "1" \
+            "scan_pipeline.sh calls transit/${_h} exactly where the heredoc used to be"
+    done
+    assert_eq "0" "$(grep -c "<<'PY" "${ROOT_DIR}/scan_pipeline.sh" | tr -d ' ')" \
+        "scan_pipeline.sh holds no embedded Python heredoc any more"
+
+    # A scan whose helpers cannot be found must stop loudly, not report that nothing was found.
+    NOT="${SCRATCH}/h_notransit"; rm -rf "$NOT"; mkdir -p "$NOT"
+    cp "${ROOT_DIR}/scan_pipeline.sh" "$NOT/"
+    OUT_NT=$(cd "$NOT" && WORK_DIR="${NOT}/work" bash ./scan_pipeline.sh "${FIXTURES}/clean" 2>&1); EC_NT=$?
+    assert_eq "1" "$EC_NT" "scan_pipeline.sh without transit/ next to it exits 1"
+    assert_contains "$OUT_NT" "transit/ not found next to scan_pipeline.sh" "…and says what is missing"
+
+    # The tamper-evidence manifest, the image and the offline bundle must all carry the helpers: they run
+    # inside every scan, so code that is not hashed or not shipped is a hole or a broken install.
+    MAN="${SCRATCH}/h_manifest"; rm -rf "$MAN"; mkdir -p "$MAN/transit/containers"
+    echo 'x = 1' > "$MAN/a.py"; echo 'x = 2' > "$MAN/transit/containers/jar.py"; echo 'x = 3' > "$MAN/transit/__init__.py"
+    COVERED=$(cd "$ROOT_DIR" && python3 -I -c "
+import sys, pathlib
+sys.path.insert(0, '.')
+import selfcheck
+print(' '.join(str(p) for p in selfcheck.bundle_files(pathlib.Path(sys.argv[1]))))" "$MAN" 2>/dev/null)
+    assert_contains "$COVERED" "transit/containers/jar.py" "the integrity manifest covers helpers below transit/"
+    assert_contains "$COVERED" "transit/__init__.py" "…including the package marker"
+    assert_contains "$(cat "${ROOT_DIR}/Dockerfile")" "transit" "the Dockerfile copies transit/ into the image"
+    assert_contains "$(cat "${ROOT_DIR}/prepare_offline_install.sh")" "transit" "the offline install bundle stages transit/"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LAYER F — Static checks on the pipeline itself
 # ═════════════════════════════════════════════════════════════════════════════
 group "Layer F — static checks"
@@ -2617,13 +2661,13 @@ PY
         fail_test "scan_pipeline.sh never passes \$* through echo -e" "$BAD"
     fi
 
-    # The embedded Python helpers (_jar_facts, _office_facts) read documents an attacker built to
+    # The Python helpers (_jar_facts in transit/containers/jar.py, _office_facts in .../office.py) read documents an attacker built to
     # be slow. `[^>]*`, `[^>]+`, `.*?` and `.+?` rescan to the end of the input for every opener
     # that never closes, so "<a<a<a…" a few MB long runs for minutes: a 3 KB jar once took the
     # pipeline 98 s. Use `[^<>]*`, str.find, or the linear TAG tokenizer. Comments are skipped.
     for _fn in _jar_facts _office_facts; do
-        BAD=$(awk -v fn="$_fn" '$0 ~ "^" fn "\\(\\) \\{" {f=1;next} f&&/<<.PYEOF.*/{g=1;next} g&&/^PYEOF$/{exit} g{print NR": "$0}' \
-                "${ROOT_DIR}/scan_pipeline.sh" | grep -E '\[\^>\][*+]|\.\*\?|\.\+\?' | grep -vE '^[0-9]+: *#' || true)
+        case "$_fn" in _jar_facts) _hf="transit/containers/jar.py" ;; *) _hf="transit/containers/office.py" ;; esac
+        BAD=$(grep -nE '\[\^>\][*+]|\.\*\?|\.\+\?' "${ROOT_DIR}/${_hf}" | grep -vE '^[0-9]+: *#' || true)
         if [[ -z "$BAD" ]]; then
             ok_test "${_fn} has no unbounded lazy or [^>]* pattern"
         else
