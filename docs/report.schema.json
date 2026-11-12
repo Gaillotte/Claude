@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-transit.invalid/schemas/report.schema.json",
+  "title": "AI Transit raw scan report",
+  "description": "The JSON report exactly as scan_pipeline.sh emits it today (before tests/conformance/conformance.py normalises it). Written to <report_dir>/report_scan_<name>.json, or to <WORK_DIR>/reports/report_<timestamp>.json. Key order is not part of the contract. Only these keywords are used, and tests/conformance/check_schema.py understands exactly these: type (a name or a list of names), properties, required, additionalProperties (a boolean or a schema), items, enum, pattern, minimum. Annotation keywords ($schema, $id, title, description) are ignored. Rules that cannot be written in that subset (decision follows verdict, coverage_complete follows coverage, summary.fail equals the number of findings) are checked by check_schema.py as 'invariants', and are listed in docs/engine_contract.md section 4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "decision",
+    "status_color",
+    "status_background",
+    "scan_name",
+    "source",
+    "coverage",
+    "coverage_complete",
+    "coverage_gaps",
+    "timestamp",
+    "repo_input",
+    "directory",
+    "repo_hash",
+    "standards",
+    "summary",
+    "findings",
+    "findings_by_file",
+    "file_results"
+  ],
+  "properties": {
+    "verdict": {
+      "description": "PASS or FAIL. Never WARN: a WARN does not change the verdict.",
+      "type": "string",
+      "enum": ["PASS", "FAIL"]
+    },
+    "decision": {
+      "description": "APPROVED exactly when verdict is PASS, otherwise REJECTED.",
+      "type": "string",
+      "enum": ["APPROVED", "REJECTED"]
+    },
+    "status_color": {
+      "description": "#198754 for PASS, #B02A37 for FAIL.",
+      "type": "string",
+      "pattern": "^#[0-9A-F]{6}$"
+    },
+    "status_background": {
+      "description": "#D1E7DD for PASS, #F8D7DA for FAIL.",
+      "type": "string",
+      "pattern": "^#[0-9A-F]{6}$"
+    },
+    "scan_name": {
+      "description": "The third positional argument, or the run timestamp (YYYYmmdd_HHMMSS, local time) when it is empty or absent. Stored even when the report file name does not use it (empty report_dir).",
+      "type": "string"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directory", "sha256"],
+      "properties": {
+        "directory": {
+          "description": "The directory that was scanned, as given (trailing slashes removed, not resolved).",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 over the sorted 'sha256sum' lines of every regular file under the directory (excluded directories included). Falls back to repo_hash when the content hash could not be computed.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "coverage": {
+      "description": "Per layer: ran, skipped:<reason> or partial:<reason>. L1_ioc_yara is present only when YARA was skipped, and L6_licence is absent when ScanCode was enabled but failed (both are bash behaviour that looks accidental, see docs/engine_contract.md section 11).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "L1_secrets_gitleaks",
+        "L1_secrets_entropy",
+        "L1_malware",
+        "L2_owasp_cwe",
+        "L3_dependency_cve",
+        "L4_patterns",
+        "L5_per_language_sast"
+      ],
+      "properties": {
+        "L1_secrets_gitleaks": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" },
+        "L1_secrets_entropy": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" },
+        "L1_malware": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" },
+        "L1_ioc_yara": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" },
+        "L2_owasp_cwe": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" },
+        "L3_dependency_cve": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" },
+        "L4_patterns": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" },
+        "L5_per_language_sast": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" },
+        "L6_licence": { "type": "string", "pattern": "^(ran|skipped:.+|partial:.+)$" }
+      }
+    },
+    "coverage_complete": {
+      "description": "True when no coverage entry is anything other than 'ran'.",
+      "type": "boolean"
+    },
+    "coverage_gaps": {
+      "description": "The layer ids whose state does not start with 'ran', sorted.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^L[1-6]_[a-z_]+$" }
+    },
+    "timestamp": {
+      "description": "UTC, second resolution.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "repo_input": {
+      "description": "The REPO_INPUT environment variable (the URL or path ai_transit.sh was given); empty when unset.",
+      "type": "string"
+    },
+    "directory": {
+      "description": "Same value as source.directory.",
+      "type": "string"
+    },
+    "repo_hash": {
+      "description": "SHA-256 over the sorted list of file paths (not contents) under the directory.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "standards": {
+      "description": "Which rule families this engine applies. The first three, then SCA-CVE when RUN_SCA is 'true', then ScanCode-Licence-Copyright when RUN_SCANCODE is 'true', then the twelve fixed names.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "OWASP-Top10-2021",
+          "CWE-Top25",
+          "CERT-Secure-Coding",
+          "SCA-CVE",
+          "ScanCode-Licence-Copyright",
+          "PDF-Active-Content",
+          "Build-Script-Hardening",
+          "HTML-Active-Content",
+          "XML-Build-Hardening",
+          "Package-Manifest-Integrity",
+          "Gradle-Build-Hardening",
+          "Install-Time-Python",
+          "Known-Credential-Formats",
+          "PowerShell-Hardening",
+          "Windows-Batch-Hardening",
+          "Java-Archive-Hardening",
+          "Office-Document-Hardening"
+        ]
+      }
+    },
+    "summary": {
+      "description": "Event counters, not file counts: pass counts record_pass calls, warn counts record_warn calls, fail counts FAIL records.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "warn", "fail"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "warn": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "findings": {
+      "description": "One record per FAIL that was not allowlisted and not below --min-severity.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tool",
+          "category",
+          "severity",
+          "rule_id",
+          "rule_name",
+          "file",
+          "line",
+          "column",
+          "message",
+          "references"
+        ],
+        "properties": {
+          "tool": { "type": "string", "pattern": ".+" },
+          "category": {
+            "type": "string",
+            "enum": ["security", "sast", "secret", "malware", "ioc", "cwe", "owasp"]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+          },
+          "rule_id": { "type": "string" },
+          "rule_name": { "type": "string" },
+          "file": {
+            "description": "Relative to the scanned directory; '.' for a finding about the whole directory.",
+            "type": "string",
+            "pattern": ".+"
+          },
+          "line": { "type": ["integer", "null"], "minimum": 0 },
+          "column": { "description": "Always null today.", "type": ["integer", "null"], "minimum": 0 },
+          "message": { "type": "string", "pattern": ".+" },
+          "references": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "findings_by_file": {
+      "description": "FAIL messages joined with ' | ', keyed by the file path as recorded (the directory as given, '/', the relative path).",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "file_results": {
+      "description": "Per file (and the pseudo entries __global__ and the directory itself): the status and its messages, each carrying a [WARN] or [FAIL] tag, joined with ' | '.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "message"],
+        "properties": {
+          "status": { "type": "string", "enum": ["PASS", "WARN", "FAIL"] },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}
