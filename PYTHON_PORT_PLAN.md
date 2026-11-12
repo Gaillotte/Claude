@@ -56,7 +56,7 @@ Python 3.10+.
 | External tools called | gitleaks, detect-secrets, clamscan, yara, semgrep, trivy, pip-audit, safety, npm audit, scancode, bandit, shellcheck, cppcheck, hadolint, checkov, plus `file`, `strings`, `unzip` |
 | Speed today | the 362-file rule corpus takes 49.5 s, about 0.14 s per file, dominated by process forks |
 | Callers | `ai_transit.sh` (reads sidecars `.scan_verdict`, `.scan_report_json`, `.diff_files`), `Dockerfile` COPY list, `prepare_offline_install.sh`, CI lint file lists, the test suite |
-| Tests | 740 assertions; 23 `run_pipeline` calls drive `ai_transit.sh`; 8 assertions read the shell source (lint) |
+| Tests | 740 checks when this plan was written (793 after Phase 0 and 1); 23 `run_pipeline` calls drive `ai_transit.sh`; 8 of the checks read the shell source (lint) |
 
 The 42% already in Python is the main reason this port is cheaper than it looks: those blocks move into real
 modules almost verbatim.
@@ -168,7 +168,7 @@ freeze on new scanners during Phases 2 to 4 is the cheaper alternative and is th
 | # | Phase | Deliverables | Exit criteria | Rough effort |
 |---|---|---|---|---|
 | 0 | **Freeze and prove feasibility** | `engine_contract.md` + JSON Schema; golden outputs from the bash engine for every fixture and hostile input; the differential harness (`tests/conformance/`); the `rx.py` translator spike fuzzed against `grep -E` on all ~230 patterns | Go/no-go: every pattern translates or is rewritten; harness runs both engines on the fixtures and prints a diff report | 4 to 6 days |
-| 1 | **Share the Python that already exists** | The seven heredoc blocks become real modules under `transit/`; the bash script calls them by path; the splice tooling (`splice_office.py`) is retired; Dockerfile, offline bundle, manifest and CI file lists updated | `scan_pipeline.sh` shrinks by about 2,800 lines, the full suite is still 740/740, helper modules have their own unit tests | 5 to 8 days |
+| 1 | **Share the Python that already exists** | The seven heredoc blocks become real modules under `transit/`; the bash script calls them by path; the splice tooling (`splice_office.py`) is retired; Dockerfile, offline bundle, manifest and CI file lists updated | `scan_pipeline.sh` shrinks by about 2,800 lines, the full suite still passes in full (740 of 740 then), helper modules have their own unit tests | 5 to 8 days |
 | 2 | **Skeleton and the shared machinery** | `cli`, `config`, `console`, `verdict`, `findings`, `files`, `dispatch`, `report`, `pipeline`; allowlist, `.transitignore`, diff mode, `--min-severity`, JSON and HTML reports, sidecars, `scan_pipeline.py` and the launcher | Python engine runs end to end on the `clean` fixture with the same JSON keys and exit status; `TRANSIT_ENGINE` switch works | 6 to 9 days |
 | 3 | **Pattern scanners** | `rules/` tables and `scanners/*` in this order: universal L4 + credentials, then javascript, python, shell, java, go, php, ruby, c/c++, rust, kotlin, c#, then sql, yaml, terraform, docker, then makefile, cmake, html, xml, bat, powershell, setup.py, gradle, manifests | Per scanner, before merge: differential test on the rule corpus and on a real-file corpus shows identical per-file status and rule ids | 12 to 18 days (scanners are independent, so this parallelises) |
 | 4 | **Containers and tool layers** | `containers/pdf,jar,office,binary,archive` (thin, they reuse Phase 1 modules); `tools/*` wrappers; L1 to L6 orchestration, offline logic, gitleaks on the pipeline's terms, coverage block, `RUN_SCA` / `RUN_SCANCODE` | Same coverage block as bash with stub tools and with real gitleaks; the Layer C2 and G tests pass on the Python engine | 8 to 12 days |
@@ -190,7 +190,7 @@ fuzz.
    corpora named in CLAUDE.md (88 Makefiles, 388 HTML, 1,116 CMake, about 6,300 Gradle, 3,362 XML, 365 jars,
    217 documents).
 2. **The existing suite, twice.** `./tests/run_tests.sh` already drives `ai_transit.sh`, so one environment
-   variable runs all 740 assertions against each engine. Assertions that read the shell source become
+   variable runs the whole suite against each engine. Checks that read the shell source become
    engine-specific lints.
 3. **Pattern fuzz.** Every compiled rule against `grep -E` (agreement) and against pathological input (time bound).
 4. **Mutation checks** on the translator and the shared machinery, as the project already does: break each
