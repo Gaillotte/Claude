@@ -109,6 +109,10 @@ ai_transit.sh          ← orchestrator: flag parsing, phase 1 → fetch, phase 
 
 generate_excel_report.py  ← report_<ts>.json → .xlsx (Summary / Files / Findings tabs)
 selfcheck.py              ← self-check integrity report → PDF/JSON report (7 checks)
+transit/                  ← the Python helpers scan_pipeline.sh runs by path (office, jar, PDF, manifest
+                          readers, the JSON report writer, the ScanCode and gitleaks result readers), and the
+                          start of the Python engine (see PYTHON_PORT_PLAN.md). Standard library only; the
+                          integrity manifest, the Dockerfile and the offline bundle all carry it
 docker-run.sh             ← Docker wrapper; auto-builds; forwards env vars to container
 Dockerfile                ← multi-stage image (builder: Go/gitleaks; runtime: 16 tools)
 ```
@@ -940,7 +944,7 @@ tested, and a third turned up in the review: a flat OpenDocument file with `<scr
 300,000 times ran for over a minute under `<script:module\b[^>]*>(.*?)</script:module>`, an opener
 that never closes rescanning to the end of the input every time. It is now `str.find`, and the tag
 strip in the macro path is `<[^<>]*>` (each character is visited at most twice). A lint test fails if
-`_jar_facts` or `_office_facts` contains `[^>]*`, `[^>]+`, `.*?` or `.+?` again. First: patterns that reached into a tag with `[^>]*` or `.*?` went quadratic. Bounding them to
+`transit/containers/jar.py` or `office.py` (the helpers behind `_jar_facts` / `_office_facts`) contains `[^>]*`, `[^>]+`, `.*?` or `.+?` again. First: patterns that reached into a tag with `[^>]*` or `.*?` went quadratic. Bounding them to
 `{0,4000}` was **not enough** — `<a<a<a…` (a 3 KB document) still ran for over a minute, and
 `<w:instrText>` repeated 300,000 times for 32 s. The fix is structural: one tokenizer whose tag pattern
 is deterministic, and no pattern ever reaches into a tag. Second: `[^>]*` is also *wrong*, because `>` is
@@ -1455,7 +1459,7 @@ discipline applied to output rather than to rules.
   the literal characters `\` and `s`. The universal credential rule had it, so it
   required four characters none of which was an "s" — it missed `password = "sup3rs3cret"`
   while passing every test that used a value without one. Four sites. The lint skips
-  comments and heredoc bodies, because the manifest scanner embeds Python, where
+  comments and heredoc bodies, because a shell script can still embed Python, where
   `[\w.-]` is correct.
 - **`find … | head -N`.** Under `set -o pipefail`, `head` exits early, `find` dies of
   SIGPIPE once its output exceeds one 4 KB write, the pipeline returns 141, and
@@ -1464,11 +1468,11 @@ discipline applied to output rather than to rules.
   reproduces it). `ai_transit.sh` clears stale sidecars and defaults a missing
   verdict to `FAIL`, so it failed *closed* — wrong, but not unsafe. Use
   `sed -n '1,Np'`, which reads its whole input.
-- **An unbounded `[^>]*` or lazy `.*?` in an embedded Python helper.** When the opener never closes,
+- **An unbounded `[^>]*` or lazy `.*?` in a Python helper.** When the opener never closes,
   the pattern rescans to the end of the input for every opener, so a few MB of `<a<a<a…` runs for
   minutes (a 3 KB jar: 98 s; a flat ODF with 300,000 `<script:module `: over a minute). Bounding the
   class (`{0,4000}`) did not help. Use `[^<>]*`, `str.find`, or the linear `TAG` tokenizer. Linted on
-  `_jar_facts` and `_office_facts`, which read files an attacker built to be slow.
+  `transit/containers/jar.py` and `office.py`, which read files an attacker built to be slow.
 - **`echo -e` on text from the repository.** File names, archive entry names and finding
   messages are attacker-controlled; `echo -e` expands a literal `\033` in them into a real escape
   byte. Print through `printf '%s'` after replacing control bytes (see "Reports and console output"
