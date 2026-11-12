@@ -2,7 +2,32 @@
 
 Goal: the same pipeline, launchable as `scan_pipeline.sh …` **or** `python3 scan_pipeline.py …`, with the
 same arguments, environment variables, output files, verdict and exit status. Date of this plan:
-2026-11-12. Nothing in it has been implemented yet.
+2026-11-12.
+
+## Status (updated 2026-11-12)
+
+| Phase | State | Evidence |
+|---|---|---|
+| 0 | **Done. Go.** | 17 golden reports (`tests/conformance/golden/`) and a harness that replays them; `docs/engine_contract.md` (734 lines, 24 behaviours that look accidental), `docs/report.schema.json` with a validator that rejects 48 of 48 mutations, `docs/engine_divergences.md` (28 entries). **`transit/rx.py` translates all 293 pattern records (294 fuzz cases) with the same matching lines as GNU grep 3.11: 294 of 294 clean, 0 unexplained**, over 8.8 million compared lines; also 2,000 synthetic EREs and a 2,304-pattern nesting lattice with 0 disagreements; 63 unit tests on Python 3.10 to 3.13. No pattern needs rewriting. |
+| 1 | **Done** | The seven heredocs (2,837 lines, 42% of the script) are files under `transit/`; `scan_pipeline.sh` is 3,860 lines; the 17 golden reports are unchanged. |
+| 2 to 6 | Not started | |
+
+Findings that change the work ahead:
+
+- **ReDoS is the real cost of the regex port, not translation.** 44 of the 294 patterns take seconds in Python's
+  `re` on a 64 KB line that repeats the start of the pattern without finishing it (GNU grep: 3 ms). `rx.py` has the
+  mitigation (`budget=` on every search: `re` first, then a lazy DFA built from the same parse tree; worst case
+  0.27 s, no disagreements with grep). It protects only if the engine passes `budget=` on every file search and
+  runs on the main thread. Phase 3 must do that; a per-line length cap would let padding hide a payload.
+- **A fail-open bug in the bash engine was found and fixed** (contract A1/A2, divergences D-001/D-002): the built-in
+  exclusions (`build`, `dist`, `target`, `vendor`, `coverage`, `node_modules`, …) were matched against the whole
+  path, so a repository under *any* directory with one of those names (`/srv/build/repo`) was pruned entirely and
+  passed with nothing examined. A regular file called `build` or `vendor` was skipped too. Fixed in
+  `scan_pipeline.sh`, pinned by Layer I of the suite (six assertions seen red first).
+- **Three rules have dead alternatives in bash** (`rand()`, `yaml.load(x)`, a backtick or `%x{}` command in Ruby):
+  `\b` after `)` or before a backtick can never match. The Python engine copies them (conformance); one reviewed
+  change in both engines would fix them. Not changed yet.
+- Eight divergence entries are `needs-decision` and listed in section 10.
 
 ## 1. What "launch either way" should mean
 
@@ -201,6 +226,24 @@ fuzz.
 | 4 | Port `ai_transit.sh` and `fetch_repo.sh` too | Not now (phase 7, optional); they are small and not what blocks "launch either way" |
 | 5 | Ship a single-file `scan_pipeline.pyz` for Jenkins agents | Yes, as a build artefact, in addition to the package |
 | 6 | Keep the bash engine after the cut-over | One release behind `TRANSIT_ENGINE=bash`, then delete |
+
+Decisions 1 to 6 were accepted ("go"). Phase 0 raised eight more, all in `docs/engine_divergences.md` with status
+`needs-decision`. Until they are made the Python engine copies bash for each of them:
+
+| Id | Question | Recommendation |
+|---|---|---|
+| D-003 | Real gitignore syntax for `.transitignore` (today: `find -path` globs; a CRLF file or a last line without a newline silently does nothing) | Yes, with fixtures; this is the file an attacker's repository controls |
+| D-004 | Add a WARN whenever a `.transitignore` excludes anything (today a repository whose `.transitignore` is `*` passes with nothing scanned and no trace in the report) | Yes; changes the golden `ignored` case |
+| D-011 | Let an allowlist entry with `path` `.` match whole-directory findings (gitleaks, ClamAV) | Yes |
+| D-014 | Let the known-credential-format rules read files that contain a NUL byte (today one NUL hides all 18 formats) | Yes, but measure false positives on binaries first |
+| D-016 | Correct `rule_id` and `tool` on bandit, cppcheck and CVE records | Yes; needs a normaliser alias in the harness |
+| D-018 | Label Semgrep findings with the ruleset name, not the staged file's absolute path | Yes |
+| D-022 | Stop depending on `file(1)` for unknown extensions | Yes |
+| D-028 | What the Python engine prints and writes on an internal error | As proposed: write `FAIL`, never `PASS` |
+
+Also waiting for a scheduling decision, because each changes `scan_pipeline.sh` during the freeze: D-005 (a partly staged
+Semgrep rule set aborts the whole bash run), D-006 and D-007 (ScanCode failure and allowlist handling), D-008 (YARA is
+never recorded as having run) and D-015 (a crashing scanner reads as "ran, found nothing").
 
 ## 11. If you say go, the first two days
 

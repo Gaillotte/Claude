@@ -2503,6 +2503,92 @@ print(' '.join(str(p) for p in selfcheck.bundle_files(pathlib.Path(sys.argv[1]))
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+# LAYER I — What scanning examines, and the gates for the Python engine
+# The built-in exclusions (build/, vendor/, target/ …) used to be matched against the WHOLE path, so a
+# repository under any directory with such a name was pruned entirely and passed having examined nothing.
+# The conformance gates below are the ones the Python engine has to meet (PYTHON_PORT_PLAN.md, phase 0).
+# ═════════════════════════════════════════════════════════════════════════════
+group "Layer I — scan scope and Python-engine gates"
+if ! _skipping; then
+    I_HOSTILE() {   # I_HOSTILE <dir>: a repository the scan must fail
+        mkdir -p "$1"
+        printf 'import os\nos.system(input())\nprint(eval(input()))\n' > "$1/app.py"
+        printf 'password = "hunter2hunter2"\n' > "$1/cfg.py"
+    }
+    I_RUN() {       # I_RUN <dir> <name>; sets IEC and IV (the verdict in the report)
+        local rep="${SCRATCH}/i_rep"; mkdir -p "$rep"
+        (cd "$ROOT_DIR" && WORK_DIR="${SCRATCH}/i_work" timeout 300 bash ./scan_pipeline.sh --quiet "$1" "$rep" "$2" >/dev/null 2>&1); IEC=$?
+        IV=$(python3 -c "
+import json,sys
+print(json.load(open(sys.argv[1]))['verdict'])" "${rep}/report_scan_$2.json" 2>/dev/null || echo none)
+    }
+    IR="${SCRATCH}/i_roots"; rm -rf "$IR"
+    for _anc in "ok" "build" "node_modules/x" "a/vendor/b" "target" "we[ir]d*" "dist/.git"; do
+        I_HOSTILE "${IR}/${_anc}/repo"
+        _n=$(printf '%s' "$_anc" | tr -c 'A-Za-z0-9' '_')
+        I_RUN "${IR}/${_anc}/repo" "anc${_n}"
+        assert_eq "FAIL" "$IV" "a hostile repository is still FAIL when its path contains '${_anc}' above the scan root"
+    done
+
+    # Inside the repository the built-in names still prune a directory, and only a directory.
+    IP="${SCRATCH}/i_inside"; rm -rf "$IP"; mkdir -p "$IP/build" "$IP/src"
+    printf 'import os\nos.system(input())\n' > "$IP/build/gen.py"; printf 'print(1)\n' > "$IP/src/ok.py"
+    I_RUN "$IP" inside_dir
+    assert_eq "PASS" "$IV" "a directory called build/ inside the repository is still not scanned"
+    IF="${SCRATCH}/i_file"; rm -rf "$IF"; mkdir -p "$IF"
+    printf 'import os\nos.system(input())\neval(input())\n' > "$IF/vendor"
+    printf 'password = "hunter2hunter2"\n' > "$IF/build"
+    I_RUN "$IF" inside_file
+    assert_eq "FAIL" "$IV" "a regular FILE named vendor or build is scanned (only directories are pruned)"
+
+    # .transitignore entries still exclude a file or a directory, anchored on the scan root.
+    IT="${SCRATCH}/i_ignore"; rm -rf "$IT"; I_HOSTILE "$IT"; printf 'cfg.py\napp.py\n' > "$IT/.transitignore"
+    I_RUN "$IT" ignore_files
+    assert_eq "PASS" "$IV" ".transitignore still excludes the files it names"
+    ITD="${SCRATCH}/i_ignore_dir"; rm -rf "$ITD"; I_HOSTILE "$ITD/pkg/legacy"; printf 'print(1)\n' > "$ITD/ok.py"; printf 'pkg/legacy\n' > "$ITD/.transitignore"
+    I_RUN "$ITD" ignore_dir
+    assert_eq "PASS" "$IV" "…and a directory with a path inside the repository"
+
+    # The relative form of the scan root, which find reports as ./…
+    IRL="${SCRATCH}/i_rel/build/repo"; I_HOSTILE "$IRL"
+    (cd "$IRL" && WORK_DIR="${SCRATCH}/i_work" timeout 300 bash "${ROOT_DIR}/scan_pipeline.sh" --quiet . "${SCRATCH}/i_rep" relroot >/dev/null 2>&1)
+    assert_eq "FAIL" "$(python3 -c "
+import json,sys
+print(json.load(open(sys.argv[1]))['verdict'])" "${SCRATCH}/i_rep/report_scan_relroot.json" 2>/dev/null || echo none)" \
+        "a relative scan root ('.') under a build/ directory is scanned too"
+
+    # ── Gates for the Python engine ───────────────────────────────────────────────────────
+    CONF="${ROOT_DIR}/tests/conformance"
+    for _f in check_schema.py test_rx.py pattern_fuzz.py pattern_inventory.py conformance.py; do
+        assert_file_exists "${CONF}/${_f}" "conformance tooling exists: tests/conformance/${_f}"
+    done
+    assert_file_exists "${ROOT_DIR}/docs/engine_contract.md" "the engine contract is in the repository"
+    assert_file_exists "${ROOT_DIR}/docs/engine_divergences.md" "…with its divergence register"
+    assert_file_exists "${ROOT_DIR}/docs/report.schema.json" "…and the report schema"
+
+    OUT_SC=$(cd "$ROOT_DIR" && timeout 600 python3 -I "${CONF}/check_schema.py" 2>&1); EC_SC=$?
+    assert_eq "0" "$EC_SC" "check_schema.py: the bash engine's reports conform to the schema and the invariants"
+    [[ "$EC_SC" == 0 ]] || printf '%s\n' "$OUT_SC" | tail -n 8 >&2
+
+    OUT_RX=$(cd "$ROOT_DIR" && timeout 600 python3 -I "${CONF}/test_rx.py" 2>&1); EC_RX=$?
+    assert_eq "0" "$EC_RX" "test_rx.py: the ERE-to-Python regex translator matches recorded GNU grep behaviour"
+    [[ "$EC_RX" == 0 ]] || printf '%s\n' "$OUT_RX" | tail -n 12 >&2
+
+    OUT_PI=$(cd "$ROOT_DIR" && timeout 120 python3 -I "${CONF}/pattern_inventory.py" --check 2>&1); EC_PI=$?
+    assert_eq "0" "$EC_PI" "patterns.json lists every pattern scan_pipeline.sh passes to grep (regenerate if this fails)"
+    [[ "$EC_PI" == 0 ]] || printf '%s\n' "$OUT_PI" | tail -n 6 >&2
+
+    OUT_PF=$(cd "$ROOT_DIR" && timeout 900 python3 -I "${CONF}/pattern_fuzz.py" --quick --no-timing --synthetic 300 2>&1); EC_PF=$?
+    assert_eq "0" "$EC_PF" "pattern_fuzz.py: every pipeline pattern gives the same lines in Python as in GNU grep"
+    [[ "$EC_PF" == 0 ]] || printf '%s\n' "$OUT_PF" | tail -n 12 >&2
+    git -C "$ROOT_DIR" checkout -q -- tests/conformance/pattern_report.md tests/conformance/pattern_report.json 2>/dev/null || true
+
+    OUT_CF=$(cd "$ROOT_DIR" && timeout 1800 python3 -I "${CONF}/conformance.py" check 2>&1); EC_CF=$?
+    assert_eq "0" "$EC_CF" "conformance.py check: the bash engine still reproduces all stored golden reports"
+    [[ "$EC_CF" == 0 ]] || printf '%s\n' "$OUT_CF" | tail -n 25 >&2
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LAYER F — Static checks on the pipeline itself
 # ═════════════════════════════════════════════════════════════════════════════
 group "Layer F — static checks"

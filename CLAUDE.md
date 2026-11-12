@@ -1495,6 +1495,28 @@ When adding a rule, add both a positive fixture and a negative one, then confirm
 new assertion **fails** before the rule exists. A test that has never been seen red
 proves nothing.
 
+**Conformance tooling for the Python engine** (`PYTHON_PORT_PLAN.md`, `docs/engine_contract.md`) lives in
+`tests/conformance/` and is run by Layer I of the suite:
+
+```bash
+python3 tests/conformance/conformance.py check          # replay 17 cases, compare with golden/*.json (~80 s)
+python3 tests/conformance/conformance.py capture --case NAME   # re-record a golden file (only after a deliberate change)
+python3 tests/conformance/check_schema.py               # reports conform to docs/report.schema.json + invariants
+python3 tests/conformance/test_rx.py                    # ERE → Python regex translator (transit/rx.py), 63 tests
+python3 tests/conformance/pattern_inventory.py --check  # patterns.json lists every pattern scan_pipeline.sh passes to grep
+python3 tests/conformance/pattern_inventory.py          # …regenerate it after adding or changing a grep pattern
+python3 tests/conformance/pattern_fuzz.py               # every pattern against real GNU grep (~66 s; --quick for the suite)
+```
+
+A golden file changes only when a report is meant to change: regenerate it in the same commit and say why.
+A new `grep` pattern in `scan_pipeline.sh` makes `pattern_inventory.py --check` fail until `patterns.json` is
+regenerated, which is how the translator's coverage of the pipeline stays honest.
+
+**Scan scope.** The built-in exclusions (`build`, `dist`, `target`, `vendor`, `coverage`, `node_modules`, `.git`, …)
+are matched against the path *below the scan root*, and only for directories. They used to match the whole path, so a
+repository under `/srv/build/…` was pruned entirely and passed with nothing examined; Layer I pins this with a
+hostile repository placed under such ancestors. `.transitignore` entries (files or directories) are anchored the same way.
+
 ## CI
 
 `.github/workflows/ci.yml` — `lint` (shellcheck, errors fatal) · `test` (suite, no

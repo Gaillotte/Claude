@@ -194,10 +194,25 @@ if [[ -f "$TRANSITIGNORE" ]]; then
 fi
 
 # ── Build find prune arguments ────────────────────────────────────────────────
+# The patterns are anchored on the scan root. They used to start with `*/`, which also matched
+# every directory ABOVE the root: scanning /srv/build/repo (or /opt/build/ai-transit/fetch/repo)
+# pruned the whole tree, examined no file and returned PASS. The root is glob-escaped because
+# find -path reads * ? [ and \ in the pattern, and the root may contain them.
+_prune_root="$SCAN_DIR"
+[[ "$_prune_root" == "/" ]] && _prune_root=""
+_prune_root="${_prune_root//\\/\\\\}"; _prune_root="${_prune_root//\*/\\*}"
+_prune_root="${_prune_root//\?/\\?}";  _prune_root="${_prune_root//\[/\\[}"
 FIND_PRUNE_ARGS=()
-for d in "${DEFAULT_EXCLUDE_DIRS[@]}" "${EXTRA_EXCLUDE_DIRS[@]}"; do
-    FIND_PRUNE_ARGS+=(-path "*/${d}" -prune -o -path "*/${d}/*" -prune -o)
+# Built-in names are directories: a regular file called `build` or `vendor` is still scanned.
+for d in "${DEFAULT_EXCLUDE_DIRS[@]}"; do
+    FIND_PRUNE_ARGS+=(-type d \( -path "${_prune_root}/${d}" -o -path "${_prune_root}/*/${d}" \) -prune -o)
 done
+# .transitignore entries may name a file or a directory, as before.
+for d in "${EXTRA_EXCLUDE_DIRS[@]}"; do
+    FIND_PRUNE_ARGS+=(\( -path "${_prune_root}/${d}" -o -path "${_prune_root}/*/${d}" \) -prune -o
+                      -path "${_prune_root}/${d}/*" -prune -o -path "${_prune_root}/*/${d}/*" -prune -o)
+done
+unset _prune_root
 
 # ── Semgrep / clamscan exclude flags from combined list ───────────────────────
 SEMGREP_EXCLUDES=()

@@ -805,7 +805,6 @@ def resolve_all(sites: list[Site], ctx: dict, source: Path) -> list[dict]:
         # (3) "$VAR" for a variable with a single static assignment in the same function or file level
         raw = pats[0].raw
         children: list[dict] = []
-        how = ""
         try:
             if "KNOWN_CRED_PATS[" in raw and cred_block:
                 n = int(eval_cred('"${#KNOWN_CRED_PATS[@]}"'))
@@ -819,7 +818,6 @@ def resolve_all(sites: list[Site], ctx: dict, source: Path) -> list[dict]:
                     if len(pats) > 1:
                         c["excl"] = eval_cred(pats[1].raw)
                     children.append(c)
-                how = "table"
             elif any(v in raw for v in ("KNOWN_CRED_ALL", "KNOWN_CRED_EXCL")) and cred_block:
                 c = dict(rec)
                 c["pattern"] = eval_cred(raw)
@@ -827,7 +825,6 @@ def resolve_all(sites: list[Site], ctx: dict, source: Path) -> list[dict]:
                     c["excl"] = eval_cred(pats[1].raw)
                 c.update({"resolved": True, "resolved_by": "executed the KNOWN_CRED_* definitions"})
                 children.append(c)
-                how = "table"
             else:
                 names = [m.group(1) or m.group(2) for m in re.finditer(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))",
                                                                      " ".join(pats[0].text.split("\0")))]
@@ -847,7 +844,6 @@ def resolve_all(sites: list[Site], ctx: dict, source: Path) -> list[dict]:
                     if len(pats) > 1:
                         c["excl"] = bash_eval_with_prelude("\n".join(prelude), pats[1].raw)
                     children.append(c)
-                    how = "assignment"
         except Exception as exc:  # leave it unresolved and say why
             rec["resolve_error"] = str(exc)[:200]
         if not children:
@@ -916,6 +912,10 @@ def build(source: Path) -> tuple[list[dict], dict]:
     records = resolve_all(sites, ctx, source)
     # stable order: by line, then id
     records.sort(key=lambda r: (r["line"], r["id"]))
+    sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    for r in records:
+        r["source"] = "scan_pipeline.sh"
+        r["source_sha256"] = sha
     ind = independent_count(ctx["text"], ctx["heredoc_lines"])
     found = {h: sum(1 for s in sites if s.helper == h) for h in HELPERS}
     ctx["stats"]["independent_count"] = ind
@@ -967,9 +967,25 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     ap.add_argument("--summary", action="store_true", help="print counts and every dynamic site")
     ap.add_argument("--no-write", action="store_true")
+    ap.add_argument("--check", action="store_true",
+                    help="do not write: exit 1 if the patterns found differ from --out (ids, pattern text, flags), "
+                         "ignoring line numbers; use it in CI so patterns.json cannot go stale")
     a = ap.parse_args(argv)
     source = Path(a.source)
     records, stats = build(source)
+    if a.check:
+        have = json.loads(Path(a.out).read_text(encoding="utf-8"))
+        key = lambda r: (r["id"], r.get("pattern"), r.get("excl"), r["mode"], r["flags"])  # noqa: E731
+        want, got = {key(r) for r in have}, {key(r) for r in records}
+        if want == got:
+            print(f"{a.out} is current: {len(got)} patterns")
+            return 0
+        for k in sorted(got - want, key=str)[:10]:
+            print("new or changed:", k[0], repr((k[1] or "")[:80]))
+        for k in sorted(want - got, key=str)[:10]:
+            print("gone or changed:", k[0], repr((k[1] or "")[:80]))
+        print(f"{a.out} is stale: regenerate it with  python3 -I tests/conformance/pattern_inventory.py")
+        return 1
     if not a.no_write:
         Path(a.out).write_text(json.dumps(records, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     if stats["independent_count"] != stats["lexer_count"]:
