@@ -899,11 +899,33 @@ class TestSearchPolicy(unittest.TestCase):
         self.assertTrue(evaluate(m2, tgt(big + b"curl http://x\n", 8192), pol(8192, budget=0.0005)))
 
     def test_nonpositive_budget_does_not_disable_the_limit(self):
+        """setitimer(0) would DISARM the alarm: a budget of 0 must reach rx as a small positive number, never as 0 or None."""
         m = reg(Match(r"curl[^|]*http://"))
+        e = reg(Match(r"curl[^|]*http://", excl="zzz"))
         data = b"curl x " * 1100 + b"\n"
         for budget in (0.0, -1.0):
             with self.subTest(budget=budget):
-                self.assertFalse(evaluate(m, tgt(data), pol(budget=budget)))
+                with mock.patch.object(rx, "search_lines", wraps=rx.search_lines) as sl, mock.patch.object(rx, "search_excl", wraps=rx.search_excl) as se:
+                    self.assertFalse(evaluate(m, tgt(data), pol(budget=budget)))
+                    self.assertFalse(evaluate(e, tgt(data), pol(budget=budget)))
+                    self.assertFalse(evaluate(reg(Match(r"curl[^|]*http://", mode="flat")), tgt(data), pol(budget=budget)))
+                self.assertGreater(sl.call_args.kwargs["budget"], 0)
+                self.assertGreater(se.call_args.kwargs["budget"], 0)
+
+    def test_only_a_flat_rule_asks_for_the_folded_copy(self):
+        def boom():
+            raise AssertionError("the folded copy was built for a rule that does not need it")
+
+        t = Target(data=b"abc\nxyz\n", basename="f", ext="txt", has_long_line=False, flat=boom)
+        for cond in (reg(Match("abc")), reg(Match("abc", ci=True)), reg(Match("abc", excl="q")), reg(Not(Match("zzz"))),
+                     reg(AllOf((Match("abc"), Match("xyz"))))):
+            with self.subTest(cond=cond):
+                evaluate(cond, t, pol())
+        evaluate(reg(Match("abc", binary="skip")), t, pol())
+        with self.assertRaises(AssertionError):
+            evaluate(reg(Match("abc", mode="flat")), t, pol())
+        # a flat rule that will answer "no" from the first 32 KiB (grep -I and a NUL byte) builds no copy at all
+        self.assertFalse(evaluate(reg(Match("abc", mode="flat", binary="skip")), Target(b"abc\0", "f", "txt", False, boom), pol()))
 
     def test_no_nested_time_limit(self):
         """rx.time_limit cannot be nested (leaving the inner block cancels the outer timer): at most one is ever open."""
@@ -1130,42 +1152,53 @@ _RSS_CHILD = r"""
 import resource, sys
 sys.path.insert(0, sys.argv[1])
 from transit import rules, rx
-from transit.rules import AllOf, Match, Matcher, RuleSet, RuleSpec, SearchPolicy, Target
-size = int(sys.argv[2])
+from transit.rules import Match, Matcher, RuleSet, RuleSpec, SearchPolicy, Target
+phase, size = sys.argv[2], int(sys.argv[3])
 policy = SearchPolicy(rule_budget_s=0.25, long_line_bytes=8192, excl_nul_blind=False)
 ms = {"line": Match("zzzz"), "excl": Match("zzzz", excl="q")}
 RuleSet("rss", [RuleSpec(id="rss/%02d-%s" % (i, k), outcome="warn", message="CWE-0:x", cond=m) for i, (k, m) in enumerate(ms.items())])
 every = Matcher("rss/every", Match("a"))
 never = Matcher("rss/never", Match("zzzz"))
 unit = b"ab\n"
-
-# phase 1: the whole file is two-byte lines
-data = unit * (size // 3)
-t = Target(data=data, basename="f", ext="txt", has_long_line=False, flat=lambda: data)
-assert rules.evaluate(ms["line"], t, policy) is False
-assert rules.evaluate(ms["excl"], t, policy) is False
-assert next(iter(every.spans(t, policy))) == (0, 2)      # 30 million matching lines, only the first is asked for
-assert list(never.spans(t, policy)) == []
-del t, data
-
-# phase 2: the same size with one over-long line in the middle (the router splits around it)
-half = unit * (size // 6)
-data = b"".join([half, b"x" * 9000, b"\n", half])
-del half
-t = Target(data=data, basename="f", ext="txt", has_long_line=True, flat=lambda: data)
-assert rules.evaluate(ms["line"], t, policy) is False
-assert rules.evaluate(ms["excl"], t, policy) is False
-assert next(iter(every.spans(t, policy))) == (0, 2)
+def no_flat():
+    raise AssertionError("only a flat rule may ask for the folded copy")
+if phase == "short":
+    # the whole file is two-byte lines: 30 million of them, and `every` matches each one
+    data = unit * (size // 3)
+    t = Target(data=data, basename="f", ext="txt", has_long_line=False, flat=no_flat)
+    assert rules.evaluate(ms["line"], t, policy) is False
+    assert next(iter(every.spans(t, policy))) == (0, 2)      # only the first of the 30 million spans is asked for
+    assert list(never.spans(t, policy)) == []
+else:
+    # the same kind of file with one over-long line in the middle: the router splits around it (excl copies each run)
+    half = unit * (size // 6)
+    data = b"".join([half, b"x" * 9000, b"\n", half])
+    del half
+    t = Target(data=data, basename="f", ext="txt", has_long_line=True, flat=no_flat)
+    assert rules.evaluate(ms["line"], t, policy) is False
+    assert rules.evaluate(ms["excl"], t, policy) is False
+    assert next(iter(every.spans(t, policy))) == (0, 2)
 print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
 """
 
 
 class TestMemory(unittest.TestCase):
+    """No buffer is split into a list of lines and no more than one derived copy lives at a time (design 9.4, R-04, F12): the peak
+    resident size of a child process stays under three times the file. A list of the lines of 90 MB of two-byte lines needs about 19 times."""
+
+    def peak(self, phase: str, size: int) -> int:
+        r = subprocess.run([sys.executable, "-I", "-c", _RSS_CHILD, str(ROOT), phase, str(size)], capture_output=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stderr.decode(errors="replace"))
+        return int(r.stdout.split()[-1])
+
     def test_90_mb_of_two_byte_lines_peaks_under_three_times_the_file(self):
         size = 90_000_000
-        r = subprocess.run([sys.executable, "-I", "-c", _RSS_CHILD, str(ROOT), str(size)], capture_output=True, timeout=300)
-        self.assertEqual(r.returncode, 0, r.stderr.decode(errors="replace"))
-        peak = int(r.stdout.split()[-1])
+        peak = self.peak("short", size)
+        self.assertLess(peak, 3 * size, "peak resident size %d MB for a %d MB file" % (peak >> 20, size >> 20))
+
+    def test_a_file_with_one_long_line_in_the_middle(self):
+        size = 60_000_000
+        peak = self.peak("long", size)
         self.assertLess(peak, 3 * size, "peak resident size %d MB for a %d MB file" % (peak >> 20, size >> 20))
 
 

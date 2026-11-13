@@ -110,10 +110,14 @@ SEVERITY_CASES = [
     ("semgrep[p/x]:rule:line3:ERROR:quoted :LOW: from the repository", "HIGH"),
     ("semgrep[p/x]:rule:line3:WARNING:tail :CRITICAL:", "MEDIUM"),
     ("semgrep[p/x]:rule:INFO:no line field, so the fixed position does not match", "HIGH"),
+    ("semgrep[p/x]:rule:ABCD:INFO:m", "HIGH"),                           # the field after the rule must be line<N>
     ("semgrep[p/x:rule:line3:INFO:the bracket never closes", "HIGH"),
     ("semgrep[p/x]rule:line3:INFO:no colon after the bracket", "HIGH"),
     ("semgrep[p/x]:rule:line3:INFO", "HIGH"),
     ("semgrep[p/x]:rule:line:INFO:digits are optional", "INFO"),
+    ("semgrep[a]:r:line1:INFO:txt]:r:line2:ERROR:", "INFO"),            # the first "]" closes the ruleset
+    ("semgrep[a]:r:line1:ERROR:txt]:r:line2:INFO:", "HIGH"),
+    ("semgrep[p/x]:r:line\u0663:INFO:m", "HIGH"),                        # [0-9], not any Unicode digit
     ("CWE-798:hardcoded_credential", "HIGH"),
     ("OWASP-A09:logging_failure", "HIGH"),
     ("x:LOW:and:CRITICAL:", "LOW"),
@@ -172,6 +176,8 @@ RECORD_CASES = [
     ("CVE-2021-44228:Log4Shell_JNDI_injection", "unknown", "security", "", None, (), None),
     ("gitleaks missing \u2014 secret scan skipped", "unknown", "security", "", None, (), None),
     ("x:y", "unknown", "security", "", None, (), None),
+    ("CWE-123 and no colon", "unknown", "security", "", None, (), None),
+    ("OWASP-A09 and no colon", "unknown", "security", "", None, (), None),
     ("Upper:case", "unknown", "security", "", None, (), None),
     ("engine:nothing_scanned", "engine", "security", "nothing_scanned", None, (), None),
     ("engine:scan_incomplete:universal:time_budget", "engine", "security", "scan_incomplete", None, (), None),
@@ -572,6 +578,13 @@ class ParseAllowlistTests(unittest.TestCase):
         al, _ = parse_allowlist(dump([entry(reason="\nabc")]))
         self.assertIsNone(al.lookup("CWE-798:x", "a.py"))
 
+    def test_invalid_utf8_and_a_byte_order_mark_are_not_repaired(self):
+        for raw in (b'[{"rule":"A","path":"p\xff","reason":"x"}]', b'\xef\xbb\xbf[{"rule":"A","path":"p","reason":"x"}]',
+                    b'[{"rule":"A","path":"p","reason":"x\xc3"}]'):
+            for strict in (False, True):
+                al, _ = parse_allowlist(raw, strict=strict)
+                self.assertEqual(len(al), 0, raw)
+
     def test_a_malformed_member_stops_the_loop_in_bash_mode_only(self):
         for bad in ({"rule": 5}, {"path": None}, {"reason": 7}, {"rule": ["a"]}, {"reason": True}, {"path": {}}):
             raw = dump([entry(rule="A", path="p"), dict(entry(rule="B", path="p"), **bad), entry(rule="C", path="p")])
@@ -774,6 +787,7 @@ class NeutraliseDetailTests(unittest.TestCase):
         self.assertEqual(neutralise_detail("abc", max_chars=2), "ab")
         self.assertEqual(neutralise_detail("abc", max_chars=0), "")
         self.assertEqual(neutralise_detail("abc", max_chars=-5), "")
+        self.assertEqual(neutralise_detail("abcdefgh", max_chars=-3), "")      # a negative limit is not "all but the last"
         # the cut comes first, so a marker the cut leaves whole is still neutralised
         self.assertEqual(neutralise_detail("a:low:" + "b" * 200, max_chars=6), "a:low?")
         self.assertEqual(neutralise_detail("a:low:b", max_chars=5), "a:low")

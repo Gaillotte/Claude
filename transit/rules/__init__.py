@@ -34,6 +34,7 @@ a scanner combines with ``AllOf``, ``AnyOf`` or ``Not`` (review log R-18, R-21).
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import fnmatch
 import threading
@@ -516,12 +517,15 @@ def _search_line(rule: "rx.Rule", target: Target, policy: SearchPolicy, binary: 
     limit = max(1, policy.long_line_bytes)
     if len(data) <= 4 * limit:
         return rx.dfa_search(compiled, data)
-    budget = _budget(policy)
-    return _routed(
-        data, limit,
-        lambda start, stop: _re_range(compiled, data, start, stop, budget),
-        lambda start, stop: rx.dfa_search(compiled, data[start:stop + 1]),
-    )
+    budget = _Budget(_budget(policy))
+
+    def short_lines(start: int, stop: int) -> bool:
+        if budget.spent():
+            return rx.dfa_search(compiled, data[start:stop + 1])
+        with budget.charge():
+            return _re_range(compiled, data, start, stop, budget.left)
+
+    return _routed(data, limit, short_lines, lambda start, stop: rx.dfa_search(compiled, data[start:stop + 1]))
 
 
 def _search_excl(rule: "rx.Rule", target: Target, policy: SearchPolicy) -> bool:
@@ -535,18 +539,16 @@ def _search_excl(rule: "rx.Rule", target: Target, policy: SearchPolicy) -> bool:
         return False                                  # bash: grep prints a notice for a binary file, the second grep reads nothing
     limit = max(1, policy.long_line_bytes)
     if len(data) <= 4 * limit:
-        for start, stop in rx.dfa_matching_lines(pat, data):
-            if not rx.dfa_search(excl, data[start:stop + 1]):
-                return True
-        return False
+        return _excl_linear(pat, excl, data)
+    left = _Budget(budget)
 
-    def long_line(start: int, stop: int) -> bool:
-        piece = data[start:stop + 1]
-        return rx.dfa_search(pat, piece) and not rx.dfa_search(excl, piece)
+    def short_lines(start: int, stop: int) -> bool:
+        if left.spent():
+            return _excl_linear(pat, excl, data[start:stop + 1])
+        with left.charge():
+            return rx.search_excl(pat, excl, data[start:stop + 1], binary="text", budget=left.left)
 
-    return _routed(data, limit,
-                   lambda start, stop: rx.search_excl(pat, excl, data[start:stop + 1], binary="text", budget=budget),
-                   long_line)
+    return _routed(data, limit, short_lines, lambda start, stop: _excl_linear(pat, excl, data[start:stop + 1]))
 
 
 def _search_flat(rule: "rx.Rule", target: Target, policy: SearchPolicy, binary: str) -> bool:
@@ -559,6 +561,35 @@ def _search_flat(rule: "rx.Rule", target: Target, policy: SearchPolicy, binary: 
     if len(view) > policy.long_line_bytes and rx.dfa_available(compiled):
         return rx.dfa_search(compiled, view)
     return rx.search_lines(compiled, view, budget=_budget(policy))
+
+
+class _Budget:
+    """The `re` time one rule may spend on ONE buffer, shared by all the runs of ordinary lines of a buffer that is routed around its
+    over-long lines. Without it each run would get the whole budget again, and a buffer that alternates a long line with a run of
+    8 KiB lines of ``curl x `` would cost the budget once per long line (measured: 6.2 s for 300 pairs, where the linear matcher needs 0.4 s).
+    Only `re` time is charged; the clock is ``perf_counter`` so that a test which fakes ``time.monotonic`` (the deadline) is not disturbed."""
+
+    def __init__(self, seconds: float) -> None:
+        self.left = seconds
+
+    def spent(self) -> bool:
+        return self.left <= 0.0
+
+    @contextlib.contextmanager
+    def charge(self) -> Iterator[None]:
+        began = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.left -= time.perf_counter() - began
+
+
+def _excl_linear(pat, excl, data: bytes) -> bool:
+    """grep_check_excl over ``data`` with the linear matcher only: some line matches ``pat`` and not ``excl``."""
+    for start, stop in rx.dfa_matching_lines(pat, data):
+        if not rx.dfa_search(excl, data[start:stop + 1]):    # +1: an empty line is still the line (b"" has none)
+            return True
+    return False
 
 
 def _re_range(compiled, data: bytes, start: int, stop: int, budget: float) -> bool:
