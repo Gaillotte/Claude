@@ -36,7 +36,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Callable, Mapping, Sequence, TextIO
+from typing import Mapping, Sequence, TextIO
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -49,7 +49,6 @@ ENGINES: "dict[str, list[str]]" = {
 }
 DEFAULT_FIXTURES = (ROOT / "tests" / "fixtures" / "rules",)
 SCAN_NAME = "family"
-GLOBAL_KEY = "__global__"
 #: Fixture files that are not fixtures.
 _SKIPPED_NAMES = frozenset({"__pycache__", ".DS_Store"})
 
@@ -87,14 +86,17 @@ class Difference:
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # printable output
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+#: The bidirectional format controls (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069); written as numbers so that this file holds none.
+_BIDI_CONTROLS = frozenset(chr(code) for code in (0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)))
+
+
 def printable(text: object, limit: int = 300) -> str:
     """Repository text made safe for a terminal: every control character, DEL and C1 byte, the bidi controls and anything that does not
     encode becomes ``?``; long text is cut."""
     out = []
     for ch in str(text)[:limit]:
         code = ord(ch)
-        if code < 0x20 or 0x7F <= code <= 0x9F or ch in "؜‎‏‪‫‬‭‮⁦⁧⁨⁩" \
-                or 0xD800 <= code <= 0xDFFF:
+        if code < 0x20 or 0x7F <= code <= 0x9F or ch in _BIDI_CONTROLS or 0xD800 <= code <= 0xDFFF:
             out.append("?")
         else:
             out.append(ch)
@@ -252,8 +254,8 @@ def _split_messages(text: str) -> "list[str]":
 
 
 def file_rows(report: "Mapping | None", scan: Path) -> "dict[str, FileRow]":
-    """Per file of the report: status, messages and the rule ids of its finding records. ``__global__`` and anything outside the scanned
-    directory are left out."""
+    """Per file of the report: status, messages and the rule ids of its finding records. ``__global__`` (a missing tool, a skipped layer)
+    and anything else outside the scanned directory are left out."""
     rows: "dict[str, FileRow]" = {}
     if not report:
         return rows
@@ -266,9 +268,9 @@ def file_rows(report: "Mapping | None", scan: Path) -> "dict[str, FileRow]":
             by_file.setdefault(rel, []).append(str(record.get("rule_id", "")))
     results = report.get("file_results", {}) or {}
     for key, value in results.items():
-        if key == GLOBAL_KEY or not isinstance(value, dict):
+        if not isinstance(value, dict):
             continue
-        rel = _relative(str(key), scan)
+        rel = _relative(str(key), scan)            # ``__global__`` is not below the scanned directory: left out here
         if rel is None:
             continue
         rows[rel] = FileRow(status=str(value.get("status", "")), messages=tuple(sorted(_split_messages(str(value.get("message", ""))))),

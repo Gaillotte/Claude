@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import dataclasses
 import functools
 import io
 import json
@@ -280,7 +279,8 @@ def _problem(rel: str, node: "ast.AST | int", text: str) -> str:
 
 
 def lint_import_cycles(sources: "Mapping[str, str]") -> "list[str]":
-    """The explicit import graph of the engine (and the implicit edge from a module to its parent package) has no cycle."""
+    """The explicit import graph of the engine has no cycle. A package and its own submodule are two nodes: ``a/__init__.py`` importing ``a.b``
+    while ``a/b.py`` imports ``a`` is a cycle (the submodule may be imported before the package has defined the names it asks for)."""
     known = _known_modules(sources)
     engine = frozenset(module_name(rel) for rel in sources if is_engine(rel))
     graph: "dict[str, set[str]]" = {name: set() for name in engine}
@@ -291,9 +291,6 @@ def lint_import_cycles(sources: "Mapping[str, str]") -> "list[str]":
             target = _module_of(name, engine)
             if target is not None and target != me:
                 graph[me].add(target)
-        parent = me.rpartition(".")[0]
-        if parent in engine and parent != me:
-            graph[me].add(parent)          # importing a.b.c runs a/b/__init__.py first
     problems: "list[str]" = []
     state: "dict[str, int]" = {}
     reported: "set[frozenset[str]]" = set()
@@ -882,7 +879,7 @@ def _dockerfile_copies(text: str) -> "list[tuple[list[str], str]]":
     copies: "list[tuple[list[str], str]]" = []
     for logical in re.sub(r"\\\r?\n", " ", text).splitlines():
         words = logical.split()
-        if not words or words[0].startswith("#") or words[0].upper() != "COPY":
+        if not words or words[0].upper() != "COPY":
             continue
         flags = [w for w in words[1:] if w.startswith("--")]
         paths = [w for w in words[1:] if not w.startswith("--")]
@@ -975,12 +972,12 @@ class ImportCycleTests(LintCase):
         tree = tree_of(**{"transit/a.py": "import transit.b\n", "transit/b.py": "import transit.c\n", "transit/c.py": "import transit.a\n"})
         self.assertFlags(lint_import_cycles(tree), "cycle")
 
-    def test_flags_a_cycle_closed_by_the_parent_package(self):
-        """Importing ``transit.scanners.credentials`` runs ``transit/scanners/__init__.py`` first, so an ``__init__`` that imports its own
-        submodule while the submodule imports the package is a cycle even though neither line says so twice."""
+    def test_flags_a_package_and_its_own_submodule_that_import_each_other(self):
+        """``a/__init__.py`` imports ``a.b`` and ``a/b.py`` asks the package for a name: the submodule can be imported before the package has
+        defined it."""
         tree = tree_of(**{"transit/scanners/__init__.py": "from transit.scanners import credentials\n",
                           "transit/scanners/credentials.py": "from transit.scanners import ScanContext\n"})
-        self.assertFlags(lint_import_cycles(tree), "cycle")
+        self.assertFlags(lint_import_cycles(tree), "cycle", "transit.scanners")
 
     def test_flags_a_relative_import_cycle(self):
         tree = tree_of(**{"transit/a.py": "from . import b\n", "transit/b.py": "from .a import x\n"})
@@ -1647,11 +1644,15 @@ class FloorTests(LintCase):
             "math.cbrt": ("import math\nX = math.cbrt(8)\n", "cbrt"),
             "sys.exception": ("import sys\nX = sys.exception()\n", "exception"),
             "shutil onexc": ("import shutil\nshutil.rmtree(p, onexc=f)\n", "onexc"),
-            "star in a subscript": ("X = a[*b]\n", "subscript"),
         }
         for name, (text, needle) in samples.items():
             with self.subTest(name):
                 self.assertFlags(lint_floor({"transit/x.py": text}), needle)
+
+    def test_flags_a_star_expression_in_a_subscript(self):
+        """``a[*b]`` is 3.11: a 3.10 parser rejects it, a newer one accepts it whatever ``feature_version`` says, so the AST is read."""
+        self.assertFlags(lint_floor({"transit/x.py": "X = a[*b]\n"}))
+        self.assertFlags(lint_floor({"transit/x.py": "X = a[1, *b]\n"}))
 
     def test_flags_a_union_in_a_runtime_isinstance(self):
         for text in ("isinstance(x, int | None)\n", "issubclass(c, A | B)\n", "def f(x):\n    return isinstance(x, str | bytes)\n"):
@@ -1701,7 +1702,7 @@ class FloorTests(LintCase):
         ''')
         self.assertCleanLint(lint_floor({"transit/x.py": text}))
 
-    def test_a_file_that_is_not_utf8_python_is_reported_not_skipped(self):
+    def test_a_file_that_does_not_parse_is_reported_not_skipped(self):
         self.assertFlags(lint_floor({"transit/x.py": "x = (\n"}), "does not parse")
 
 
@@ -1771,7 +1772,7 @@ class TokenTests(LintCase):
         text = pem_header() + "\n" + body(64, _ALNUM + "+/") + "\n-----END " + "RSA PRIVATE KEY-----\n"
         self.assertFlags(lint_tokens({"tests/engine/test_x.py": text}), "private key")
 
-    def test_flags_a_pem_key_whose_body_is_on_the_fifth_line_and_one_that_is_wrapped_and_folded(self):
+    def test_flags_a_pem_key_whose_body_is_on_the_fifth_line(self):
         text = pem_header() + "\n\n\n\n" + body(64, _ALNUM + "+/") + "\n"
         self.assertFlags(lint_tokens({"tests/engine/test_x.py": text}), "private key")
 
@@ -1784,6 +1785,8 @@ class TokenTests(LintCase):
             "a body of zeros": "shp" + "at_" + "0" * 32,
             "the GitHub documentation token": "gh" + "p_16C7e42F" + "292c6912E7710c838347Ae178B4a",
             "a Stripe test key": "sk_" + "test_" + body(26, _ALNUM),
+            "a token with a letter in front of it": "Z" + t["npm_token"],
+            "a token with a letter behind it": t["npm_token"] + "Z",
             "a token inside a longer identifier": "Z" + t["npm_token"] + "Z",
             "a token inside a base64 blob": "QUJD" + t["aws_access_key_id"] + "REVG",
             "a git sha": "d" * 3 + "e3b0c44298fc1c149afbf4c8996fb92427ae41e4",
@@ -1915,7 +1918,7 @@ class PackagingTests(LintCase):
 
     def test_flags_a_dockerfile_that_names_the_entry_point_only_in_a_comment_or_a_builder_copy(self):
         for text in ("# COPY scan_pipeline.py ./\nCOPY transit ./transit\nCOPY scan_pipeline.sh ./\n",
-                     "COPY --from=builder /x/scan_pipeline.py ./\nCOPY transit ./transit\n"):
+                     "COPY --from=builder scan_pipeline.py ./\nCOPY transit ./transit\n"):
             with self.subTest(text=text[:30]):
                 self.assertFlags(lint_packaging(packaging(docker=text)), "scan_pipeline.py")
 
@@ -2225,6 +2228,14 @@ class FamilyDiffTests(unittest.TestCase):
         (self.fixtures / "sub" / "setup.py").write_text("x = 1\n", encoding="utf-8")
         self.assertEqual({"setuppy"}, family_diff.routed_ids(self.fixtures, "sub/setup.py"))
 
+    def test_a_shebang_with_arguments_is_routed_by_its_interpreter(self):
+        """D-031, closed in bash: ``#!/bin/bash -e`` and ``#!/usr/bin/env -S python3 -u`` go to the shell and the Python scanner."""
+        for name, line, wanted in (("run_it", "#!/bin/bash -e", "shell"), ("env_s", "#!/usr/bin/env -S python3 -u", "python"),
+                                   ("plain", "#!/bin/sh", "shell"), ("crlf", "#!/bin/bash -x\r", "shell")):
+            with self.subTest(name=name):
+                (self.fixtures / name).write_bytes((line + "\nexit 0\n").encode("ascii"))
+                self.assertEqual({"unknown", wanted}, family_diff.routed_ids(self.fixtures, name))
+
     def test_select_fixtures_keeps_only_what_is_routed_to_the_ids(self):
         chosen = family_diff.select_fixtures([self.fixtures], ["shell"])
         self.assertEqual(["a.sh", "sub/c.sh"], [rel for _, rel in chosen])
@@ -2237,6 +2248,7 @@ class FamilyDiffTests(unittest.TestCase):
         (self.fixtures / "__pycache__" / "e.sh").write_text("x\n", encoding="utf-8")
         (self.fixtures / "f.pyc").write_bytes(b"\0")
         self.assertEqual(["a.sh", "sub/c.sh"], [rel for _, rel in family_diff.select_fixtures([self.fixtures], ["shell"])])
+        self.assertEqual([], family_diff.select_fixtures([self.fixtures], ["unknown"]), "bytecode and links are not fixtures")
 
     def test_two_fixture_directories_do_not_collide(self):
         other = self.scratch / "other"
@@ -2351,10 +2363,10 @@ class FamilyDiffTests(unittest.TestCase):
                     self.assertEqual(2, family_diff.main(argv, out=io.StringIO()))
 
     def test_text_from_a_report_is_made_printable(self):
-        hostile = {"rows": {"a.sh": ["FAIL", "[FAIL] x\x1b]0;pwned\x07‮ | "], "sub/c.sh": ["PASS", ""]}}
+        hostile = {"rows": {"a.sh": ["FAIL", "[FAIL] x\x1b]0;pwned\x07" + chr(0x202E) + " | "], "sub/c.sh": ["PASS", ""]}}
         status, text = self.run_main(["shell"], hostile, {"rows": self.ROWS})
         self.assertEqual(1, status)
-        self.assertEqual([], [ch for ch in text if (ord(ch) < 32 and ch != "\n") or 0x7F <= ord(ch) <= 0x9F or ch == "‮"])
+        self.assertEqual([], [ch for ch in text if (ord(ch) < 32 and ch != "\n") or 0x7F <= ord(ch) <= 0x9F or ch == chr(0x202E)])
         self.assertIn("pwned", text)
 
     def test_the_environment_reaches_both_engines(self):
