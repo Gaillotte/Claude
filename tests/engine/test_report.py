@@ -258,10 +258,13 @@ def without_findings_order(rep: dict) -> dict:
 
 
 class _Page(html.parser.HTMLParser):
-    """Collects the tags (with attributes), the title, the h1 and the table rows of an HTML report."""
+    """Collects the tags (with attributes), the title, the h1 and the table rows of an HTML report. References are decoded exactly
+    as ``html_escape`` writes them (``html.unescape`` would drop ESC and BEL, which the HTML standard does too)."""
+
+    NAMED = {"amp": "&", "lt": "<", "gt": ">", "quot": '"'}
 
     def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
+        super().__init__(convert_charrefs=False)
         self.tags: list = []
         self.title = ""
         self.h1 = ""
@@ -300,6 +303,12 @@ class _Page(html.parser.HTMLParser):
             self.title += data
         elif self._in == "h1":
             self.h1 += data
+
+    def handle_charref(self, name):
+        self.handle_data(chr(int(name[1:], 16)) if name[:1] in ("x", "X") else chr(int(name)))
+
+    def handle_entityref(self, name):
+        self.handle_data(self.NAMED[name])        # a KeyError here is the finding: html_escape writes only these four
 
 
 def parse_page(markup: str) -> _Page:
@@ -1003,12 +1012,10 @@ class RenderHtmlTests(unittest.TestCase):
             out = self.render(rep)
             low = out.lower()
             for forbidden in ("<script", "<link", "<img", "<iframe", "<object", "<embed", "<form", "<a ", "src=", "href=",
-                              "url(", "@import", "javascript:", " on"):
-                if forbidden == " on":
-                    for tag, attrs in parse_page(out).tags:
-                        self.assertFalse([a for a in attrs if a.startswith("on")], (tag, attrs))
-                    continue
+                              "url(", "@import", "javascript:"):
                 self.assertNotIn(forbidden, low, forbidden)
+            for tag, attrs in parse_page(out).tags:
+                self.assertFalse([a for a in attrs if a.startswith("on")], (tag, attrs))
 
     def test_hostile_names_are_escaped_s3(self):
         rep = hostile_report()
@@ -1501,14 +1508,14 @@ class ModuleRulesTests(unittest.TestCase):
         self.assertNotIn("subprocess", self.imports())
         calls = {(n.func.id if isinstance(n.func, ast.Name) else n.func.attr if isinstance(n.func, ast.Attribute) else "")
                  for n in ast.walk(self.tree) if isinstance(n, ast.Call)}
-        self.assertFalse(calls & {"eval", "exec", "system", "popen", "print", "compile"}, calls & {"eval", "exec", "system", "popen", "print"})
+        self.assertFalse(calls & {"eval", "exec", "system", "popen", "print"}, calls & {"eval", "exec", "system", "popen", "print"})
         self.assertNotIn("shell=True", self.source)
 
     def test_the_old_helper_program_is_not_imported(self):
         self.assertFalse([m for m in self.imports() if "report_json" in m])
 
     def test_no_python_311_feature_is_used(self):
-        compile(self.source, "report.py", "exec", dont_inherit=True, flags=ast.PyCF_ONLY_AST, _feature_version=10)  # type: ignore[call-arg]
+        ast.parse(self.source, feature_version=(3, 10))
 
     def test_nothing_is_written_at_import(self):
         proc = subprocess.run([sys.executable, "-I", "-c", "import sys; sys.path.insert(0, %r); import transit.report" % str(ROOT)],

@@ -35,7 +35,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from transit import files, rx  # noqa: E402
-from transit.config import DEFAULT_EXCLUDE_DIRS, Config, Limits  # noqa: E402
+from transit.config import DEFAULT_EXCLUDE_DIRS, Config, Limits, load_config  # noqa: E402
 from transit.rules import Target  # noqa: E402
 
 BASH = shutil.which("bash")
@@ -65,10 +65,9 @@ def make_tree(base, spec) -> None:
 
 
 def config(**limits) -> Config:
-    return Config(environ={}, work_dir="/nonexistent", verbosity="normal", min_severity="high", sev_threshold=3,
-                  since_commit="", run_sca=False, run_scancode=False, offline_cache="", semgrep_rules_dir="",
-                  trivy_cache_dir="", clamav_db_dir="", repo_input="", tmpdir="/tmp", timestamp="20260101_000000",
-                  limits=Limits(**limits), fixes=frozenset(), notices=())
+    """The real ``config.load_config`` of an empty environment (``load_exclusions`` never reads it: D-003 is closed in bash)."""
+    cfg = load_config({"WORK_DIR": "/nonexistent", "TMPDIR": "/tmp"})
+    return dataclasses.replace(cfg, limits=Limits(**limits)) if limits else cfg
 
 
 NO_DIFF = files.DiffSelection(active=False, keys=frozenset(), stale_ignored=False)
