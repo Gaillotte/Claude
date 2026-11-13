@@ -998,7 +998,7 @@ class _TooBig(Exception):
 
 
 class _DFA:
-    """Lazy DFA for "does this line contain a match", built from the parse tree (counted repetitions are unrolled).
+    r"""Lazy DFA for "does this line contain a match", built from the parse tree (counted repetitions are unrolled).
 
     A DFA state is (set of NFA states not yet closed over epsilons and assertions, class of the previous byte). The closure
     is taken when the next byte is known, because ^ $ \b \B \< \> depend on the byte before and the byte after."""
