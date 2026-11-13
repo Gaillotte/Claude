@@ -139,6 +139,9 @@ SEVERITY_CASES = [
     ("scancode_vuln:CVE-2021-1[HIGH] in pkg==1.0", "HIGH"),
     ("scancode_vuln:CVE-2021-1[LOW] in pkg==1.0", "HIGH"),
     ("GITLEAKS:upper_case_prefix", "HIGH"),
+    ("gitleaksx:a", "HIGH"), ("clamavx:a", "HIGH"), ("semgrep:js:3_findings", "HIGH"),
+    ("semgrepx[p/x]:r:line1:INFO:m", "INFO"),                            # not a semgrep[ message: the generic search applies
+    ("semgrep:js:LOW:3_findings", "LOW"),                                # "semgrep:" is a plain prefix, not "semgrep["
     ("gitleaks", "HIGH"),
     ("", "HIGH"),
     ("a:\u0130NFO:b", "HIGH"),
@@ -176,6 +179,16 @@ RECORD_CASES = [
     ("CVE-2021-44228:Log4Shell_JNDI_injection", "unknown", "security", "", None, (), None),
     ("gitleaks missing \u2014 secret scan skipped", "unknown", "security", "", None, (), None),
     ("x:y", "unknown", "security", "", None, (), None),
+    # near misses of the prefix rows: the colon is part of the prefix
+    ("banditry:x", "banditry", "security", "x", None, (), None),
+    ("gitleaksx:a", "gitleaksx", "security", "a", None, (), None),
+    ("clamavx:a", "clamavx", "security", "a", None, (), None),
+    ("yarax:a", "yarax", "security", "a", None, (), None),
+    ("cppcheckx:a", "cppcheckx", "security", "a", None, (), None),
+    ("shellcheckx:a", "shellcheckx", "security", "a", None, (), None),
+    ("detect-secretsx:a", "detect-secretsx", "security", "a", None, (), None),
+    ("semgrep:js:3_findings", "semgrep", "security", "js", None, (), None),
+    ("semgrepx[p/x]:r:line1:INFO:m", "unknown", "security", "", None, (), 1),
     ("CWE-123 and no colon", "unknown", "security", "", None, (), None),
     ("OWASP-A09 and no colon", "unknown", "security", "", None, (), None),
     ("Upper:case", "unknown", "security", "", None, (), None),
