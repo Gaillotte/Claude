@@ -791,15 +791,17 @@ class TestSearchPolicy(unittest.TestCase):
             self.assertTrue(evaluate(m, tgt(b"ex_a\n"), pol(blind=False)))
             self.assertEqual(se.call_args.kwargs["binary"], "text")
         big = b"ok\n" * 300 + b"y" * 500 + b"\n" + b"ok\n" * 300 + b"ex_a\n"        # a long line among short ones: routed
-        with mock.patch.object(rx, "search_excl", wraps=rx.search_excl) as se, mock.patch.object(rx, "dfa_search", wraps=rx.dfa_search) as ds:
+        with mock.patch.object(rx, "search_excl", wraps=rx.search_excl) as se, \
+                mock.patch.object(rx, "dfa_matching_lines", wraps=rx.dfa_matching_lines) as dl:
             self.assertTrue(evaluate(m, tgt(big, 100, long_line=True), pol(100)))
             self.assertTrue(all(c.kwargs["binary"] == "text" for c in se.call_args_list))   # blind = False here
-            self.assertGreaterEqual(ds.call_count, 1)                                   # the long line was not left to re
+            self.assertGreaterEqual(dl.call_count, 1)                                   # the long line was not left to re
             self.assertGreaterEqual(se.call_count, 1)                                   # the short runs went to re
 
     # -- the routed answer equals the whole-buffer linear answer ------------------------------------------------------------
     LINE_PATTERNS = ["a+b", "^ab", "ba$", "a.c", r"\bab\b", "x*", "^$", "b[^a]*c", "(ab|ba)c", "^$|zz", "abc.*abc", r"curl[^|]*http://", "[[:space:]]$"]
-    EXCL_PAIRS = [("a+", "ab"), ("^b", "c"), ("x*", "a"), ("^$", "z"), ("c", "^c"), ("abc", "ABC"), ("[ab]+$", "ba"), ("b", "")]
+    EXCL_PAIRS = [("a+", "ab"), ("^b", "c"), ("x*", "a"), ("^$", "z"), ("c", "^c"), ("abc", "ABC"), ("[ab]+$", "ba"), ("b", ""),
+                  ("^$", "^$"), ("x*", "y*"), ("a*", "^$"), ("^$", "c")]      # the last four: an exclusion that matches an empty line
 
     def test_routing_equals_the_whole_buffer_linear_answer_for_line_rules(self):
         rnd = random.Random(7)
@@ -829,6 +831,16 @@ class TestSearchPolicy(unittest.TestCase):
                 want = rx.search_excl(pair[0], pair[1], data, binary="text")
                 got = evaluate(matches[pair], tgt(data, limit, long_line=True), pol(limit))
                 self.assertEqual(got, want, (pair, limit, data))
+
+    def test_an_exclusion_that_matches_an_empty_line(self):
+        """An empty line is a line: the pattern `^$` finds it and the exclusion `^$` excludes it (a slice of b"" has no lines)."""
+        both = reg(Match("^$", excl="^$"))
+        only = reg(Match("^$", excl="zzz"))
+        for data in (b"a\n\nb\n", b"\n", b"a\n\n", b"\n\n", b"a" * 50 + b"\n\n" + b"b" * 50):
+            for limit, flag in ((100, True), (3, True), (8192, False)):
+                with self.subTest(data=data, limit=limit):
+                    self.assertFalse(evaluate(both, tgt(data, limit, long_line=flag), pol(limit)))
+                    self.assertTrue(evaluate(only, tgt(data, limit, long_line=flag), pol(limit)))
 
     def test_routing_when_the_flag_is_false_or_the_buffer_is_small(self):
         m = reg(Match("a+b"))
@@ -897,6 +909,46 @@ class TestSearchPolicy(unittest.TestCase):
         m2 = reg(Match(r"curl[^|]*http://"))
         self.assertFalse(evaluate(m2, tgt(big, 8192), pol(8192, budget=0.0005)))
         self.assertTrue(evaluate(m2, tgt(big + b"curl http://x\n", 8192), pol(8192, budget=0.0005)))
+
+    SHORT = (b"curl x " * 1170)[:8190] + b"\n"            # a line under the 8 KiB limit that is quadratic for `curl[^|]*http://`
+
+    def test_a_timeout_inside_a_routed_run_is_finished_by_the_linear_matcher(self):
+        """The runs between the long lines are searched by re; when re runs out of its budget the run is finished linearly, and the
+        answer is still found (here at the very end of a run that re cannot get through in time)."""
+        run = self.SHORT * 30 + b"curl http://x\n"
+        data = run + b"z" * 20000 + b"\n" + self.SHORT * 3
+        m = reg(Match(r"curl[^|]*http://"))
+        e = reg(Match(r"curl[^|]*http://", excl="zzz"))
+        for cond in (m, e):
+            with self.subTest(cond=cond):
+                t0 = time.perf_counter()
+                self.assertTrue(evaluate(cond, tgt(data), pol(budget=0.02)))
+                self.assertLess(time.perf_counter() - t0, 2.0)
+                self.assertFalse(evaluate(cond, tgt(self.SHORT * 30 + b"z" * 20000 + b"\n" + self.SHORT * 3), pol(budget=0.02)))
+
+    def test_a_spent_budget_still_finds_a_match_in_a_later_run(self):
+        """The first run costs more than the whole budget; the runs after the long line are then searched linearly, not skipped."""
+        data = self.SHORT * 30 + b"z" * 20000 + b"\n" + self.SHORT * 2 + b"curl http://x\n" + b"z" * 20000 + b"\n" + b"curl http://y\n"
+        clean = self.SHORT * 30 + b"z" * 20000 + b"\n" + self.SHORT * 2 + b"z" * 20000 + b"\n" + b"ok\n"
+        for cond in (reg(Match(r"curl[^|]*http://")), reg(Match(r"curl[^|]*http://", excl="zzz"))):
+            with self.subTest(cond=cond):
+                self.assertTrue(evaluate(cond, tgt(data), pol(budget=0.02)))
+                self.assertFalse(evaluate(cond, tgt(clean), pol(budget=0.02)))
+        # the exclusion still applies in the linear run
+        both = reg(Match(r"curl[^|]*http://", excl="http://y"))
+        self.assertTrue(evaluate(both, tgt(data), pol(budget=0.02)))
+        only_y = self.SHORT * 30 + b"z" * 20000 + b"\n" + self.SHORT * 2 + b"curl http://y\n" + b"z" * 20000 + b"\n"
+        self.assertFalse(evaluate(both, tgt(only_y), pol(budget=0.02)))
+
+    def test_one_budget_for_all_the_runs_of_a_buffer(self):
+        """300 long lines with a run of one 8 KiB line between each pair: re may spend ONE budget on the whole buffer, not one per run
+        (a fresh budget per run measured 6.2 s here; the linear matcher needs 0.4 s)."""
+        data = ((b"curl x " * 1300)[:9000] + b"\n" + (b"curl x " * 1200)[:8000] + b"\n") * 300
+        for cond in (reg(Match(r"curl[^|]*http://")), reg(Match(r"curl[^|]*http://", excl="zzz"))):
+            with self.subTest(cond=cond):
+                t0 = time.perf_counter()
+                self.assertFalse(evaluate(cond, tgt(data), pol(budget=0.25)))
+                self.assertLess(time.perf_counter() - t0, 2.5)
 
     def test_nonpositive_budget_does_not_disable_the_limit(self):
         """setitimer(0) would DISARM the alarm: a budget of 0 must reach rx as a small positive number, never as 0 or None."""
@@ -1082,6 +1134,9 @@ class TestHostileLine(unittest.TestCase):
     def check(self, matches):
         worst = (0.0, None)
         for m in matches:
+            ci = m.ci or m.mode == "flat" or m.excl is not None
+            if not rx.dfa_available(rx.ere_to_py(m.pattern, ci)):
+                continue          # a back-reference: no linear matcher, it can only time out (see TestRunRuleset.test_timed_out...)
             for name, line in self.LINES.items():
                 t = tgt(line)
                 self.assertTrue(t.has_long_line)
@@ -1096,6 +1151,8 @@ class TestHostileLine(unittest.TestCase):
     def test_every_inventory_pattern(self):
         matches = list(self.inventory_matches())
         self.assertGreater(len(matches), 200)
+        for m in matches:       # F4: every pattern of the inventory has a linear matcher, so the check below skips none of them
+            self.assertTrue(rx.dfa_available(rx.ere_to_py(m.pattern, m.ci or m.mode == "flat" or m.excl is not None)), m)
         RuleSet("wp04t-inventory", [RuleSpec(id="wp04t-inventory/%03d-p" % i, outcome="warn", message="CWE-0:inv", cond=m)
                                     for i, m in enumerate(matches)])
         self.check(matches)

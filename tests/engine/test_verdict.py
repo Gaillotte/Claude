@@ -648,6 +648,7 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(v.coverage_state("L1_malware"), "partial:something")
         self.assertEqual(dict(v.snapshot().coverage), {"L4_patterns": "ran", "L2_owasp_cwe": "skipped:semgrep not installed",
                                                        "L1_malware": "partial:something"})
+        self.assertEqual(list(v.snapshot().coverage), ["L1_malware", "L2_owasp_cwe", "L4_patterns"])   # a stable order
 
     def test_all_nine_layers_are_accepted(self):
         v, _ = make()

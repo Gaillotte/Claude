@@ -291,17 +291,20 @@ class Verdict:
     def snapshot(self) -> Snapshot:
         """Freeze the state for ``report``. Folds ``note_incomplete`` reasons into the coverage states. Idempotent."""
         coverage: "dict[str, str]" = {}
-        for layer_id in sorted(set(self._layers) | set(self._incomplete)):
-            base = self._layers.get(layer_id)
+        for layer_id, base in self._layers.items():
             notes = self._incomplete.get(layer_id)
             if not notes:
-                coverage[layer_id] = base or "ran"                      # unreachable without notes: `base` exists
-            elif base is None or base == "ran":
+                coverage[layer_id] = base
+            elif base == "ran":
                 coverage[layer_id] = _partial(notes)
             elif base.startswith("partial:"):
                 coverage[layer_id] = _partial(notes | {base[len("partial:"):]})
             else:                                                       # skipped: stays as it is
                 coverage[layer_id] = base
+        for layer_id, notes in self._incomplete.items():
+            if layer_id not in self._layers:                            # something did not run and nothing says it ran
+                coverage[layer_id] = _partial(notes)
+        coverage = dict(sorted(coverage.items()))
         return Snapshot(
             verdict=self._verdict,
             counters=Counters(self._pass, self._warn, self._fail),

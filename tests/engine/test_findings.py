@@ -250,6 +250,23 @@ class ClassifySeverityTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertEqual(classify_severity(message).name, want)
 
+    def test_semgrep_shaped_messages_match_bash(self):
+        if not HAVE_ORACLE:
+            self.skipTest("bash or scan_pipeline.sh not available")
+        rnd = random.Random(424242)
+        labels = ["p/owasp", "", "a]b", "x:y", "/opt/r.yaml", "[", "p/x "]
+        seps = [":", ":", ":", "", " ", "::", ":\n"]
+        rules = ["r", "", "a.b.c", "x y", "CWE-1", "line3"]
+        words = ["ERROR", "INFO", "WARNING", "CRITICAL", "LOW", "MEDIUM", "HIGH", "bogus", "", "Err0r", "info", "\u00c9RROR"]
+        messages = []
+        for _ in range(500):
+            messages.append("semgrep[" + rnd.choice(labels) + "]" + rnd.choice(seps) + rnd.choice(rules) + rnd.choice(seps) +
+                            rnd.choice(["line", "Line", "line ", ""]) + rnd.choice(["", "3", "12", "x", "\u0663"]) +
+                            rnd.choice(seps) + rnd.choice(words) + rnd.choice(seps) + rnd.choice(["", "tail", ":LOW:", ":CRITICAL:"]))
+        expected = bash_severities(messages)
+        for message, want in zip(messages, expected):
+            self.assertEqual(classify_severity(message).name, want, message)
+
     def test_linear_time_on_hostile_input(self):
         hostile = [":" * 2_000_000, "semgrep[" + "]" * 1_000_000, "semgrep[x]:" + ":line1" * 300_000,
                    "semgrep[x]:r:line" + "9" * 1_000_000, ":low" * 400_000, "x" * 3_000_000]
@@ -426,6 +443,26 @@ class BuildRecordTests(unittest.TestCase):
             with self.subTest(message=message, file=file):
                 self.assertEqual(build_record(file, message, scan).to_json(), want)
 
+    def test_structured_messages_match_bash(self):
+        if not HAVE_ORACLE:
+            self.skipTest("bash or scan_pipeline.sh not available")
+        rnd = random.Random(98765)
+        heads = ["gitleaks:", "clamav:", "yara:", "bandit:", "cppcheck:", "shellcheck:", "detect-secrets:", "CWE-22:", "CWE-:",
+                 "CWE-", "OWASP-A09:", "OWASP-", "semgrep[p/x]:", "semgrep[", "jar:", "x:", "ab:", "ab:c:", "A:", "pkg_x-y:",
+                 "engine:", "engine:x:", "a" * 31 + ":", "a" * 32 + ":", "", ":", "trivy:"]
+        tails = ["", "rule", "r:line7", "r:line", "Severity: HIGH:B602", "x:line12:ERROR:m", " spaced ", "a:b:c", "\n", "x\ny:z",
+                 "\u00e9", "line3", ":line9", "1_vulnerable(s)"]
+        scan = "/scan/dir"
+        pairs = []
+        for _ in range(150):
+            message = rnd.choice(heads) + rnd.choice(tails) + rnd.choice(["", ":" + rnd.choice(tails)])
+            if message.startswith("engine:") or not message:
+                continue                      # `engine:` is a documented extension of the table; "" is not a finding
+            pairs.append((rnd.choice([scan + "/a.py", scan, "/other/x", scan + "/d/e f.txt"]), message))
+        expected = bash_records(pairs, scan)
+        for (file, message), want in zip(pairs, expected):
+            self.assertEqual(build_record(file, message, scan).to_json(), want, (file, message))
+
     def test_linear_time_on_hostile_messages(self):
         hostile = [":line" * 300_000, "semgrep[" + "]" * 500_000, "CWE-" + ":" * 500_000, "a" * 2_000_000 + ":x",
                    "bandit:" + "b" * 1_000_000, "x:line" + "1" * 3000]
@@ -556,6 +593,35 @@ class ParseAllowlistTests(unittest.TestCase):
             with self.subTest(raw=raw[:80]):
                 al, _ = parse_allowlist(raw)
                 self.assertEqual(python_allowlist_keys(al), bash_allowlist(raw))
+
+    def test_random_allowlists_match_the_bash_loader(self):
+        if not HAVE_ORACLE:
+            self.skipTest("bash or scan_pipeline.sh not available")
+        rnd = random.Random(2468)
+        names = ["CWE-798", "hardcoded_credential", "gitleaks", "a b", "\u00e9", "x" * 40, "A", "a"]
+        paths = ["a.py", "src/x.py", "", "./a.py", "/abs", "d/e f", "\u00e9.py", "a"]
+        reasons = ["ok", "", " ", "line1\nline2", "two\n\nlines\n", "tab\there", "x" * 300, "\u00e9\ud83d\ude00", "cr\r"]
+
+        def member(pool):
+            kind = rnd.random()
+            if kind < 0.08:
+                return rnd.choice([5, None, True, ["a"], {"k": 1}, 1.5])
+            return rnd.choice(pool)
+
+        for _ in range(80):
+            items = []
+            for _ in range(rnd.randint(0, 6)):
+                if rnd.random() < 0.1:
+                    items.append(rnd.choice([1, "s", None, [], True]))
+                    continue
+                item = {}
+                for key, pool in (("rule", names), ("path", paths), ("reason", reasons)):
+                    if rnd.random() > 0.08:                      # sometimes the member is missing
+                        item[key] = member(pool)
+                items.append(item)
+            raw = json.dumps(items).encode()
+            al, _ = parse_allowlist(raw)
+            self.assertEqual(python_allowlist_keys(al), bash_allowlist(raw), raw)
 
     def test_bash_mode_drops_what_bash_splits_on(self):
         # U+0001 in a rule or a path: bash splits on it and would build an entry the file does not state.
