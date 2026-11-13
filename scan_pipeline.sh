@@ -158,7 +158,8 @@ for entry in entries:
 fi
 
 # ── Diff mode: restrict scan to changed files only ────────────────────────────
-# When SINCE_COMMIT was set, fetch_repo.sh writes a colon-separated file list.
+# When SINCE_COMMIT was set, fetch_repo.sh writes the list of changed files (NUL-separated; a colon list is
+# still read).
 DIFF_FILES_ONLY=false
 declare -A DIFF_FILES_SET=()   # () for the same reason: a diff with no existing files must not abort the scan
 DIFF_FILES_PATH="${WORK_DIR}/.diff_files"
@@ -169,9 +170,25 @@ if [[ -f "$DIFF_FILES_PATH" && -z "${SINCE_COMMIT:-}" ]]; then
     warn "Ignoring ${DIFF_FILES_PATH}: SINCE_COMMIT is not set, so this is not a diff-mode run"
 elif [[ -f "$DIFF_FILES_PATH" ]]; then
     DIFF_FILES_ONLY=true
-    while IFS= read -r -d ':' f; do
-        [[ -f "$f" ]] && DIFF_FILES_SET["$f"]=1
-    done < "$DIFF_FILES_PATH"
+    # Two formats, told apart by a NUL byte (a file name cannot contain one):
+    #   NUL-separated  names relative to the scan directory, as `git diff -z --name-only` prints them. This is
+    #                  what fetch_repo.sh writes. A ':' or a newline in a name is part of the name.
+    #   colon list     absolute paths each ended by ':', what fetch_repo.sh used to write. Kept for sidecars
+    #                  that already exist. It cannot hold a name with ':' and the last entry needs its ':'.
+    # An entry is kept only if it names an existing regular file.
+    _diff_nuls=$(LC_ALL=C tr -cd '\0' < "$DIFF_FILES_PATH" | wc -c) || _diff_nuls=0
+    if (( _diff_nuls > 0 )); then
+        while IFS= read -r -d '' f || [[ -n "$f" ]]; do
+            [[ -n "$f" ]] || continue
+            f="${SCAN_DIR}/${f}"
+            if [[ -f "$f" ]]; then DIFF_FILES_SET["$f"]=1; fi
+        done < "$DIFF_FILES_PATH"
+    else
+        while IFS= read -r -d ':' f; do
+            if [[ -f "$f" ]]; then DIFF_FILES_SET["$f"]=1; fi
+        done < "$DIFF_FILES_PATH"
+    fi
+    unset _diff_nuls
     info "Diff mode: ${#DIFF_FILES_SET[@]} file(s) will be scanned"
 fi
 
@@ -481,22 +498,25 @@ grep_check_i() { grep -qiE -e "$1" "$2" 2>/dev/null; }
 # never match: one NUL byte silenced every rule that uses an exclusion. Like the other helpers, a match still
 # counts on such a file.
 grep_check_excl() { grep -ahiE -e "$1" "$3" 2>/dev/null | grep -aviE -e "$2" >/dev/null; }
-# Same test over the file with newlines folded to spaces, for constructs that can
-# legally be split across lines (an <!ENTITY …> declaration). Without this a
-# payload evades every line-based rule by adding a line break.
-# There is no size cap: the file is streamed through tr into grep, so no shell variable and no temporary file
-# ever holds it, and the pattern is a DFA, linear in the size of the file. It used to give up ("no match") above
-# 5 MB, so an XML padded past that size carried an external entity past every rule that uses it. The cost of a
-# large file is what grep needs for one very long line, the same as for a minified script. A grep that cannot
-# run to the end (exit 2: out of memory, an I/O error) is neither a match nor a clean file, and the callers
-# turn a match into a FAIL, so it counts as a match, with a warning on the console.
+# Same test over the file with its newlines folded into the text, for constructs that can legally be split
+# across lines (an <!ENTITY …> declaration). Without this a payload evades every line-based rule by adding a
+# line break. -z makes the whole file one record, which is the folded view: no pattern that uses this helper
+# has a literal space, a tab, an anchor or a `.`, and [[:space:]] and [^…] match a newline, so the result is
+# the one `tr '\r\n\t' '   ' | grep` gave (4500 random documents compared, no difference).
+#
+# There is no size cap. It was 5 MB, above which the answer was "no match": an XML padded past that size
+# carried an external entity past every rule that uses this helper. grep reads the file itself (no shell
+# variable and no temporary file ever holds it) and the patterns are DFAs, so the time is linear in the size
+# of the file: 0.2 s at 6 MB, 2.2 s at 60 MB, 12 s at 300 MB (the same through a tr pipe took 62 s at 300 MB,
+# because grep re-copies a partial line for each pipe read). The memory is what grep needs to hold one line
+# that is the whole file, about twice its size. A grep that cannot run to the end (exit 2 or more: out of
+# memory, an I/O error, the file gone) is neither a match nor a clean file; the callers turn a match into a
+# FAIL, so it counts as a match, with a warning on the console.
 grep_flat() {
-    local -a st=(0 0)
-    tr '\r\n\t' '   ' < "$2" | grep -iE -e "$1" >/dev/null || st=("${PIPESTATUS[@]}")
-    # st[0] is tr (it could not read the file), st[1] is grep: 0 match, 1 no match, 2 or more an error.
-    if (( st[1] == 0 )); then return 0; fi
-    if (( st[1] == 1 && st[0] == 0 )); then return 1; fi
-    warn "grep_flat: the search of $2 could not be completed (tr exit ${st[0]}, grep exit ${st[1]}); treating it as a match"
+    local rc=0
+    grep -ziE -e "$1" "$2" >/dev/null || rc=$?
+    if (( rc <= 1 )); then return "$rc"; fi
+    warn "grep_flat: the search of $2 could not be completed (grep exit ${rc}); treating it as a match"
     return 0
 }
 
@@ -1220,20 +1240,50 @@ scan_python() {
 # ── JavaScript / TypeScript ──────────────────────────────────────────────────
 # OWASP: A03 Injection · A05 Misconfiguration · A07 Auth
 # CWE: 79, 78, 89, 611, 915, 1321
+# Why layer 5 is partial rather than ran: a per-file tool that was present and could not do its job. One
+# reason is kept once; scan_by_type turns the list into `partial:<reason>; <reason>`.
+L5_PARTIAL=""
+JS_RULESET_WARNED=false
+note_l5_partial() {
+    case "; ${L5_PARTIAL}; " in
+        *"; $1; "*) ;;
+        *) L5_PARTIAL+="${L5_PARTIAL:+; }$1" ;;
+    esac
+}
+
 scan_javascript() {
     local f="$1"
     local failed=false
 
     if has_cmd semgrep; then
-        local out
-        out=$(semgrep --config=p/javascript --quiet --json --no-autofix "$f" 2>/dev/null || true)
-        local cnt
-        cnt=$(echo "$out" | python3 -c "
-import sys,json; d=json.load(sys.stdin); print(len(d.get('results',[])))
-" 2>/dev/null || echo "0")
-        if [[ "$cnt" -gt 0 ]]; then
-            record_fail "$f" "semgrep:js:${cnt}_findings"
-            failed=true
+        # The rule set is the staged file, never a registry name (the old call passed one, and resolving it
+        # needs the network). Offline it returned nothing, and the layer still read as ran. Without the staged
+        # file (prepare_offline_cache.sh puts javascript.yaml next to the four layer-2 rule sets) Semgrep is
+        # not run on the file, and layer 5 is partial instead of ran.
+        local jsrules="${SEMGREP_RULES_DIR}/javascript.yaml"
+        if [[ -f "$jsrules" ]]; then
+            local out="" sg_rc=0 cnt=""
+            out=$(semgrep --config="$jsrules" --quiet --json --no-autofix --metrics=off "$f" 2>/dev/null) || sg_rc=$?
+            cnt=$(printf '%s\n' "$out" | python3 -c "
+import sys,json; d=json.load(sys.stdin); print(len(d['results']))
+" 2>/dev/null) || cnt=""
+            if (( sg_rc != 0 && sg_rc != 1 )); then
+                record_warn "$f" "semgrep:js:scan_error_exit_${sg_rc}"
+                note_l5_partial "semgrep javascript failed (exit ${sg_rc})"
+            elif [[ ! "$cnt" =~ ^[0-9]+$ ]]; then
+                record_warn "$f" "semgrep:js:output_could_not_be_read"
+                note_l5_partial "semgrep javascript output could not be read"
+            elif (( cnt > 0 )); then
+                record_fail "$f" "semgrep:js:${cnt}_findings"
+                failed=true
+            fi
+        else
+            note_l5_partial "javascript rule set not staged"
+            if [[ "$JS_RULESET_WARNED" != true ]]; then
+                JS_RULESET_WARNED=true
+                record_warn "__global__" \
+                    "OFFLINE:semgrep javascript rule set not staged in ${SEMGREP_RULES_DIR} — per-file JavaScript SAST did NOT run; stage it with prepare_offline_cache.sh on a connected host"
+            fi
         fi
     else
         record_warn "$f" "semgrep missing"
@@ -3776,7 +3826,11 @@ scan_by_type() {
         record_layer L5_per_language_sast "skipped:nothing scanned (every file excluded)"
     else
         record_layer L4_patterns "ran"
-        record_layer L5_per_language_sast "ran"
+        if [[ -n "$L5_PARTIAL" ]]; then
+            record_layer L5_per_language_sast "partial:${L5_PARTIAL}"
+        else
+            record_layer L5_per_language_sast "ran"
+        fi
     fi
 }
 

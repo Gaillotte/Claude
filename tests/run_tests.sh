@@ -3002,12 +3002,12 @@ EOF
     assert_not_contains "$(j_msgs "$JREP" "${J39}/big_clean.xml")" "[WARN]" "D-039: …nor warned about"
     GF=$(sed -n '/^grep_flat() {/,/^}/p' "${ROOT_DIR}/scan_pipeline.sh")
     assert_not_contains "$GF" "5242880" "D-039: grep_flat has no size cap"
-    assert_contains "$GF" "tr '\\r\\n\\t' '   '" "D-039: …it still folds the file by streaming it through tr into grep"
-    assert_not_contains "$GF" '$(cat' "D-039: …and never holds the file in a shell variable"
+    assert_contains "$GF" "grep -ziE" "D-039: …grep reads the file itself as one record (the folded view)"
+    assert_not_contains "$GF" '$(cat' "D-039: …and the file is never held in a shell variable"
     # A grep that fails (out of memory, an I/O error) must not read as "no match".
     GF_RC=$(bash -c '
         warn() { :; }
-        grep() { cat > /dev/null; return 2; }
+        grep() { return 2; }
         '"$GF"'
         printf "x" > "$1"; grep_flat "y" "$1"; echo $?' _ "${SCRATCH}/j39_gf" 2>/dev/null)
     assert_eq "0" "$GF_RC" "D-039: grep_flat fails closed: a grep that could not run counts as a match, never as clean"
@@ -3016,6 +3016,133 @@ EOF
         '"$GF"'
         printf "abc" > "$1"; grep_flat "zzz" "$1"; echo $?' _ "${SCRATCH}/j39_gf" 2>/dev/null)
     assert_eq "1" "$GF_RC" "D-039: …and a clean file is still no match"
+
+    # ── D-037: per-file Semgrep for JavaScript reads the staged rule set, never the registry ───────────
+    # scan_javascript called `semgrep --config=p/javascript`, which needs the network. Offline it returned nothing
+    # and the layer still read as ran. prepare_offline_cache.sh stages javascript.yaml next to the four rule sets
+    # of layer 2, in $SEMGREP_RULES_DIR.
+    J37="${SCRATCH}/j37_js"; rm -rf "$J37"; mkdir -p "$J37"
+    printf 'const a = 1;\nconsole.log(a);\n' > "$J37/app.js"; printf 'let b: number = 2;\n' > "$J37/lib.ts"
+    J37NOJS="${SCRATCH}/j37_nojs"; rm -rf "$J37NOJS"; mkdir -p "$J37NOJS"; printf 'print(1)\n' > "$J37NOJS/ok.py"
+    J37C="${SCRATCH}/j37_cache"; rm -rf "$J37C"; mkdir -p "$J37C/semgrep-rules"
+    for _r in owasp-top-ten cwe-top-25 security-audit secrets; do echo "rules: []" > "$J37C/semgrep-rules/${_r}.yaml"; done
+    J37C2="${SCRATCH}/j37_cache_js"; rm -rf "$J37C2"; cp -r "$J37C" "$J37C2"; echo "rules: []" > "$J37C2/semgrep-rules/javascript.yaml"
+    J37S=$(j_stubdir js_ok)
+    j_stub "$J37S" semgrep <<EOF
+case "\$*" in
+  *app.js) echo '{"results":[{"check_id":"js.rule","path":"app.js","start":{"line":1},"extra":{"message":"m","severity":"ERROR"}}]}' ;;
+  *)       echo '{"results":[]}' ;;
+esac
+EOF
+    JENV=(PATH="${J37S}:${PATH}" OFFLINE_CACHE="$J37C2"); j_scan "$J37" j37_staged; JENV=()
+    JS_CALLS=$(grep -- 'app.js' "${J37S}/semgrep_calls.txt" 2>/dev/null || true)
+    assert_contains "$JS_CALLS" "--config=${J37C2}/semgrep-rules/javascript.yaml" "D-037: the JavaScript rule set staged on disk is the one Semgrep is given"
+    assert_not_contains "$(cat "${J37S}/semgrep_calls.txt" 2>/dev/null)" "--config=p/" "D-037: …no registry identifier is ever passed to Semgrep"
+    assert_contains "$JS_CALLS" "--metrics=off" "D-037: …telemetry is off for it, as for layer 2"
+    assert_contains "$(j_msgs "$JREP" "${J37}/app.js")" "semgrep:js:1_findings" "D-037: its findings still fail the file"
+    assert_eq "ran" "$(j_py "$JREP" "d['coverage']['L5_per_language_sast']")" "D-037: …and layer 5 is ran"
+    assert_not_contains "$(j_msgs "$JREP" __global__)" "javascript rule set" "D-037: …with no WARN about the rule set"
+
+    rm -f "${J37S}/semgrep_calls.txt"
+    JENV=(PATH="${J37S}:${PATH}" OFFLINE_CACHE="$J37C"); j_scan "$J37" j37_unstaged; JENV=()
+    assert_eq "partial:javascript rule set not staged" "$(j_py "$JREP" "d['coverage']['L5_per_language_sast']")" \
+        "D-037: JavaScript files and no staged javascript rule set: layer 5 is partial, and says so"
+    assert_contains "$(j_py "$JREP" "d['coverage_gaps']")" "L5_per_language_sast" "D-037: …it is a coverage gap"
+    assert_contains "$(j_msgs "$JREP" __global__)" "[WARN] OFFLINE:semgrep javascript rule set not staged" "D-037: …with an OFFLINE: WARN on __global__"
+    assert_eq "1" "$(j_msgs "$JREP" __global__ | grep -o 'javascript rule set not staged' | wc -l | tr -d ' ')" \
+        "D-037: …recorded once, although two JavaScript files were scanned"
+    assert_eq "no-file-call" "$(grep -qE '(app\.js|lib\.ts)$' "${J37S}/semgrep_calls.txt" && echo file-call || echo no-file-call)" \
+        "D-037: …and Semgrep is not run on a JavaScript file without that rule set (there is no registry fallback)"
+    assert_not_contains "$(j_msgs "$JREP" "${J37}/app.js")" "semgrep:js" "D-037: …the file itself carries no Semgrep finding"
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" "D-037: …the verdict follows the findings, which the grep rules produced (none)"
+    JENV=(PATH="${J37S}:${PATH}" OFFLINE_CACHE="$J37C"); j_scan "$J37NOJS" j37_nojs; JENV=()
+    assert_eq "ran" "$(j_py "$JREP" "d['coverage']['L5_per_language_sast']")" "D-037: no JavaScript file, no rule set needed: layer 5 stays ran"
+    assert_not_contains "$(j_msgs "$JREP" __global__)" "javascript" "D-037: …and there is no WARN"
+
+    J37X=$(j_stubdir js_crash)
+    j_stub "$J37X" semgrep <<'EOF'
+case "$*" in
+  *app.js) echo 'Traceback' ; exit 7 ;;
+  *lib.ts) echo 'not json' ;;
+  *)       echo '{"results":[]}' ;;
+esac
+EOF
+    JENV=(PATH="${J37X}:${PATH}" OFFLINE_CACHE="$J37C2"); j_scan "$J37" j37_crash; JENV=()
+    J37L5=$(j_py "$JREP" "d['coverage']['L5_per_language_sast']")
+    assert_contains "$J37L5" "partial:" "D-037: a Semgrep that crashes, or prints what cannot be read, on a JavaScript file makes layer 5 partial, not ran"
+    assert_contains "$J37L5" "semgrep javascript failed (exit 7)" "D-037: …naming the crash"
+    assert_contains "$J37L5" "semgrep javascript output could not be read" "D-037: …and the unreadable output"
+    assert_contains "$(j_msgs "$JREP" "${J37}/app.js")" "[WARN] semgrep:js:scan_error_exit_7" "D-037: …with a WARN on the file"
+    assert_contains "$(j_msgs "$JREP" "${J37}/lib.ts")" "[WARN] semgrep:js:output_could_not_be_read" "D-037: …and one for unreadable output"
+    # static: the registry is gone from the source
+    assert_eq "0" "$(grep -cE -- 'config=p/|config="p/|--config p/javascript' "${ROOT_DIR}/scan_pipeline.sh" | tr -d ' ')" \
+        "D-037: scan_pipeline.sh passes no registry rule set (p/…) to Semgrep"
+    assert_not_contains "$(sed -n '/^scan_javascript() {/,/^}/p' "${ROOT_DIR}/scan_pipeline.sh")" "p/javascript" "D-037: …scan_javascript in particular"
+
+    # ── D-042: .diff_files is NUL-separated (git diff -z); the colon list is still read ──────────────────
+    # fetch_repo.sh wrote `git diff --name-only | sed | tr '\n' ':'`. A name with ':' was split in two and git
+    # prints a non-ASCII or special name quoted ("\303\251.py"), so such a changed file was dropped from the diff
+    # set and never scanned: a repository whose changed file was named a:b.py passed.
+    j_py_diffkeys() {   # j_py_diffkeys <report> <scan dir>: the file_results keys below the scan dir, sorted
+        j_py "$1" "' '.join(sorted(k[len(a) + 1:] for k in d['file_results'] if k.startswith(a + '/')))" "$2"
+    }
+    J42="${SCRATCH}/j42_scan"; rm -rf "$J42"; mkdir -p "$J42/sub"
+    for _n in a.py "sub/b:c.py" "é.py" plain.py 'x$(touch PWNED42).py' 'q]r.py'; do j_hostile "$J42" "$_n"; done
+    J42W="${SCRATCH}/j42_work"; rm -rf "$J42W"; mkdir -p "$J42W"; PWNED42="${ROOT_DIR}/PWNED42"; rm -f "$PWNED42"
+    j42_run() {   # j42_run <name> [SINCE_COMMIT]: scan J42 with the .diff_files in J42W; sets JREP, JOUT
+        JREP="${JR}/report_scan_$1.json"; rm -f "$JREP"
+        JOUT=$(cd "$ROOT_DIR" && SINCE_COMMIT="${2-}" WORK_DIR="$J42W" bash ./scan_pipeline.sh "$J42" "$JR" "$1" 2>&1); JEC=$?
+    }
+    printf 'a.py\0sub/b:c.py\0é.py\0x$(touch PWNED42).py\0q]r.py\0gone.py\0' > "$J42W/.diff_files"
+    j42_run j42_nul abc
+    assert_contains "$JOUT" "Diff mode: 5 file(s) will be scanned" \
+        "D-042: a NUL-separated .diff_files is read: five names, the vanished one is not counted"
+    assert_eq "a.py q]r.py sub/b:c.py x\$(touch PWNED42).py é.py" "$(j_py_diffkeys "$JREP" "$J42")" \
+        "D-042: …a name with ':', a non-ASCII name and shell metacharacters are scanned, and plain.py is not"
+    assert_eq "absent" "$([[ -e "$PWNED42" ]] && echo present || echo absent)" "D-042: …a name that looks like a command substitution is data"
+    assert_eq "FAIL" "$(j_py "$JREP" "d['verdict']")" "D-042: …and the changed files that are hostile fail the scan"
+    printf 'a.py\0sub/b:c.py' > "$J42W/.diff_files"
+    j42_run j42_nul_noeol abc
+    assert_contains "$JOUT" "Diff mode: 2 file(s) will be scanned" "D-042: a last NUL-format entry without its terminator is still read"
+    printf '%s:%s:' "$J42/a.py" "$J42/plain.py" > "$J42W/.diff_files"
+    j42_run j42_legacy abc
+    assert_contains "$JOUT" "Diff mode: 2 file(s) will be scanned" "D-042: the legacy colon list written by an older fetch_repo.sh is still read"
+    assert_eq "a.py plain.py" "$(j_py_diffkeys "$JREP" "$J42")" "D-042: …and selects the same files"
+    printf '%s:%s' "$J42/a.py" "$J42/plain.py" > "$J42W/.diff_files"
+    j42_run j42_legacy_noeol abc
+    assert_contains "$JOUT" "Diff mode: 1 file(s) will be scanned" "D-042: …the last legacy entry without its colon is dropped, as before"
+    printf 'a.py\0' > "$J42W/.diff_files"
+    j42_run j42_stale ""
+    assert_contains "$JOUT" "Ignoring" "D-042: a stale NUL .diff_files without SINCE_COMMIT is ignored"
+    assert_contains "$(j_py_diffkeys "$JREP" "$J42")" "plain.py" "D-042: …so the whole repository is scanned"
+    : > "$J42W/.diff_files"
+    j42_run j42_empty abc
+    assert_contains "$JOUT" "Diff mode: 0 file(s) will be scanned" "D-042: an empty .diff_files selects nothing"
+
+    # End to end: a real git repository, fetch_repo.sh writes the list, scan_pipeline.sh reads it.
+    if ! command -v git &>/dev/null; then
+        skip_test "D-042: a real git diff with awkward file names is scanned" "git not installed"
+    else
+        G42="${SCRATCH}/j42_git"; rm -rf "$G42"; mkdir -p "$G42"
+        git init -q "$G42"; git -C "$G42" config user.email t@example.com; git -C "$G42" config user.name t
+        printf 'print("unchanged")\n' > "$G42/ok.py"; j_hostile "$G42" untouched.py; printf 'gone\n' > "$G42/gone.txt"
+        git -C "$G42" add -A && git -C "$G42" commit -qm base; B42=$(git -C "$G42" rev-parse HEAD)
+        for _n in "a:b.py" "é.py" plain.py; do j_hostile "$G42" "$_n"; done
+        git -C "$G42" rm -q gone.txt; git -C "$G42" add -A && git -C "$G42" commit -qm change
+        run_pipeline "$G42" --quiet --since "$B42"
+        assert_eq "1" "$RUN_EXIT" "D-042: ai_transit.sh --since: hostile changed files named a:b.py and é.py fail the repository"
+        assert_eq "a:b.py plain.py é.py" "$(j_py "$RUN_JSON" "' '.join(sorted(k.split('/fetch/', 1)[1].split('/', 1)[1] for k in d['file_results'] if '/fetch/' in k and k.endswith('.py')))")" \
+            "D-042: …all three changed files are in the report, the unchanged hostile one is not"
+        assert_eq "4" "$(LC_ALL=C tr -cd '\0' < "${RUN_WORK}/.diff_files" | wc -c | tr -d ' ')" \
+            "D-042: fetch_repo.sh wrote the list NUL-separated (four names: the deleted file is listed as well)"
+        run_pipeline "$G42" --since "$B42"
+        assert_contains "$RUN_OUT" "Diff mode: 4 changed file(s)" "D-042: …and counts four changed names, deleted ones included"
+        assert_contains "$RUN_OUT" "Diff mode: 3 file(s) will be scanned" "D-042: …of which three still exist to be scanned"
+    fi
+    FETCH_DIFF=$(sed -n '/Diff mode: list files changed/,/Remove git metadata/p' "${ROOT_DIR}/fetch_repo.sh" | grep -v '^\s*#')
+    assert_contains "$FETCH_DIFF" "diff -z --name-only" "D-042: fetch_repo.sh asks git for NUL-separated names"
+    assert_not_contains "$FETCH_DIFF" "sed " "D-042: …and rewrites nothing with sed"
+    assert_not_contains "$FETCH_DIFF" "tr '" "D-042: …or tr"
     # J-END
 fi
 
