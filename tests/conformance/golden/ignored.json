@@ -45,6 +45,7 @@
      "[WARN] detect-secrets missing",
      "[WARN] gitleaks missing \u2014 secret scan skipped",
      "[WARN] semgrep missing \u2014 OWASP/CWE layer skipped (pip install semgrep)",
+     "[WARN] transitignore:exclusions_applied(1 pattern(s))",
      "[WARN] yara or rules directory missing"
     ],
     "status": "WARN"
@@ -78,7 +79,7 @@
   "summary": {
    "fail": 0,
    "pass": 1,
-   "warn": 5
+   "warn": 6
   },
   "verdict": "PASS"
  }

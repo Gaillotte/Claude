@@ -202,7 +202,9 @@ def check_invariants(report: dict) -> list[str]:
         if k not in fr or fr[k]["status"] != "FAIL":
             errors.append("findings_by_file key %r is not a file with status FAIL" % k)
     for i, rec in enumerate(report["findings"]):
-        key = d if rec["file"] == "." else d + "/" + rec["file"]
+        # A finding about the whole directory has file "."; one about the scan itself (engine:nothing_scanned) is
+        # recorded on the pseudo-entry __global__, which is not under the directory.
+        key = d if rec["file"] == "." else rec["file"] if rec["file"] == "__global__" else d + "/" + rec["file"]
         if rec["message"] not in report["findings_by_file"].get(key, ""):
             errors.append("findings[%d].message is not in findings_by_file[%r]" % (i, key))
     return errors
