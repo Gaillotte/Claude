@@ -95,13 +95,14 @@ def flat_office_head(view: FileView) -> bool:
 
 def shebang_scanner(first_line: bytes, *, first_word_only: bool = False) -> "str | None":
     """The scanner id for a first line (``FileView.first_line``) by ``SHEBANG_ROUTES`` (decoded as latin-1), or None.
-    ``first_word_only`` is the D-031 behaviour: only the text up to the first space after ``#!`` plus the interpreter word
-    is matched, so ``#!/bin/bash -e`` is routed."""
+    ``first_word_only`` is the D-031 behaviour (``scanners.unknown`` passes ``ctx.cfg.fix("D-031")``): only the text up to the first
+    space after ``#!`` plus the interpreter word is matched, so ``#!/bin/bash -e`` is routed."""
     raise NotImplementedError
 
 
-def classify_file(view: FileView, run: RunScanner, *, fix_d031: bool = False) -> None:
-    """Contract 8.8 rules 2 to 5 for one file (the universal layer has already run). Control flow, exactly bash's:
+def classify_file(view: FileView, run: RunScanner) -> None:
+    """Contract 8.8 rules 2 to 5 for one file (the universal layer has already run). Control flow, exactly bash's. (There is no switch
+    parameter: shebang routing, where D-031 matters, lives in ``scanners.unknown`` and reads ``ctx.cfg.fix("D-031")`` there; review log R-25.)
       1. basename arms, in order; a hit calls ``run(id, False)`` and ends;
       2. ``ext = lower_ext(view.path)``; ``id = EXT_ROUTES.get(ext)``;
       3. ``xml`` (``.xml``, ``.pom``): ``run("xml", False)``, then, if ``flat_office_head(view)``, ``run("ooxml", True)`` whatever it

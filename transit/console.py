@@ -10,8 +10,8 @@ messages, tool output, exception text) MUST reach a Console method as-is: saniti
 caller can forget it.
 
 What ``sanitise`` replaces by ``?``: C0 controls (U+0000-U+001F, so LF, CR, TAB and ESC too), DEL, C1 controls
-(U+0080-U+009F), the bidi controls U+202A-U+202E and U+2066-U+2069 (D-017), and every undecodable byte (a lone
-surrogate left by ``os.fsdecode``). The line terminator is added by the Console after sanitising. A literal
+(U+0080-U+009F), the bidi controls of ``BIDI_CONTROLS`` (U+202A-U+202E and U+2066-U+2069 as contract S1 requires, plus the
+marks U+061C, U+200E and U+200F, review log R-14), and every undecodable byte (a lone surrogate left by ``os.fsdecode``). The line terminator is added by the Console after sanitising. A literal
 backslash sequence such as the four characters ``\\033`` is printed as those four characters (S2).
 
 Output is written as UTF-8 bytes to ``sys.stdout.buffer`` / ``sys.stderr.buffer`` (never through the text layer, so
@@ -29,12 +29,17 @@ COLOUR_OK = "\x1b[32m"
 COLOUR_FAIL = "\x1b[31m"
 COLOUR_RESET = "\x1b[0m"
 
+#: Characters that reorder or hide the text around them (D-017). ``sanitise`` replaces them on the console and
+#: ``report.html_escape`` writes them as character references, so a file name cannot make a path read differently from what it is.
+BIDI_CONTROLS = frozenset(
+    ["\u061c", "\u200e", "\u200f"] + [chr(c) for c in range(0x202A, 0x202F)] + [chr(c) for c in range(0x2066, 0x206A)])
+
 
 def sanitise(text: "str | bytes") -> str:
     """Return ``text`` with every character listed in the module docstring replaced by ``?``.
 
     ``bytes`` are decoded as UTF-8 with undecodable bytes replaced by ``?``. Pure; never raises; the result
-    contains no character below U+0020 and none of U+007F-U+009F, U+202A-U+202E, U+2066-U+2069.
+    contains no character below U+0020, none of U+007F-U+009F and none of ``BIDI_CONTROLS``.
     """
     raise NotImplementedError
 
@@ -78,7 +83,14 @@ class Console:
         raise NotImplementedError
 
     def progress(self, current: int, total: int, rel_path: str) -> None:
-        """Redraw the ``[L5]  [n/total] path`` line (stderr, only when it is a terminal and not quiet)."""
+        """Redraw the ``[L5]  [n/total] path`` line (stderr, only when it is a terminal and not quiet).
+
+        ``rel_path`` is REPOSITORY TEXT and goes through ``sanitise`` like every other argument of this class, BEFORE it is cut
+        to 80 characters (cutting first could leave half of an escape sequence's replacement; sanitising first cannot). Contract 3.1
+        says "Sanitised: not needed" for this line; that row is wrong and is amended (review log R-10): the bash progress line
+        printed the raw name, so a file called ``x<ESC>]0;PWNED<BEL>.py`` retitled the reviewer's terminal. The test draws the line
+        with ``err_is_tty=True`` and the hostile names of S1, and asserts that every byte written is printable, LF, CR, or the
+        engine's own ``ESC[...m`` / ``ESC[K`` sequences."""
         raise NotImplementedError
 
     def clear_progress(self) -> None:

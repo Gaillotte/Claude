@@ -118,6 +118,11 @@ def parse_allowlist(raw: bytes, *, strict: bool = False) -> tuple[Allowlist, tup
     """Parse the bytes of ``.transit-allow.json`` (contract 6.2, A10, S15). Returns the allowlist and the notes to print
     on stderr (never recorded in the report). Fails CLOSED: any failure yields fewer entries, never more.
 
+    NEVER RAISES. The whole body runs under ``except Exception``, not ``except ValueError``: ``json.loads`` of a 400 KB
+    ``[[[[...`` raises ``RecursionError`` (a ``RuntimeError``, measured on Python 3.10 to 3.13) and a huge document can raise
+    ``MemoryError``; either would otherwise escape the pipeline's step 7 (review log R-05). Such a file yields an empty
+    allowlist and the note ``.transit-allow.json ignored: <exception class name>`` (the class name only).
+
     ``strict=False`` (default; reproduces bash, D-010 as ``copy``): not UTF-8, not JSON or not a list -> empty. Entries
     are visited in order: a non-object entry is skipped; an entry whose ``rule``, ``path`` or ``reason`` is present and
     not a string STOPS the loop (that entry and every later one are dropped); a missing member is ``""``; an entry
@@ -131,7 +136,9 @@ def parse_allowlist(raw: bytes, *, strict: bool = False) -> tuple[Allowlist, tup
 def json_safe(text: str) -> str:
     """Make ``text`` encodable as strict UTF-8: each undecodable byte (a lone surrogate from ``os.fsdecode``) becomes
     U+FFFD, exactly as ``os.fsencode(text).decode("utf-8", "replace")`` (golden ``hostile_non_utf8_name``, D-023).
-    Two distinct invalid names can collide on one key; that is the documented bash behaviour (A23)."""
+    Two distinct invalid names can collide on one key; that is the documented bash behaviour (A23). ``report.build_report`` MERGES
+    the colliding entries (worst status wins, messages concatenated; review log R-12), so a clean file cannot overwrite the FAIL of
+    a malicious one."""
     raise NotImplementedError
 
 

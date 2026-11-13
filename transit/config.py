@@ -14,6 +14,9 @@ behaviour between the two engines. Three behaviours are deliberately NOT switcha
 them a MUST: S1/D-017 (bidi controls are replaced on the console, control bytes are escaped in the HTML), D-019
 (a relative scan directory is compared by absolute path in diff mode, because copying bash there passes a
 repository with nothing examined) and D-028 (an internal error writes a FAIL verdict, never a PASS).
+Review log R-03 added D-004 to that list (a repository-supplied ``.transitignore`` is reported, contract S15), and the
+review log's other fail-open fixes (D-038 to D-045 of the design, section 12.2) are unconditional for the same reason:
+a switch that restores a blind spot would let one environment variable undo hard rule 6.
 """
 from __future__ import annotations
 
@@ -55,9 +58,10 @@ STANDARDS_TAIL: tuple[str, ...] = (
 
 #: Switchable divergences (see the module docstring). D-029 and D-031 are new entries proposed by
 #: docs/python_engine_design.md section 12 (D-029: ``excl`` rules go blind on a file holding a NUL byte; D-031: a
-#: shebang line with arguments, ``#!/bin/bash -e``, is not routed to the shell scanner).
+#: shebang line with arguments, ``#!/bin/bash -e``, is not routed to the shell scanner). D-004 is NOT here any more: reporting
+#: a ``.transitignore`` is unconditional (review log R-03).
 KNOWN_FIXES: frozenset[str] = frozenset(
-    {"D-003", "D-004", "D-009", "D-010", "D-011", "D-012", "D-014", "D-029", "D-031"})
+    {"D-003", "D-009", "D-010", "D-011", "D-012", "D-014", "D-029", "D-031"})
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -69,18 +73,28 @@ class Limits:
     budget as a WARN plus a ``partial:`` coverage state, the file-size cap as a FAIL), never silent.
 
     Environment overrides (a number that does not parse or is not above 0 means the default, as for ``JAR_*``):
-    ``TRANSIT_RULE_BUDGET_S``, ``TRANSIT_FILE_BUDGET_S``, ``TRANSIT_LONG_LINE_BYTES``, ``TRANSIT_MAX_FILE_MB``,
-    ``TRANSIT_TOOL_TIMEOUT_S``, ``TRANSIT_HELPER_TIMEOUT_S``.
+    ``TRANSIT_RULE_BUDGET_S``, ``TRANSIT_FILE_BUDGET_S``, ``TRANSIT_FILE_BUDGET_S_PER_MB``, ``TRANSIT_LONG_LINE_BYTES``,
+    ``TRANSIT_MAX_FILE_MB``, ``TRANSIT_TOOL_TIMEOUT_S``, ``TRANSIT_HELPER_TIMEOUT_S``.
     """
     #: Seconds a backtracking search may run before ``rx`` finishes the buffer with its linear matcher.
     rule_budget_s: float = 0.25
-    #: Cooperative wall-clock budget for ALL rules of ONE file (checked between rules, never by SIGALRM).
+    #: Cooperative wall-clock budget for ALL rules of ONE file (checked between rules, never by SIGALRM) is
+    #: ``file_budget_s + file_budget_s_per_mb * (size of the file in MiB)`` (``layers.file_deadline``). The fixed part covers small files;
+    #: the per-MiB part exists because the linear matcher costs about 38 ns per byte per rule (measured, design section 9.3), so a
+    #: fixed budget alone could never cover the largest file the engine accepts. Expiry is a non-downgradable FAIL
+    #: (``engine:scan_incomplete:<id>:time_budget``), never a WARN: a file that was not fully examined must not read as clean.
     file_budget_s: float = 120.0
+    #: Seconds allowed per MiB of the file on top of ``file_budget_s``: 10 s (9.5 microseconds per byte), about 3.4 times the cost of
+    #: the worst realistic case, every rule of the universal layer (15 patterns, 33 with the credential formats) plus the heaviest
+    #: scanner (PowerShell, 40 patterns) all running the linear matcher over the whole file: 73 rules at 38 ns per byte is 2.9 s per MiB.
+    file_budget_s_per_mb: float = 10.0
     #: A buffer holding a line longer than this goes straight to the linear matcher (see design section 9.2).
     long_line_bytes: int = 8192
-    #: Largest file the engine reads into memory. A larger file is not skipped: ``FileView.data`` raises
-    #: ``FileReadError('too_large')`` and the file gets the non-downgradable FAIL ``engine:file_unreadable:too_large``.
-    max_file_bytes: int = 1 << 30
+    #: Largest file the engine reads into memory: 512 MiB, just above the fetcher's 500 MB repository limit. Peak memory for a
+    #: file is about 2 times its size (the bytes plus one derived copy: a folded flat view or a ``binary="grep"`` copy); the
+    #: test suite pins it. A larger file is not skipped: ``FileView.data`` raises ``FileReadError('too_large')`` and the file gets
+    #: the non-downgradable FAIL ``engine:file_unreadable:too_large``.
+    max_file_bytes: int = 1 << 29
     #: Default timeout for an external scanner process.
     tool_timeout_s: float = 1800.0
     #: Default timeout for one of the stdlib helper scripts (jar/office also arm their own alarm).

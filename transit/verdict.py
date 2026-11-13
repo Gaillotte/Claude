@@ -12,8 +12,12 @@ WHO MAY MUTATE (the rule that replaces "global variables"):
   * ``pipeline.main`` constructs exactly one ``Verdict`` and passes it to ``layers.RunEnv``.
   * ``layers`` (whole-directory tools, the per-file loop) may call every method.
   * A scanner never sees a ``Verdict``. It receives a ``ScanContext`` (transit.scanners) whose ``record_*`` methods
-    forward to this class for the file being scanned. A lint forbids ``import transit.verdict`` under
-    ``transit/scanners/`` and ``transit/rules/``.
+    forward to this class for the file being scanned. A lint forbids ``import transit.verdict`` in every module under
+    ``transit/scanners/`` and ``transit/rules/`` EXCEPT ``transit/scanners/__init__.py``, which defines ``ScanContext`` and
+    therefore has to name the type (review log R-11).
+  * ``pipeline.main`` constructs the ``Verdict`` immediately after the report directories exist (before the temporary area, the
+    allowlist, the exclusions and the diff selection are loaded), with an EMPTY allowlist that ``set_allowlist`` replaces once, so
+    that an exception at any later step has a ``Verdict`` to ``abort`` (review log R-05).
   * ``report`` reads ``snapshot()``, an immutable copy, and never the live object.
 Nothing outside this class holds a reference to its dictionaries; every accessor returns a copy or a read-only view.
 """
@@ -65,11 +69,19 @@ class Verdict:
 
     def __init__(self, scan_dir: str, allowlist: Allowlist, *, threshold: int, min_severity: str,
                  console: Console, first_writer: bool = True, dot_matches_directory: bool = False) -> None:
-        """``scan_dir``: the directory string as given (used for ``rel_path`` and the record ``file`` field).
+        """``allowlist``: ``pipeline`` passes the EMPTY one (``Allowlist({})``) and installs the parsed one with ``set_allowlist`` (the Verdict has
+        to exist before the allowlist is read, so that an exception while reading it still has a Verdict to ``abort``; review log R-05).
+        ``scan_dir``: the directory string as given (used for ``rel_path`` and the record ``file`` field).
         ``threshold``/``min_severity``: ``Config.sev_threshold`` and the text printed in ``LOW_SEV(...)`` messages.
         ``first_writer=False`` is the D-012 switch (status = worst event instead of first writer).
         ``dot_matches_directory=True`` is the D-011 switch: for a whole-directory finding (``file == scan_dir``) the allowlist is
         ALSO tried with ``rel_path == "."``."""
+        raise NotImplementedError
+
+    def set_allowlist(self, allowlist: Allowlist) -> None:
+        """Install the allowlist parsed from ``.transit-allow.json``. Legal exactly once, before the first event (``events == 0``);
+        a later call raises ``RuntimeError`` (S13: an allowlist is loaded before anything is judged and is never swapped while
+        findings are being decided). Before this call the allowlist is the empty one given to ``__init__``."""
         raise NotImplementedError
 
     # -- reads ------------------------------------------------------------------------------------------------
@@ -107,6 +119,14 @@ class Verdict:
         appends ``[WARN] <message> | ``. ``None`` or ``""`` means ``__global__``."""
         raise NotImplementedError
 
+    def record_warn_once(self, key: str, file: "str | None", message: str) -> bool:
+        """``record_warn(file, message)`` the first time ``key`` is seen in this run, nothing afterwards. Returns True if it recorded.
+        ``key`` is engine-generated (``tool_not_ported:bandit``), never repository text. This is the run-scoped state behind
+        ``ScanContext.file_tool``'s "once per run" WARN: a ``ScanContext`` lives for one file, so the memory has to be here, in
+        the one mutable object, and not in a module global (which would leak between two ``pipeline.main`` calls in one process;
+        review log R-22)."""
+        raise NotImplementedError
+
     def record_fail(self, file: str, message: str, *, severity: "str | None" = None,
                     downgradable: bool = True) -> Outcome:
         """Contract 6.2, in this order:
@@ -138,7 +158,8 @@ class Verdict:
 
     # -- end of run -------------------------------------------------------------------------------------------
     def abort(self, reason: str) -> None:
-        """D-028. Called by the top-level handler after an internal error: records the FAIL ``engine:internal_error:<reason>``
+        """D-028. Callable at any moment after construction (the Verdict exists before the first step that can fail, so this is
+        never "too early"). Called by the top-level handler after an internal error: records the FAIL ``engine:internal_error:<reason>``
         on ``__global__`` (not downgradable) and gives every REQUIRED layer that has no state the state
         ``skipped:engine aborted (<reason>)``, so the report still validates and cannot read as a clean run."""
         raise NotImplementedError

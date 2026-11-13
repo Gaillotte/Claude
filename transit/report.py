@@ -3,7 +3,7 @@
 Owner of: contract 3.3 (``.scan_verdict`` / ``.scan_report_json``), 3.4 (report paths, atomic write, HTML content), 4 (every key
 of the JSON report and its invariants), 3.6 (what ``ai_transit.sh`` and ``generate_excel_report.py`` read), S3 (HTML is
 escaped), S4 (the JSON is always valid), S5 (the report appears whole or not at all), D-009 (``file_results`` message strip),
-D-017 (control bytes escaped in the HTML), D-024 (sorted output).
+D-017 (control bytes escaped in the HTML), D-024 (sorted output), D-040 (stale sidecars removed).
 
 Layering: depends on ``transit.config``, ``transit.cli`` (Args), ``transit.findings`` (``json_safe``), ``transit.verdict`` (Snapshot) and
 ``transit.files`` (SourceHashes). It computes nothing about files and records nothing.
@@ -65,13 +65,23 @@ def build_report(snapshot: Snapshot, source: SourceHashes, *, args: Args, scan_n
     (file, rule_id, line or 0, message), each ``to_json()``); ``findings_by_file`` (path -> FAIL messages joined with `` | ``, one
     trailing separator removed); ``file_results`` (path -> {status, message}). Keys sorted. Every string goes through
     ``findings.json_safe`` (S4). The result satisfies docs/report.schema.json and every invariant of
-    tests/conformance/check_schema.py."""
+    tests/conformance/check_schema.py.
+
+    COLLISIONS (review log R-12, D-023/D-045). Two different non-UTF-8 names can map to the same key after ``json_safe``. The entries are
+    MERGED, never overwritten, whatever order a dict comprehension would visit them in: ``file_results`` takes the worst status
+    (FAIL > WARN > PASS) and the accumulated messages of both in snapshot order (``a`` then ``b``, before the D-009 strip);
+    ``findings_by_file`` joins the FAIL messages the same way; ``findings`` keeps every record. Counters are event counters and do
+    not change. Without the merge a clean ``x<0xFF>.py`` could overwrite the FAIL entry of ``x<0xFE>.py`` and the report would violate
+    the checker's invariant "every ``findings_by_file`` key is a FAIL file"."""
     raise NotImplementedError
 
 
 def html_escape(text: str) -> str:
-    """S3 / D-017: ``&`` first, then ``<``, ``>``, ``"``, ``'`` (as ``&#39;``); then every C0 control (TAB and LF included), DEL and every C1
-    control is written as ``&#xNN;``; lone surrogates become U+FFFD."""
+    """S3 / D-017: ``&`` first, then ``<``, ``>``, ``"``, ``'`` (as ``&#39;``); then every C0 control (TAB and LF included), DEL, every C1
+    control and every character of ``console.BIDI_CONTROLS`` (U+202A-U+202E, U+2066-U+2069, U+061C, U+200E, U+200F) is written as a
+    numeric character reference (``&#xNN;`` / ``&#xNNNN;``); lone surrogates become U+FFFD. The bidi characters matter here more than on
+    the console: the HTML report is the reviewer's main view, and an override in a file name reorders the displayed path of the flagged
+    file (review log R-14)."""
     raise NotImplementedError
 
 
@@ -92,6 +102,16 @@ def write_atomic(path: str, data: bytes, *, mode: int = 0o666) -> None:
 
 def write_reports(report: dict, paths: ReportPaths, *, timestamp_local: str) -> None:
     """JSON first (``json.dumps(..., ensure_ascii=False, indent=2)`` + LF, UTF-8, strict), then HTML, each through ``write_atomic``."""
+    raise NotImplementedError
+
+
+def clear_sidecars(paths: ReportPaths) -> None:
+    """D-040, pipeline step 5. Remove ``.scan_verdict`` and ``.scan_report_json`` (a missing file is fine). The bash engine leaves the
+    sidecars of an earlier run in place until the end, so a run that dies without reaching the end (an OOM kill, SIGKILL, a full disk)
+    leaves the previous verdict, possibly PASS, for any caller that reads sidecars instead of checking the exit status. After this call
+    the only way a sidecar exists is that THIS run wrote it. If a file cannot be removed (``OSError`` other than "does not exist"),
+    ``.scan_verdict`` is overwritten with ``FAIL`` and ``.scan_report_json`` with an empty line; if even that fails the ``OSError`` is
+    raised and ``pipeline`` aborts exactly as for a ``WORK_DIR`` that cannot be prepared (step 4). Never touches the reports."""
     raise NotImplementedError
 
 

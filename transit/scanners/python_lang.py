@@ -4,9 +4,10 @@ Routes here: ``.py`` (not ``setup.py``/``conanfile.py``, which go to ``setuppy``
 matches ``#!*python*``. The module is named ``python_lang`` because ``python.py`` would be easy to confuse with the interpreter.
 
 Behaviour (bash order, contract 5.1):
-  1. Bandit. ``ctx.file_tool("bandit")``: ``missing`` -> ``record_warn("bandit missing")``; ``not_ported`` -> nothing more (already
-     noted); ``ok`` -> apply the wrapper's records (``bandit:Severity: MEDIUM|HIGH:B<id>``, FAIL; the quirk that the space defeats the
-     severity marker, A16, is copied: the severity is HIGH); a FAIL sets ``fired``.
+  1. Bandit. ``run = ctx.file_tool("bandit")``: ``missing`` -> ``record_warn("bandit missing")``; then ``fired = ctx.apply_tool_records(run)``
+     (a no-op for ``missing`` and ``not_ported``, which is already noted; for ``ok`` and ``failed`` it records the wrapper's records in
+     order: ``bandit:Severity: MEDIUM|HIGH:B<id>``, FAIL, the quirk that the space defeats the severity marker, A16, is copied: the severity
+     is HIGH; and the WARN a ``failed`` run carries); a FAIL sets ``fired``.
   2. The rule table ``RULES`` (ids ``python/NN-slug``; patterns are tests/conformance/patterns.json ids ``scan_python:*``):
         FAIL  CWE-78:OS_command_injection_risk               a shell or process call (pattern: patterns.json scan_python:0c065ebc)
         FAIL  CWE-95:dynamic_code_execution_eval_exec         a dynamic-execution call            (scan_python:191a3086)

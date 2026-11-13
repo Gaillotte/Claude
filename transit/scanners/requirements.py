@@ -10,8 +10,9 @@ Rules (bash order; all ``binary="text"``; patterns are tests/conformance/pattern
     FAIL  CWE-798:pip_credentials_embedded_in_url              line
     WARN  pip:trusted_host_disables_tls_verification           line_i
     WARN  pip:extra_index_url_enables_dependency_confusion     line_i
-    WARN  pip:vcs_requirement_not_pinned_to_a_commit           excl  (``git\\+(https|ssh)://`` and not ``@[0-9a-f]{7,40}([#[:space:]]|$)``,
-                                                                     ``binary="grep"``: bash's NUL blindness, switch D-029)
+    WARN  pip:vcs_requirement_not_pinned_to_a_commit           excl  (``git\\+(https|ssh)://`` and not ``@[0-9a-f]{7,40}([#[:space:]]|$)``;
+                                                                     the row says ``binary="text"``: bash's NUL blindness is applied by
+                                                                     ``SearchPolicy.excl_nul_blind``, switch D-029)
 
 then ``ctx.finish(fired)``. Acceptance fixture: tests/fixtures/clean/requirements.txt (``requests==2.32.3``: PASS, no message).
 """

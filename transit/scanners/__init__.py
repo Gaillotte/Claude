@@ -6,7 +6,15 @@ that is not written yet.
 
 Layering: depends on ``transit.config``, ``console``, ``files``, ``findings``, ``rules``, ``tools`` and ``verdict``. It does NOT
 import ``transit.layers``, ``transit.dispatch`` or any scanner module at import time (``load_registry`` imports the scanner
-modules on request), so importing this package has no side effects and no cycle.
+modules on request), so importing this package has no side effects and no cycle. This file is the ONE module under
+``transit/scanners/`` and ``transit/rules/`` that may import ``verdict`` and ``console`` (it defines ``ScanContext``, whose constructor
+names both types); every other module there is linted against them (review log R-11).
+
+WHAT ``invoke`` AND ``guard`` CATCH. ``Exception`` and ``SystemExit``. A ``SystemExit`` raised inside a scanner (a library that calls
+``sys.exit``, an ``argparse`` error, the import of a helper program that exits) is a failure of THAT FILE's scan: it becomes the
+non-downgradable FAIL ``engine:scanner_error:<id>:SystemExit`` and the run goes on; it must never travel up to ``pipeline.main`` and
+end the process with status 0, which every status-only caller reads as PASS (review log R-06). Nothing else is caught: the signal
+exception of ``pipeline`` (a private ``BaseException``), ``KeyboardInterrupt`` and ``GeneratorExit`` propagate.
 
 THE REGISTRY. There are 34 scanner FAMILIES (``build_pdf_filetypes.FAMILIES``) and 37 scanner IDS: a family has one id (its
 key) except ``manifest`` (``manifest.package_json``, ``manifest.requirements``) and ``powershell`` (``powershell.text``,
@@ -27,12 +35,12 @@ it propagate and ``invoke`` records the FAIL.
 from __future__ import annotations
 
 import dataclasses
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 from transit.config import Config
 from transit.console import Console
 from transit.files import FileView, TempArea
-from transit.rules import Cond, RuleSet, SearchPolicy, Target
+from transit.rules import Cond, Matcher, RuleSet, SearchPolicy, Target
 from transit.tools import Record, ToolLocator, WrapperSet
 from transit.verdict import Outcome, Verdict
 
@@ -181,13 +189,23 @@ class ScanContext:
         """Evaluate ``ruleset`` against this file (or against ``data``, a derived view such as a decoded text) with the run's
         ``SearchPolicy`` and the file deadline, then record each hit in table order: a ``fail`` rule through ``record_fail``
         (message from the row, severity from the row), a ``warn`` rule through ``record_warn``. A rule skipped for time becomes the
-        WARN ``engine:scan_incomplete:<ruleset name>:time_budget`` once and a ``partial`` note. A rule that timed out
-        with no linear matcher becomes the non-downgradable FAIL ``engine:regex_timeout:<rule id>``."""
+        non-downgradable FAIL ``engine:scan_incomplete:<ruleset name>:time_budget`` (once per call) and a ``partial`` note: a file
+        whose rules were not all evaluated must not read as clean, and a hostile file must not be able to buy a WARN by burning the
+        budget (review log R-02). A rule that timed out with no linear matcher becomes the non-downgradable FAIL
+        ``engine:regex_timeout:<rule id>``."""
         raise NotImplementedError
 
     def search(self, cond: Cond, *, data: "bytes | None" = None) -> bool:
-        """``rules.evaluate`` with the run's policy, for scanners whose logic is not one table row. Raises ``ScanBudgetExceeded``
-        when the file deadline has passed."""
+        """``rules.evaluate`` with the run's policy, for scanners whose logic is not one table row. ``cond`` must be built at module level
+        from ``Match`` objects registered by a ``RuleSet`` or a ``Matcher`` (``ValueError`` otherwise: an unregistered pattern would be
+        invisible to the fuzz gate). Raises ``ScanBudgetExceeded`` when the file deadline has passed."""
+        raise NotImplementedError
+
+    def spans(self, matcher: Matcher, *, data: "bytes | None" = None) -> Iterator[tuple[int, int]]:
+        """``matcher.spans`` with the run's policy over this file (or over ``data``, a derived view): the ``(start, end)`` offsets of the
+        matching lines, lazily. Calls ``check_deadline`` before each item, so a file with a very large number of matching lines
+        cannot outlast the per-file deadline. For code that needs positions (the private-key windows, the credential-format lines); a
+        table row never needs it."""
         raise NotImplementedError
 
     def target(self, data: "bytes | None" = None) -> Target:
@@ -201,9 +219,20 @@ class ScanContext:
     # -- tools and other scanners ----------------------------------------------------------------------------------
     def file_tool(self, name: str) -> FileToolRun:
         """Run the per-file external tool ``name`` (a key of ``tools.FILE_TOOLS``; ``KeyError`` otherwise) on this file. Decision, in this order: ``ToolLocator.find(FILE_TOOLS[name])`` is None ->
-        ``missing``; no wrapper -> ``not_ported`` (and once per run the WARN ``engine:tool_not_ported:<name>`` on ``__global__``
-        and ``note_incomplete`` with ``python engine has not ported <name> yet``); otherwise ``wrapper.run`` and ``ok`` / ``failed``.
-        The scanner records ``records`` itself, in order, with ``record_fail`` / ``record_warn``."""
+        ``missing``; no wrapper -> ``not_ported`` (and once per run the WARN ``engine:tool_not_ported:<name>`` on ``__global__``, recorded with
+        ``Verdict.record_warn_once("tool_not_ported:<name>", ...)`` because a ``ScanContext`` lives for one file and the memory has to be in the
+        run's one mutable object; and ``note_incomplete`` with ``python engine has not ported <name> yet``); otherwise ``wrapper.run`` and
+        ``ok`` / ``failed``. The scanner applies the result with ``apply_tool_records``. A wrapper that raises is NOT a ``failed`` run: the
+        exception propagates to ``invoke`` and becomes the FAIL ``engine:scanner_error:<id>:<class>``."""
+        raise NotImplementedError
+
+    def apply_tool_records(self, run: FileToolRun) -> bool:
+        """Record the ``records`` of a ``FileToolRun``, in order: ``warn`` through ``record_warn`` and ``fail`` through ``record_fail`` (with the
+        record's ``severity``), against ``record.file`` or, when that is empty, this file. Returns True if some ``fail`` record was
+        applied, WHETHER OR NOT the allowlist or the threshold turned it into a WARN (bash ``failed=true``; ``finish`` needs it). A run with
+        status ``missing`` or ``not_ported`` has no records and returns False. A ``pass`` record from a per-file wrapper is a bug in the
+        wrapper (``finish`` owns the file's PASS) and raises ``ValueError``. Every scanner calls this instead of looping over ``run.records``
+        itself, so the WARN a ``failed`` wrapper returns to explain why the tool was unusable is never dropped (review log R-24)."""
         raise NotImplementedError
 
     def delegate(self, scanner_id: str, *, sniffed: bool = False) -> bool:
@@ -217,10 +246,11 @@ def invoke(registry: Registry, scanner_id: str, ctx: ScanContext) -> bool:
       1. no spec or ``ported`` False -> WARN ``engine:scanner_not_ported:<id>`` on the file, ``note_incomplete`` with
          ``python engine has not ported scanner <id> yet``, return True (the file is reported, not silently clean);
       2. ``events0 = verdict.events``; call ``spec.fn(ctx)``;
-      3. ``ScanBudgetExceeded`` -> WARN ``engine:scan_incomplete:<id>:time_budget`` + ``partial`` note, handled;
+      3. ``ScanBudgetExceeded`` -> FAIL ``engine:scan_incomplete:<id>:time_budget`` + ``partial`` note, handled (review log R-02);
          ``FileReadError`` -> FAIL ``engine:file_unreadable:<reason>``; ``rx.RegexTimeout`` -> FAIL ``engine:regex_timeout``;
-         any other ``Exception`` (``NotImplementedError`` included) -> FAIL ``engine:scanner_error:<id>:<ExceptionClass>`` and the
-         sanitised traceback on stderr. All these FAILs are non-downgradable. ``BaseException`` (SIGTERM, Ctrl-C) propagates;
+         any other ``Exception`` (``NotImplementedError`` included) or ``SystemExit`` -> FAIL ``engine:scanner_error:<id>:<ExceptionClass>``
+         and the sanitised traceback on stderr. All these FAILs are non-downgradable. Any other ``BaseException`` (the signal exception,
+         Ctrl-C) propagates;
       4. handled but no event recorded since ``events0`` -> FAIL ``engine:scanner_error:<id>:no_outcome``;
          returned False while ``ctx.sniffed`` is False -> the same FAIL with ``:returned_not_mine``.
     Returns the scanner's boolean (False only for a sniffed "not mine")."""

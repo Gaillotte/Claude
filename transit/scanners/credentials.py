@@ -4,13 +4,19 @@ Owner of: the 18 provider-format rules and the JWT warning, shared by the univer
 the archive entries) and by the office scanner (the text of a document): contract 5.1 (``CWE-798:known_credential_format_<provider>``),
 8.7 (``grep -I`` semantics, A14/D-014) and CLAUDE.md "Known credential formats".
 
-Layering: depends on ``transit.rx`` and the ``ScanContext`` type. This is NOT a registered scanner (no ``SCANNERS``): it is a
+Layering: depends on ``transit.rules`` (``Matcher``) and the ``ScanContext`` type. This is NOT a registered scanner (no ``SCANNERS``): it is a
 library function other scanners call. It must stay importable without ``transit.scanners.universal``.
+
+EVERY PATTERN HERE IS A ``Matcher`` built at import (the alternation, the 18 providers, the JWT; ids ``credentials/alternation``,
+``credentials/<provider name>``, ``credentials/jwt``), never an ad-hoc ``rx.ere_to_py`` call, so the registry, the 600 KB hostile-line test and
+the fuzz gate cover them (review log R-18). The exclusion ``EXCLUSION`` has a back-reference, so it has no linear matcher and is NOT a
+``Matcher``; it is compiled with ``rx.ere_to_py`` and applied only to the short matched text (see step 2).
 
 Matching, exactly bash's (``-I`` is ``binary="skip"``):
   1. ONE alternation of all 18 provider patterns, each wrapped as ``(^|[^A-Za-z0-9])(<pat>)([^A-Za-z0-9]|$)``, is searched with
-     ``binary="skip"``; a file whose first 32 KiB hold a NUL byte matches nothing (A14, D-014 copied; switch D-014 reads it).
-  2. Only if it hits, each provider is tried: the lines that match are located with ``rx.matching_lines`` (budgeted), the matched
+     ``binary="skip"`` (``ctx.search(ALTERNATION.match, data=...)``); a file whose first 32 KiB hold a NUL byte matches nothing (A14, D-014
+     copied; switch D-014 reads it).
+  2. Only if it hits, each provider is tried: the lines that match are located with ``ctx.spans(PROVIDER_MATCHERS[name])`` (budgeted), the matched
      text of each (``rx.only_matching`` on that line, leftmost-first where grep is leftmost-longest, a documented rx difference)
      is tested against ``EXCLUSION``; the provider is a FAIL if some match survives. ``rx.only_matching`` has no ``budget=``: it is
      never called on a line longer than ``Limits.long_line_bytes``. For such a line the match is reported WITHOUT the exclusion
@@ -22,6 +28,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Mapping
 
+from transit.rules import Matcher
 from transit.scanners import ScanContext
 
 #: Name and ERE of each provider, in bash order (``KNOWN_CRED_NAMES`` / ``KNOWN_CRED_PATS``). The message is
@@ -32,6 +39,11 @@ PROVIDER_NAMES: tuple[str, ...] = (
     "anthropic_key", "openai_project_key", "openai_legacy_key", "shopify_token", "digitalocean_token",
 )
 PROVIDER_PATTERNS: Mapping[str, str] = {}  # filled by the implementation from the 18 patterns of KNOWN_CRED_PATS (see above)
+#: Registered matchers (``binary="skip"``), filled at import by the implementation: the alternation of all 18 wrapped patterns, one per
+#: provider (keys are ``PROVIDER_NAMES``), and the JWT pattern. Empty / ``None`` in the stub.
+ALTERNATION: "Matcher | None" = None
+PROVIDER_MATCHERS: Mapping[str, Matcher] = {}
+JWT: "Matcher | None" = None
 
 #: Placeholder exclusion (bash ``KNOWN_CRED_EXCL``), case-insensitive. It contains a back-reference, so it has no linear matcher; it is
 #: applied only to the short matched text, never to a whole line.

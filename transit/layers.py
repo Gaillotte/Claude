@@ -24,6 +24,7 @@ from transit.config import Config
 from transit.console import Console
 from transit.dispatch import RunScanner
 from transit.files import DiffSelection, Exclusions, ScanList, TempArea
+from transit.rules import SearchPolicy
 from transit.scanners import Registry
 from transit.tools import ToolLocator, ToolOutcome, WrapperSet
 from transit.verdict import Verdict
@@ -94,6 +95,22 @@ class FileLayerSummary:
     unreadable: int
 
 
+def search_policy(cfg: Config) -> SearchPolicy:
+    """The ONLY producer of a ``SearchPolicy``: ``SearchPolicy(rule_budget_s=cfg.limits.rule_budget_s, long_line_bytes=cfg.limits.long_line_bytes,
+    excl_nul_blind=not cfg.fix("D-029"))``. ``run_file_layers`` calls it once per run and hands the result to every ``ScanContext`` (review
+    log R-25: the stub had a consumer and no producer)."""
+    raise NotImplementedError
+
+
+def file_deadline(cfg: Config, size: int, *, now: float) -> float:
+    """The ``time.monotonic()`` value after which the rules of ONE file may no longer start:
+    ``now + limits.file_budget_s + limits.file_budget_s_per_mb * size / 2**20``, ``size`` being ``FileEntry.size``. Scaled with the size
+    because the cost of the linear matcher is linear in it (about 38 ns per byte per rule, measured: a 20 MiB file with one long line
+    costs 0.4 s per rule); a fixed 120 s could not cover the 512 MiB the engine accepts, and its expiry was a WARN that a hostile file
+    could buy cheaply (review log R-02). Expiry is a FAIL (``ScanContext.run_rules``, ``scanners.invoke``)."""
+    raise NotImplementedError
+
+
 def run_slot(env: RunEnv, slot: ToolSlot) -> None:
     """One whole-directory tool. Decision, in this order:
       1. not found (or ``requires_dir`` absent) -> ``record_warn(slot.missing_file, slot.missing_message)`` and
@@ -136,15 +153,25 @@ def run_layer6(env: RunEnv) -> None:
 
 
 def run_file_layers(env: RunEnv, scan: ScanList, *, universal: Callable[..., object], dispatch_file: Callable[..., None]) -> FileLayerSummary:
-    """Layers 4 and 5 (bash ``scan_by_type``). For each entry of ``scan.entries``: draw the progress line; build a ``FileView``;
+    """Layers 4 and 5 (bash ``scan_by_type``). Builds the run's ``SearchPolicy`` once (``search_policy(env.cfg)``). For each entry of
+    ``scan.entries``: draw the progress line (``Console.progress`` sanitises the name); build a ``FileView(env.scan_dir, entry.rel, limits)``;
     read it once (``vanished`` -> skip silently, as bash ``[[ -f ]] || continue``; another ``FileReadError`` -> FAIL
-    ``engine:file_unreadable:<reason>`` on the file and go on); build a ``ScanContext`` and run the universal layer through
+    ``engine:file_unreadable:<reason>`` on the file and go on); compute ONE deadline for the file, ``file_deadline(env.cfg, entry.size,
+    now=time.monotonic())``; build a ``ScanContext`` and run the universal layer through
     ``scanners.guard("universal", universal, ctx, requires_outcome=False)``; then ``dispatch.classify_file(view, run)`` where
-    ``run(id, sniffed)`` builds a fresh context (a new deadline per scanner call is NOT allowed: one deadline per file) and calls
+    ``run(id, sniffed)`` builds a fresh context with the SAME deadline (a new deadline per scanner call is NOT allowed) and calls
     ``scanners.invoke``; finally ``view.release()``. After the loop: the info line ``Layer 5: <n> files scanned``,
     ``record_layer("L4_patterns", "ran")`` and ``record_layer("L5_per_language_sast", "ran")`` (even with zero files, golden
-    ``diff_mode_zero_files``), and, if ``scan.errors`` is non-empty, one WARN ``engine:unreadable_directories(<n>)`` plus
-    ``note_incomplete`` on both layers. ``universal`` and ``dispatch_file`` are parameters only so that tests can inject fakes;
+    ``diff_mode_zero_files``), then:
+      * for each ``(rel, reason)`` of ``scan.errors`` (the first 200; then one summary on ``env.scan_dir`` named
+        ``engine:directory_unreadable:more_not_listed_<n>``): the non-downgradable FAIL ``engine:directory_unreadable:<reason>`` on the
+        recorded path of the directory, plus ``note_incomplete`` on both layers. A directory is a subtree that was not examined; it is
+        the same case as an unreadable file (review log R-09);
+      * if ``scan.entries`` is empty, ``scan.excluded_by_patterns`` > 0 and ``env.diff.active`` is False: the non-downgradable FAIL
+        ``engine:nothing_scanned:transitignore`` on ``env.scan_dir`` plus ``note_incomplete`` on both layers: the repository's own
+        ``.transitignore`` removed everything and nothing was examined (review log R-03; golden ``diff_mode_zero_files`` is unaffected,
+        diff mode is active there).
+    ``universal`` and ``dispatch_file`` are parameters only so that tests can inject fakes;
     ``pipeline`` passes ``transit.scanners.universal.scan`` and ``transit.dispatch.classify_file``."""
     raise NotImplementedError
 
