@@ -90,6 +90,24 @@ def fd_count() -> int:
     return len(os.listdir("/proc/self/fd"))
 
 
+class no_block:
+    """Fail instead of hanging: opening a FIFO without O_NONBLOCK blocks forever. Restores the previous SIGALRM handler."""
+
+    def __init__(self, seconds=10):
+        self.seconds = seconds
+
+    def __enter__(self):
+        def fire(*_):
+            raise AssertionError("blocked on a FIFO")
+        self.previous = signal.signal(signal.SIGALRM, fire)
+        signal.alarm(self.seconds)
+        return self
+
+    def __exit__(self, *exc):
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, self.previous)
+
+
 class TmpCase(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory(prefix="wp03_")
@@ -404,12 +422,8 @@ class LoadExclusionsTests(TmpCase):
             d = self.mk(kind)
             path = os.path.join(d, ".transitignore")
             os.mkfifo(path) if kind == "fifo" else os.mkdir(path)
-            signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(AssertionError("blocked on a FIFO")))
-            signal.alarm(10)
-            try:
+            with no_block():
                 ex, notes = files.load_exclusions(d, cfg=config())
-            finally:
-                signal.alarm(0)
             self.assertEqual((), tuple(ex.patterns))
             self.assertEqual(1, len(notes), kind)
 
@@ -955,6 +969,91 @@ class FilesForScanAgainstFindTests(TmpCase):
         self.assertEqual(4, len(got.entries))
 
 
+# ── the listings of the golden reports ─────────────────────────────────────────────────────────────────────────────
+def golden_keys(name: str) -> list:
+    """The files the hardened bash engine reported for a case: the keys of ``file_results`` below the scan directory."""
+    report = json.loads((GOLDEN / (name + ".json")).read_text())["report"]
+    return sorted((k for k in report["file_results"] if k != "__global__"), key=fsb)
+
+
+class GoldenListingTests(TmpCase):
+    """The 26 golden reports are the target: every file the bash engine examined is a key of ``file_results``."""
+
+    def copy_fixture(self, name: str, subdir="scan") -> str:
+        dst = os.path.join(self.tmp, subdir)
+        shutil.copytree(str(FIXTURES / name), dst)
+        return dst
+
+    def listing(self, d, since="", work=None):
+        ex, _ = files.load_exclusions(d, cfg=config())
+        diff = files.load_diff_selection(work, since, d) if work else NO_DIFF
+        return files.files_for_scan(d, ex, diff)
+
+    def test_rules_corpus_lists_the_364_files_bash_examined(self):
+        got = scan(str(FIXTURES / "rules"))
+        self.assertEqual(364, len(got.entries))
+        self.assertEqual(golden_keys("rules_corpus"), rels(got))
+
+    def test_clean_vulnerable_allowlisted_and_ignored(self):
+        for name, golden in (("clean", "clean"), ("vulnerable", "vulnerable"), ("allowlisted", "allowlisted"), ("ignored", "ignored")):
+            d = self.copy_fixture(name, "scan_" + name)
+            self.assertEqual(golden_keys(golden), rels(self.listing(d)), name)
+
+    def test_the_allow_list_is_a_control_file_that_is_listed_but_not_examined(self):
+        got = scan(str(FIXTURES / "allowlisted"))
+        self.assertEqual([".transit-allow.json", "src/db.py"], rels(got))
+        self.assertEqual(1, got.examined)
+
+    def test_transitignore_everything_is_nothing_scanned(self):
+        d = self.copy_fixture("vulnerable")
+        write_file(d, ".transitignore", b"*\n")
+        got = self.listing(d)
+        self.assertEqual((golden_keys("transitignore_everything"), True), (rels(got), got.nothing_scanned))
+        self.assertGreater(got.excluded_by_patterns, 0)
+
+    def test_transitignore_with_crlf_and_no_final_newline(self):
+        d = self.copy_fixture("vulnerable")
+        write_file(d, ".transitignore", b"src/db.py\r\nREADME.md")
+        write_file(d, "ok.py", b"print(1)\n")
+        got = self.listing(d)
+        self.assertEqual(golden_keys("transitignore_crlf_noeol"), rels(got))
+        self.assertFalse(got.nothing_scanned)
+        self.assertEqual(1, got.examined)
+
+    def test_diff_mode_zero_files(self):
+        d = self.copy_fixture("clean")
+        work = self.mk("work")
+        write_file(work, ".diff_files", ("%s/no_such_file.txt:" % d).encode())
+        sel = files.load_diff_selection(work, "abc", d)
+        self.assertEqual((True, frozenset(), False, 0), (sel.active, sel.keys, sel.stale_ignored, sel.unresolved))
+        got = scan(d, diff=sel)
+        self.assertEqual((golden_keys("diff_mode_zero_files"), False), (rels(got), got.nothing_scanned))
+
+    def test_diff_mode_nul_names(self):
+        d = self.copy_fixture("vulnerable")
+        write_file(d, "a:b.py", b"import os\nos.system(input())\n")
+        work = self.mk("work")
+        write_file(work, ".diff_files", b"a:b.py\0")
+        got = scan(d, diff=files.load_diff_selection(work, "abc", d))
+        self.assertEqual(golden_keys("diff_mode_nul_names"), rels(got))
+
+    def test_a_stale_diff_list_is_ignored_and_everything_is_listed(self):
+        d = self.copy_fixture("vulnerable")
+        work = self.mk("work")
+        write_file(work, ".diff_files", ("%s/no_such_file.txt:" % d).encode())
+        sel = files.load_diff_selection(work, "", d)
+        self.assertEqual((False, True), (sel.active, sel.stale_ignored))
+        self.assertEqual(golden_keys("stale_diff_files_ignored"), rels(scan(d, diff=sel)))
+
+    def test_a_name_that_is_not_utf8(self):
+        d = self.mk("hostile")
+        write_file(d, b"bad\xff\xfename.py", b"x = 1\n")
+        got = scan(d)
+        self.assertEqual(1, len(got.entries))
+        self.assertEqual(b"bad\xff\xfename.py", os.fsencode(got.entries[0].rel))
+        self.assertEqual("bad\udcff\udcfename.py", got.entries[0].rel)
+
+
 # ── open_beneath ───────────────────────────────────────────────────────────────────────────────────────────────────
 class OpenBeneathTests(TmpCase):
     def read(self, d, rel):
@@ -1014,12 +1113,8 @@ class OpenBeneathTests(TmpCase):
         self.assertEqual("vanished", self.reason(d, "nodir/x.py"))
         self.assertEqual("vanished", self.reason(d, "f.py/x"))
         self.assertEqual("vanished", self.reason(d, "adir"))
-        signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(AssertionError("blocked on a FIFO")))
-        signal.alarm(10)
-        try:
+        with no_block():
             self.assertEqual("vanished", self.reason(d, "fifo"), "a FIFO swapped in after listing must not block the engine")
-        finally:
-            signal.alarm(0)
 
     def test_bad_rel_is_a_value_error(self):
         d = self.mk()
@@ -1046,11 +1141,12 @@ class OpenBeneathTests(TmpCase):
         os.symlink("a", os.path.join(d, "l"))
         os.mkfifo(os.path.join(d, "fifo"))
         before = fd_count()
-        for rel in ("a/b/c.py", "l/b/c.py", "a/b/missing", "fifo", "a", "a/b"):
-            try:
-                os.close(files.open_beneath(d, rel))
-            except files.FileReadError:
-                pass
+        with no_block():
+            for rel in ("a/b/c.py", "l/b/c.py", "a/b/missing", "fifo", "a", "a/b"):
+                try:
+                    os.close(files.open_beneath(d, rel))
+                except files.FileReadError:
+                    pass
         self.assertEqual(before, fd_count())
 
     def test_unopenable_scan_directory(self):
@@ -1453,15 +1549,11 @@ class ReadRepoConfigFileTests(TmpCase):
         d = self.mk()
         os.mkfifo(os.path.join(d, "fifo"))
         os.mkdir(os.path.join(d, "dir"))
-        signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(AssertionError("blocked on a FIFO")))
-        signal.alarm(10)
-        try:
+        with no_block():
             for name in ("fifo", "dir"):
                 data, note = files.read_repo_config_file(d, name)
                 self.assertIsNone(data, name)
                 self.assertTrue(note, name)
-        finally:
-            signal.alarm(0)
 
     def test_a_symlink_swapped_in_after_the_check_is_not_followed(self):
         """TOCTOU: lstat said 'regular file', then the name became a link. The open is O_NOFOLLOW, so the link is a refusal."""

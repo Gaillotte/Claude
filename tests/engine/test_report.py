@@ -674,6 +674,27 @@ class StrictJsonTests(unittest.TestCase):
         self.assertIn("\\u001b", text)
 
 
+class UnsafeRecord:
+    """A finding record whose ``to_json`` hands back raw text (a lone surrogate everywhere): ``build_report`` must not rely on the
+    record to sanitise it (S4)."""
+
+    def to_json(self) -> dict:
+        return {"tool": "t\udcff", "category": "cwe", "severity": "HIGH", "rule_id": "CWE-1\udcff", "rule_name": "n\udcff",
+                "file": "f\udcff.py", "line": 3, "column": None, "message": "CWE-1:m\udcff", "references": ["CWE-1\udcff"]}
+
+
+class RecordSanitisingTests(unittest.TestCase):
+    def test_build_report_sanitises_record_text_itself(self):
+        snap = make_snapshot("FAIL", Counters(0, 0, 1), {SCAN + "/f\udcff.py": "FAIL"}, {SCAN + "/f\udcff.py": "[FAIL] CWE-1:m\udcff | "},
+                             {SCAN + "/f\udcff.py": "CWE-1:m\udcff | "}, (UnsafeRecord(),), CLEAN_COVERAGE)
+        rep = build(snap)
+        json.dumps(rep, ensure_ascii=False).encode("utf-8")        # strict UTF-8
+        record = rep["findings"][0]
+        self.assertEqual((record["tool"], record["rule_id"], record["rule_name"], record["file"], record["message"], record["references"]),
+                         ("t\ufffd", "CWE-1\ufffd", "n\ufffd", "f\ufffd.py", "CWE-1:m\ufffd", ["CWE-1\ufffd"]))
+        self.assertEqual(conformance_errors(rep), [])
+
+
 class CollisionTests(unittest.TestCase):
     """R-12 / D-045: two names that map to one key after json_safe are merged, never overwritten."""
 
@@ -689,22 +710,22 @@ class CollisionTests(unittest.TestCase):
         return v.snapshot()
 
     @staticmethod
-    def fail(message="CWE-95:dynamic_code_execution_eval_exec"):
+    def fail_action(message="CWE-95:dynamic_code_execution_eval_exec"):
         return lambda v, p: v.record_fail(p, message)
 
     @staticmethod
-    def passed():
+    def pass_action():
         return lambda v, p: v.record_pass(p)
 
     @staticmethod
-    def warn(message="bandit missing"):
+    def warn_action(message="bandit missing"):
         return lambda v, p: v.record_warn(p, message)
 
     def test_a_clean_file_cannot_overwrite_the_fail_whatever_the_order(self):
-        for first, second in (((self.A, self.fail()), (self.B, self.passed())),
-                              ((self.A, self.passed()), (self.B, self.fail())),
-                              ((self.B, self.fail()), (self.A, self.passed())),
-                              ((self.B, self.passed()), (self.A, self.fail()))):
+        for first, second in (((self.A, self.fail_action()), (self.B, self.pass_action())),
+                              ((self.A, self.pass_action()), (self.B, self.fail_action())),
+                              ((self.B, self.fail_action()), (self.A, self.pass_action())),
+                              ((self.B, self.pass_action()), (self.A, self.fail_action()))):
             rep = build(self.snap(first, second))
             self.assertEqual(rep["file_results"][self.KEY]["status"], "FAIL", (first, second))
             self.assertIn("[FAIL] CWE-95:dynamic_code_execution_eval_exec", rep["file_results"][self.KEY]["message"])
@@ -714,25 +735,25 @@ class CollisionTests(unittest.TestCase):
             self.assertEqual(conformance_errors(rep), [], (first, second))
 
     def test_a_fail_beats_a_warn_and_a_warn_beats_a_pass(self):
-        rep = build(self.snap((self.A, self.warn()), (self.B, self.fail())))
+        rep = build(self.snap((self.A, self.warn_action()), (self.B, self.fail_action())))
         self.assertEqual(rep["file_results"][self.KEY]["status"], "FAIL")
-        rep = build(self.snap((self.A, self.passed()), (self.B, self.warn())))
+        rep = build(self.snap((self.A, self.pass_action()), (self.B, self.warn_action())))
         self.assertEqual(rep["file_results"][self.KEY]["status"], "WARN")
-        rep = build(self.snap((self.B, self.warn()), (self.A, self.passed())))
+        rep = build(self.snap((self.B, self.warn_action()), (self.A, self.pass_action())))
         self.assertEqual(rep["file_results"][self.KEY]["status"], "WARN")
-        rep = build(self.snap((self.A, self.passed()), (self.B, self.passed())))
+        rep = build(self.snap((self.A, self.pass_action()), (self.B, self.pass_action())))
         self.assertEqual(rep["file_results"][self.KEY], {"status": "PASS", "message": ""})
         self.assertEqual(conformance_errors(rep), [])
 
     def test_the_messages_of_both_are_kept_in_snapshot_order(self):
-        rep = build(self.snap((self.A, self.warn("first note")), (self.B, self.warn("second note"))))
+        rep = build(self.snap((self.A, self.warn_action("first note")), (self.B, self.warn_action("second note"))))
         self.assertEqual(rep["file_results"][self.KEY]["message"], "[WARN] first note | [WARN] second note")
-        rep = build(self.snap((self.B, self.warn("second note")), (self.A, self.warn("first note"))))
+        rep = build(self.snap((self.B, self.warn_action("second note")), (self.A, self.warn_action("first note"))))
         self.assertEqual(rep["file_results"][self.KEY]["message"], "[WARN] second note | [WARN] first note")
 
     def test_two_fails_keep_both_messages_and_both_records(self):
-        snap = self.snap((self.A, self.fail("CWE-95:dynamic_code_execution_eval_exec")),
-                         (self.B, self.fail("CWE-89:SQL_injection")))
+        snap = self.snap((self.A, self.fail_action("CWE-95:dynamic_code_execution_eval_exec")),
+                         (self.B, self.fail_action("CWE-89:SQL_injection")))
         rep = build(snap)
         self.assertEqual(rep["findings_by_file"][self.KEY], "CWE-95:dynamic_code_execution_eval_exec | CWE-89:SQL_injection")
         self.assertEqual(rep["file_results"][self.KEY],
@@ -762,7 +783,7 @@ class CollisionTests(unittest.TestCase):
         self.assertEqual(conformance_errors(rep), [])
 
     def test_the_checkers_invariant_findings_by_file_keys_are_fail_files(self):
-        rep = build(self.snap((self.A, self.fail()), (self.B, self.passed())))
+        rep = build(self.snap((self.A, self.fail_action()), (self.B, self.pass_action())))
         for key in rep["findings_by_file"]:
             self.assertEqual(rep["file_results"][key]["status"], "FAIL")
 
@@ -1065,11 +1086,11 @@ class RenderHtmlTests(unittest.TestCase):
         rep["summary"] = {"pass": "1<i>", "warn": "2<i>", "fail": "3<i>"}
         rep["coverage"] = {"L4<i>": "ran<i>"}
         rep["file_results"] = {"/d<i>/p<i>": {"status": "FAIL<i>", "message": "m<i>"}}
-        rep["standards"] = ["S<i>"]
+        rep["standards"] = ["STD<i>"]
         out = report.render_html(rep, timestamp_local="ts<i>")
         self.assertNotIn("<i>", out)
         for fragment in ("PASS&lt;i&gt;", "/d&lt;i&gt;", "1&lt;i&gt;", "2&lt;i&gt;", "3&lt;i&gt;", "L4&lt;i&gt;", "ran&lt;i&gt;",
-                         "p&lt;i&gt;", "FAIL&lt;i&gt;", "m&lt;i&gt;", "ts&lt;i&gt;", "S&lt;i&gt;"):
+                         "p&lt;i&gt;", "FAIL&lt;i&gt;", "m&lt;i&gt;", "ts&lt;i&gt;", "STD&lt;i&gt;"):
             self.assertIn(fragment, out)
 
     def test_a_status_outside_the_vocabulary_cannot_become_a_class(self):
