@@ -35,6 +35,9 @@ a scanner combines with ``AllOf``, ``AnyOf`` or ``Not`` (review log R-18, R-21).
 from __future__ import annotations
 
 import dataclasses
+import fnmatch
+import threading
+import time
 from typing import Callable, Iterator, Sequence, Union
 
 from transit import rx
@@ -90,6 +93,23 @@ class Match:
     excl: "str | None" = None
     binary: str = "text"
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.pattern, str):
+            raise ValueError("Match.pattern must be a str, not %s" % type(self.pattern).__name__)
+        if self.excl is not None and not isinstance(self.excl, str):
+            raise ValueError("Match.excl must be a str or None, not %s" % type(self.excl).__name__)
+        if not isinstance(self.ci, bool):
+            raise ValueError("Match.ci must be a bool, not %s" % type(self.ci).__name__)
+        if self.mode not in MODES:
+            raise ValueError("Match.mode must be one of %r, not %r" % (MODES, self.mode))
+        if self.binary not in BINARY_MODES:
+            raise ValueError("Match.binary must be one of %r, not %r" % (BINARY_MODES, self.binary))
+        if self.excl is not None:
+            if self.mode != "line":
+                raise ValueError("an excl Match needs mode 'line', not %r" % (self.mode,))
+            if self.binary != "text":
+                raise ValueError("an excl Match needs binary 'text' (SearchPolicy.excl_nul_blind decides), not %r" % (self.binary,))
+
 
 @dataclasses.dataclass(frozen=True)
 class AllOf:
@@ -97,11 +117,17 @@ class AllOf:
     This is bash's ``{ grep_check_i A && grep_check_i B; }`` (PowerShell ``fetch then execute``)."""
     members: "tuple[Cond, ...]"
 
+    def __post_init__(self) -> None:
+        _check_members(self)
+
 
 @dataclasses.dataclass(frozen=True)
 class AnyOf:
     """True when any member is (bash ``A || B``)."""
     members: "tuple[Cond, ...]"
+
+    def __post_init__(self) -> None:
+        _check_members(self)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -112,8 +138,24 @@ class Not:
     ``AllOf`` (review log R-21)."""
     member: "Cond"
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.member, (Match, AllOf, AnyOf, Not)):
+            raise ValueError("Not.member must be a Match, AllOf, AnyOf or Not, not %s" % type(self.member).__name__)
+
 
 Cond = Union[Match, AllOf, AnyOf, Not]
+
+
+def _check_members(cond: "AllOf | AnyOf") -> None:
+    name = type(cond).__name__
+    if not isinstance(cond.members, tuple):
+        raise ValueError("%s.members must be a tuple (a list is not hashable, so it could never be registered), not %s"
+                         % (name, type(cond.members).__name__))
+    if not cond.members:
+        raise ValueError("%s needs at least one member (an empty conjunction is always true, an empty alternative never)" % name)
+    for member in cond.members:
+        if not isinstance(member, (Match, AllOf, AnyOf, Not)):
+            raise ValueError("%s members must be Match, AllOf, AnyOf or Not, not %s" % (name, type(member).__name__))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -153,15 +195,45 @@ class RuleSet:
     silently inert forever; here it is an exception at import, caught by the registry as a load error)."""
 
     def __init__(self, name: str, rules: Sequence[RuleSpec]) -> None:
-        raise NotImplementedError
+        if not isinstance(name, str) or not name:
+            raise ValueError("a RuleSet needs a non-empty name")
+        try:
+            specs = tuple(rules)
+        except TypeError:
+            raise ValueError("RuleSet %r: rules must be a sequence of RuleSpec" % (name,)) from None
+        # Phase 1, no side effect: every row is checked and every id is claimed only on paper.
+        seen: "set[str]" = set()
+        for spec in specs:
+            _check_spec(name, spec)
+            if spec.id in seen:
+                raise ValueError("RuleSet %r: rule id %r appears twice in the table" % (name, spec.id))
+            seen.add(spec.id)
+            owner = _RULE_OWNERS.get(spec.id)
+            if owner is not None and owner != (name, spec):
+                raise ValueError("RuleSet %r: rule id %r is already used by RuleSet %r (ids are unique across the engine)"
+                                 % (name, spec.id, owner[0]))
+            if spec.id in _MATCHER_IDS:
+                raise ValueError("RuleSet %r: rule id %r is already used by a Matcher" % (name, spec.id))
+        # Phase 2: compile every leaf (an invalid pattern raises rx.EREError here) and register all of them, or none.
+        plan: "list[tuple[str, Match]]" = []
+        for spec in specs:
+            if isinstance(spec.cond, Match):
+                plan.append((spec.id, spec.cond))
+            else:
+                plan.extend(("%s#%d" % (spec.id, k), leaf) for k, leaf in enumerate(_leaves(spec.cond), 1))
+        _register_leaves(plan)
+        for spec in specs:
+            _RULE_OWNERS[spec.id] = (name, spec)
+        self._name = name
+        self._rules = specs
 
     @property
     def name(self) -> str:
-        raise NotImplementedError
+        return self._name
 
     @property
     def rules(self) -> tuple[RuleSpec, ...]:
-        raise NotImplementedError
+        return self._rules
 
 
 class Matcher:
@@ -172,19 +244,34 @@ class Matcher:
     (review log R-18, R-21)."""
 
     def __init__(self, id: str, match: Match) -> None:
-        raise NotImplementedError
+        if not isinstance(id, str) or not id:
+            raise ValueError("a Matcher needs a non-empty id")
+        if "#" in id:
+            raise ValueError("Matcher id %r: '#' is reserved for the leaves of a composite rule" % (id,))
+        if not isinstance(match, Match):
+            raise ValueError("Matcher %r needs a Match, not %s" % (id, type(match).__name__))
+        if id in _RULE_OWNERS:
+            raise ValueError("Matcher id %r is already used by a rule row of RuleSet %r" % (id, _RULE_OWNERS[id][0]))
+        previous = _MATCHER_IDS.get(id)
+        if previous is not None and previous != match:
+            raise ValueError("Matcher id %r is already registered with a different Match" % (id,))
+        _register_leaves([(id, match)])
+        _MATCHER_IDS[id] = match
+        self._id = id
+        self._match = match
+        self._rule = _EVALUABLE[match]
 
     @property
     def id(self) -> str:
-        raise NotImplementedError
+        return self._id
 
     @property
     def match(self) -> Match:
-        raise NotImplementedError
+        return self._match
 
     def search(self, target: Target, policy: SearchPolicy) -> bool:
         """``evaluate(self.match, target, policy)``."""
-        raise NotImplementedError
+        return evaluate(self._match, target, policy)
 
     def spans(self, target: Target, policy: SearchPolicy) -> Iterator[tuple[int, int]]:
         """``(start, end)`` offsets in ``target.data`` of every LINE that matches, in order (end excludes the LF); ``mode`` must be ``line``
@@ -192,7 +279,30 @@ class Matcher:
         other by ``rx.matching_lines(budget=policy.rule_budget_s)``. A generator: it never materialises the lines. This is what the
         private-key test uses instead of ``rx.after_context``, which is unbudgeted (0.2 s on 46 KB, 6.7 s on 281 KB, quadratic) and splits
         the whole buffer."""
-        raise NotImplementedError
+        _require_main_thread()
+        if self._match.mode != "line":
+            raise ValueError("Matcher %r: spans needs a line Match, this one is %r" % (self._id, self._match.mode))
+        # Validated here and not inside the generator, so that the error is raised by the call and not by the first next().
+        return self._walk(target, policy)
+
+    def _walk(self, target: Target, policy: SearchPolicy) -> Iterator[tuple[int, int]]:
+        match, rule, data = self._match, self._rule, target.data
+        budget = _budget(policy)
+        if match.excl is None:
+            if target.has_long_line and rx.dfa_available(rule.compiled):
+                yield from rx.dfa_matching_lines(rule.compiled, data, binary=match.binary)
+            else:
+                yield from rx.matching_lines(rule.compiled, data, binary=match.binary, budget=budget)
+            return
+        pat, excl = rule.compiled, rule.compiled_excl
+        if policy.excl_nul_blind and b"\0" in data:
+            return                                   # bash: the first grep prints a notice and the second reads nothing
+        if target.has_long_line and rx.dfa_available(pat) and rx.dfa_available(excl):
+            for start, stop in rx.dfa_matching_lines(pat, data):
+                if not rx.dfa_search(excl, data[start:stop + 1]):
+                    yield start, stop
+        else:
+            yield from rx.excl_lines(pat, excl, data, binary="text", budget=budget)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -214,7 +324,9 @@ def evaluate(cond: Cond, target: Target, policy: SearchPolicy) -> bool:
     The search per mode (design section 9.2): ``line``: linear matcher if the buffer has an over-long line, else ``re`` with the rule budget;
     ``flat``: ``target.flat()`` WITHOUT a size cap, linear matcher if it is longer than ``long_line_bytes``; ``excl``: candidates by the
     pattern, then the exclusion on each candidate line, ``binary="grep"`` when ``policy.excl_nul_blind``."""
-    raise NotImplementedError
+    _require_main_thread()
+    _require_registered(cond)      # the whole tree first: a short-circuit must not hide an unregistered pattern
+    return _eval(cond, target, policy)
 
 
 def run_ruleset(ruleset: RuleSet, target: Target, policy: SearchPolicy,
@@ -222,4 +334,276 @@ def run_ruleset(ruleset: RuleSet, target: Target, policy: SearchPolicy,
     """Evaluate every applicable rule (``AppliesTo`` checked against ``target.basename`` / ``target.ext``) in table order.
     ``deadline`` is a ``time.monotonic()`` value; when it has passed before a rule starts, that rule and all later ones are
     returned in ``skipped`` and no exception is raised. Pure with respect to the engine state."""
-    raise NotImplementedError
+    _require_main_thread()
+    hits: "list[RuleSpec]" = []
+    skipped: "list[str]" = []
+    timed_out: "list[str]" = []
+    expired = False
+    for spec in ruleset.rules:
+        if not _applies(spec.applies_to, target):
+            continue                                 # a rule that does not apply to this file was never due: not "skipped"
+        if not expired and deadline is not None and time.monotonic() >= deadline:
+            expired = True                           # checked between rules, never by an alarm (design 9.3)
+        if expired:
+            skipped.append(spec.id)
+            continue
+        try:
+            if _eval(spec.cond, target, policy):
+                hits.append(spec)
+        except rx.RegexTimeout:
+            timed_out.append(spec.id)                # no linear matcher for this pattern and `re` ran out of time
+    return RuleRun(hits=tuple(hits), skipped=tuple(skipped), timed_out=tuple(timed_out))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Private machinery (not part of the frozen interface). Everything below runs on engine data or on the bytes of one file;
+# no repository text is ever formatted into a message here (only ids and patterns, which are engine data).
+# ---------------------------------------------------------------------------------------------------------------------
+#: The severities a row may carry: ``findings.SEVERITY_NUMBER``. ``rules`` may import only ``rx``, so the words are repeated here
+#: and a unit test keeps the two sets equal.
+_SEVERITIES = ("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")
+#: ``grep -I`` decides "binary" from the first buffer it reads: ``rx`` looks at this many bytes (``rx._prepare``).
+_SKIP_PREFIX = 32768
+
+#: Every ``Match`` that went through a ``RuleSet`` or a ``Matcher``, with the ``rx.Rule`` it was registered as (the compiled pattern and
+#: exclusion). Keyed by VALUE: an equal ``Match`` is the same rule, so the registered pattern is the one that runs.
+_EVALUABLE: "dict[Match, rx.Rule]" = {}
+#: Row id -> (table name, row), for the engine-wide uniqueness of ids. Building the same table again (a reloaded module) is allowed.
+_RULE_OWNERS: "dict[str, tuple[str, RuleSpec]]" = {}
+_MATCHER_IDS: "dict[str, Match]" = {}
+
+
+def _label(match: Match) -> str:
+    """The ``rx.rule`` mode of a ``Match`` (design 9.1): the case-insensitivity of ``flat`` and ``excl`` is part of the label."""
+    if match.excl is not None:
+        return "excl"
+    if match.mode == "flat":
+        return "flat"
+    return "line_i" if match.ci else "line"
+
+
+def _leaves(cond: Cond) -> Iterator[Match]:
+    """The ``Match`` leaves of a condition tree, left to right through ``AllOf``, ``AnyOf`` and ``Not``."""
+    if isinstance(cond, Match):
+        yield cond
+    elif isinstance(cond, (AllOf, AnyOf)):
+        for member in cond.members:
+            yield from _leaves(member)
+    elif isinstance(cond, Not):
+        yield from _leaves(cond.member)
+    else:
+        raise ValueError("not a condition: %s" % type(cond).__name__)
+
+
+def _register_leaves(plan: "Sequence[tuple[str, Match]]") -> None:
+    """Compile and register ``(rx rule id, Match)`` pairs: all of them or none. An invalid pattern (``rx.EREError``) and a clash with a
+    rule already in the ``rx`` registry (``ValueError``) are found before anything is registered."""
+    for _, match in plan:
+        rx.ere_to_py(match.pattern, _label(match) != "line")
+        if match.excl is not None:
+            rx.ere_to_py(match.excl, True)
+    known = {r.id: r for r in rx.registered()}
+    for leaf_id, match in plan:
+        previous = known.get(leaf_id)
+        if previous is not None and (previous.pattern, previous.mode, previous.excl) != (match.pattern, _label(match), match.excl):
+            raise ValueError("rule id %r is already registered with rx with a different pattern, mode or exclusion" % (leaf_id,))
+    for leaf_id, match in plan:
+        _EVALUABLE.setdefault(match, rx.rule(leaf_id, match.pattern, mode=_label(match), excl=match.excl))
+
+
+def _check_spec(table: str, spec: RuleSpec) -> None:
+    if not isinstance(spec, RuleSpec):
+        raise ValueError("RuleSet %r: every row must be a RuleSpec, not %s" % (table, type(spec).__name__))
+    if not isinstance(spec.id, str) or not spec.id:
+        raise ValueError("RuleSet %r: a row needs a non-empty str id" % (table,))
+    if "#" in spec.id:
+        raise ValueError("RuleSet %r: rule id %r: '#' is reserved for the leaves of a composite rule" % (table, spec.id))
+    if spec.outcome not in ("fail", "warn"):
+        raise ValueError("rule %r: outcome must be 'fail' or 'warn', not %r" % (spec.id, spec.outcome))
+    if not isinstance(spec.message, str) or not spec.message:
+        raise ValueError("rule %r: message must be a non-empty str" % (spec.id,))
+    if spec.severity is not None and spec.severity not in _SEVERITIES:
+        raise ValueError("rule %r: severity must be None or one of %r, not %r" % (spec.id, _SEVERITIES, spec.severity))
+    if not isinstance(spec.source, str):
+        raise ValueError("rule %r: source must be a str" % (spec.id,))
+    for _ in _leaves(spec.cond):                     # every node must be a condition; a Match checked itself when it was built
+        pass
+    _check_applies(spec.id, spec.applies_to)
+
+
+def _check_applies(rule_id: str, applies: "AppliesTo | None") -> None:
+    if applies is None:
+        return
+    if not isinstance(applies, AppliesTo):
+        raise ValueError("rule %r: applies_to must be an AppliesTo or None" % (rule_id,))
+    for field, values in (("basenames", applies.basenames), ("exts", applies.exts)):
+        if values is None:
+            continue
+        if not isinstance(values, tuple) or not values:
+            raise ValueError("rule %r: applies_to.%s must be None or a non-empty tuple (an empty one would never apply)" % (rule_id, field))
+        for value in values:
+            if not isinstance(value, str) or not value:
+                raise ValueError("rule %r: applies_to.%s holds a non-str or empty entry" % (rule_id, field))
+            if field == "exts" and (value != value.lower() or value.startswith(".")):
+                # Target.ext is lower case and has no dot, so such an entry could never match: a rule silently inert forever.
+                raise ValueError("rule %r: applies_to.exts entry %r must be lower case, without the dot" % (rule_id, value))
+
+
+def _applies(applies: "AppliesTo | None", target: Target) -> bool:
+    if applies is None:
+        return True
+    if applies.basenames is not None and not any(fnmatch.fnmatchcase(target.basename, glob) for glob in applies.basenames):
+        return False
+    if applies.exts is not None and target.ext not in applies.exts:
+        return False
+    return True
+
+
+def _require_main_thread() -> None:
+    # rx.time_limit needs SIGALRM (main thread only) and the DFA caches of rx are not thread-safe.
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("transit.rules runs on the main thread only (SIGALRM budget, non-thread-safe linear matcher)")
+
+
+def _require_registered(cond: Cond) -> None:
+    for leaf in _leaves(cond):
+        if leaf not in _EVALUABLE:
+            raise ValueError("Match %r was never registered by a RuleSet or a Matcher: an unregistered pattern would be invisible to "
+                             "rx.registered(), the hostile-line test and the fuzz gate" % (leaf,))
+
+
+def _budget(policy: SearchPolicy) -> float:
+    # A budget of 0 would DISARM the timer (setitimer(0) cancels it) and leave re unbounded; a tiny one hands over to the linear matcher.
+    return policy.rule_budget_s if policy.rule_budget_s > 0 else 0.001
+
+
+# -- evaluation ---------------------------------------------------------------------------------------------------------------
+def _eval(cond: Cond, target: Target, policy: SearchPolicy) -> bool:
+    if isinstance(cond, Match):
+        rule = _EVALUABLE.get(cond)
+        if rule is None:
+            raise ValueError("Match %r was never registered by a RuleSet or a Matcher" % (cond,))
+        if cond.excl is not None:
+            return _search_excl(rule, target, policy)
+        if cond.mode == "flat":
+            return _search_flat(rule, target, policy, cond.binary)
+        return _search_line(rule, target, policy, cond.binary)
+    if isinstance(cond, AllOf):
+        for member in cond.members:
+            if not _eval(member, target, policy):
+                return False
+        return True
+    if isinstance(cond, AnyOf):
+        for member in cond.members:
+            if _eval(member, target, policy):
+                return True
+        return False
+    if isinstance(cond, Not):
+        return not _eval(cond.member, target, policy)
+    raise ValueError("not a condition: %s" % type(cond).__name__)
+
+
+def _search_line(rule: "rx.Rule", target: Target, policy: SearchPolicy, binary: str) -> bool:
+    compiled, data = rule.compiled, target.data
+    if not target.has_long_line or not rx.dfa_available(compiled):
+        # Every line is short, so `re` with a budget is safe (a late alarm costs one short line). A pattern with no linear matcher
+        # (a back-reference) has nowhere else to go: it may raise rx.RegexTimeout.
+        return rx.search_lines(compiled, data, binary=binary, budget=_budget(policy))
+    if not data:
+        return False
+    if binary == "skip" and b"\0" in data[:_SKIP_PREFIX]:
+        return False                                  # grep -I: from here on the buffer is searched as text
+    limit = max(1, policy.long_line_bytes)
+    if len(data) <= 4 * limit:
+        return rx.dfa_search(compiled, data)
+    budget = _budget(policy)
+    return _routed(
+        data, limit,
+        lambda start, stop: _re_range(compiled, data, start, stop, budget),
+        lambda start, stop: rx.dfa_search(compiled, data[start:stop + 1]),
+    )
+
+
+def _search_excl(rule: "rx.Rule", target: Target, policy: SearchPolicy) -> bool:
+    pat, excl, data = rule.compiled, rule.compiled_excl, target.data
+    blind, budget = policy.excl_nul_blind, _budget(policy)
+    if not (target.has_long_line and rx.dfa_available(pat) and rx.dfa_available(excl)):
+        return rx.search_excl(pat, excl, data, binary="grep" if blind else "text", budget=budget)
+    if not data:
+        return False
+    if blind and b"\0" in data:
+        return False                                  # bash: grep prints a notice for a binary file, the second grep reads nothing
+    limit = max(1, policy.long_line_bytes)
+    if len(data) <= 4 * limit:
+        for start, stop in rx.dfa_matching_lines(pat, data):
+            if not rx.dfa_search(excl, data[start:stop + 1]):
+                return True
+        return False
+
+    def long_line(start: int, stop: int) -> bool:
+        piece = data[start:stop + 1]
+        return rx.dfa_search(pat, piece) and not rx.dfa_search(excl, piece)
+
+    return _routed(data, limit,
+                   lambda start, stop: rx.search_excl(pat, excl, data[start:stop + 1], binary="text", budget=budget),
+                   long_line)
+
+
+def _search_flat(rule: "rx.Rule", target: Target, policy: SearchPolicy, binary: str) -> bool:
+    compiled = rule.compiled
+    if binary == "skip" and b"\0" in target.data[:_SKIP_PREFIX]:
+        return False
+    view = target.flat()                              # the whole file folded to one line; no size cap (R-08, D-039)
+    if not view:
+        return False
+    if len(view) > policy.long_line_bytes and rx.dfa_available(compiled):
+        return rx.dfa_search(compiled, view)
+    return rx.search_lines(compiled, view, budget=_budget(policy))
+
+
+def _re_range(compiled, data: bytes, start: int, stop: int, budget: float) -> bool:
+    """Does any line of ``data[start:stop]`` match? ``start`` is the start of a line and ``stop`` the end of one (an LF or the end of the
+    data), so ``^``, ``$`` and the word-boundary look-arounds see exactly what a whole-buffer search sees. All its lines are short."""
+    try:
+        with rx.time_limit(budget):
+            return compiled.search(data, start, stop) is not None
+    except rx.RegexTimeout:
+        if not rx.dfa_available(compiled):
+            raise
+        return rx.dfa_search(compiled, data[start:stop + 1])
+
+
+def _routed(data: bytes, limit: int, short_lines, long_line) -> bool:
+    """Send the over-long lines of ``data`` to ``long_line(start, stop)`` (the linear matcher) and every run of ordinary lines between them
+    to ``short_lines(start, stop)`` (``re``): True at the first call that says True. ``[start, stop]`` is a run of whole lines, ``stop`` the
+    position of the LF that ends the last one (or the end of the data); a run of zero lines is never passed. The answer equals the one of
+    the linear matcher over the whole buffer (the unit test compares them on random buffers); only the cost differs."""
+    end = len(data) - 1 if data.endswith(b"\n") else len(data)     # one trailing LF ends a line, it does not start another
+    pos = 0
+    for start, stop in _long_lines(data, end, limit):
+        if pos < start and short_lines(pos, start - 1):
+            return True
+        if long_line(start, stop):
+            return True
+        pos = stop + 1
+    return pos <= end and short_lines(pos, end)
+
+
+def _long_lines(data: bytes, end: int, limit: int) -> Iterator[tuple[int, int]]:
+    """``(start, stop)`` of every line of ``data[:end]`` longer than ``limit`` bytes (``stop`` is the LF that ends it, or ``end``), in order.
+    The aligned-block idea of ``FileView.has_long_line``: with ``h = (limit + 1) // 2`` a run of ``limit + 1`` bytes without an LF contains one
+    whole block ``[k*h, (k+1)*h)``, so only a block with no LF can be inside a long line; ``count`` and ``find`` run at C speed and no list of
+    lines is ever built."""
+    h = max(1, (limit + 1) // 2)
+    block = 0
+    while block + h <= end:
+        if data.count(b"\n", block, block + h):
+            block += h
+            continue
+        start = data.rfind(b"\n", 0, block) + 1
+        stop = data.find(b"\n", block + h, end)
+        if stop < 0:
+            stop = end
+        if stop - start > limit:
+            yield start, stop
+        block = -(-(stop + 1) // h) * h                # the first block at or after the start of the next line
