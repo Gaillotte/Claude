@@ -2542,7 +2542,7 @@ print(json.load(open(sys.argv[1]))['verdict'])" "${rep}/report_scan_$2.json" 2>/
     assert_eq "FAIL" "$IV" "a regular FILE named vendor or build is scanned (only directories are pruned)"
 
     # .transitignore entries still exclude a file or a directory, anchored on the scan root.
-    IT="${SCRATCH}/i_ignore"; rm -rf "$IT"; I_HOSTILE "$IT"; printf 'cfg.py\napp.py\n' > "$IT/.transitignore"
+    IT="${SCRATCH}/i_ignore"; rm -rf "$IT"; I_HOSTILE "$IT"; printf 'print(1)\n' > "$IT/ok.py"; printf 'cfg.py\napp.py\n' > "$IT/.transitignore"
     I_RUN "$IT" ignore_files
     assert_eq "PASS" "$IV" ".transitignore still excludes the files it names"
     ITD="${SCRATCH}/i_ignore_dir"; rm -rf "$ITD"; I_HOSTILE "$ITD/pkg/legacy"; printf 'print(1)\n' > "$ITD/ok.py"; printf 'pkg/legacy\n' > "$ITD/.transitignore"
@@ -2618,12 +2618,12 @@ print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"
 
     # ── D-003: .transitignore is read the way it is written ───────────────────────────────
     # A last line with no newline used to be lost and a CRLF file never matched (the CR was part of the pattern).
-    J3="${SCRATCH}/j3_nonl"; rm -rf "$J3"; j_hostile "$J3" a.py; j_hostile "$J3" b.py
+    J3="${SCRATCH}/j3_nonl"; rm -rf "$J3"; j_hostile "$J3" a.py; j_hostile "$J3" b.py; printf 'print(1)\n' > "$J3/ok.py"
     printf 'a.py\nb.py' > "$J3/.transitignore"
     j_scan "$J3" j3_nonl
     assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" \
         "D-003: the last line of .transitignore is read although it has no trailing newline"
-    J3C="${SCRATCH}/j3_crlf"; rm -rf "$J3C"; j_hostile "$J3C" a.py; j_hostile "$J3C" b.py
+    J3C="${SCRATCH}/j3_crlf"; rm -rf "$J3C"; j_hostile "$J3C" a.py; j_hostile "$J3C" b.py; printf 'print(1)\n' > "$J3C/ok.py"
     printf '# comment\r\n\r\na.py\r\nb.py\r\n' > "$J3C/.transitignore"
     j_scan "$J3C" j3_crlf
     assert_eq "PASS" "$(j_py "$JREP" "d['verdict']")" \
@@ -3004,13 +3004,20 @@ EOF
     assert_not_contains "$GF" "5242880" "D-039: grep_flat has no size cap"
     assert_contains "$GF" "grep -ziE" "D-039: …grep reads the file itself as one record (the folded view)"
     assert_not_contains "$GF" '$(cat' "D-039: …and the file is never held in a shell variable"
-    # A grep that fails (out of memory, an I/O error) must not read as "no match".
-    GF_RC=$(bash -c '
+    # A grep that fails (out of memory, an I/O error) must not read as "no match" and must not read as a specific attack
+    # either: it is the hard FAIL engine:search_incomplete on the file, once, and grep_flat answers "no match" so that the
+    # caller records no XXE finding for a file that has none (FLAT_INCOMPLETE tells it not to record a PASS).
+    GF_OUT=$(bash -c '
         warn() { :; }
+        declare -A FINDINGS=()
+        record_fail_hard() { echo "HARD $1 $2"; FINDINGS["$1"]="$2"; }
+        FLAT_INCOMPLETE=false; FLAT_FILE=""
         grep() { return 2; }
         '"$GF"'
-        printf "x" > "$1"; grep_flat "y" "$1"; echo $?' _ "${SCRATCH}/j39_gf" 2>/dev/null)
-    assert_eq "0" "$GF_RC" "D-039: grep_flat fails closed: a grep that could not run counts as a match, never as clean"
+        printf "x" > "$1"; grep_flat "y" "$1"; rc=$?; grep_flat "y" "$1" || true; echo "rc=$rc incomplete=$FLAT_INCOMPLETE"' _ "${SCRATCH}/j39_gf" 2>/dev/null)
+    assert_contains "$GF_OUT" "HARD ${SCRATCH}/j39_gf engine:search_incomplete" "D-039: a grep that could not run is the hard FAIL engine:search_incomplete on the file"
+    assert_contains "$GF_OUT" "rc=1 incomplete=true" "D-039: …grep_flat answers no match (no invented XXE finding) and tells the caller the search was incomplete"
+    assert_eq "1" "$(printf '%s\n' "$GF_OUT" | grep -c '^HARD ')" "D-039: …and the finding is recorded once per file"
     GF_RC=$(bash -c '
         warn() { :; }
         '"$GF"'

@@ -49,13 +49,19 @@
      "[WARN] yara or rules directory missing"
     ],
     "status": "WARN"
+   },
+   "src/ok.py": {
+    "messages": [
+     "[WARN] bandit missing"
+    ],
+    "status": "WARN"
    }
   },
   "findings": [],
   "findings_by_file": {},
   "scan_name": "conf",
   "source": {
-   "sha256": "6118a8a61f54f2ce9a7498e20f41cc92ba4add038cc433b3c27c06b79e13f663"
+   "sha256": "70ab0b9cf401a70fc78009c842084a3e2657bb96a68e5422905b98876c2c5788"
   },
   "standards": [
    "OWASP-Top10-2021",
@@ -78,8 +84,8 @@
   "status_color": "#198754",
   "summary": {
    "fail": 0,
-   "pass": 1,
-   "warn": 6
+   "pass": 2,
+   "warn": 7
   },
   "verdict": "PASS"
  }

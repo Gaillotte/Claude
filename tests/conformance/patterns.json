@@ -4,8 +4,8 @@
   "mode": "direct",
   "flags": "-qiE",
   "patterns": 1,
-  "line": 326,
-  "end_line": 326,
+  "line": 339,
+  "end_line": 339,
   "enclosing_function": "_classify_severity",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$msg\">",
@@ -17,15 +17,15 @@
   "id": "_classify_severity:eb38637a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qiE",
   "patterns": 1,
-  "line": 327,
-  "end_line": 327,
+  "line": 340,
+  "end_line": 340,
   "enclosing_function": "_classify_severity",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$msg\">",
@@ -37,15 +37,15 @@
   "id": "_classify_severity:ca2a4400",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qiE",
   "patterns": 1,
-  "line": 328,
-  "end_line": 328,
+  "line": 341,
+  "end_line": 341,
   "enclosing_function": "_classify_severity",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$msg\">",
@@ -57,15 +57,15 @@
   "id": "_classify_severity:7d5328c8",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qiE",
   "patterns": 1,
-  "line": 329,
-  "end_line": 329,
+  "line": 342,
+  "end_line": 342,
   "enclosing_function": "_classify_severity",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$msg\">",
@@ -77,15 +77,15 @@
   "id": "_classify_severity:541028a4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qiE",
   "patterns": 1,
-  "line": 330,
-  "end_line": 330,
+  "line": 343,
+  "end_line": 343,
   "enclosing_function": "_classify_severity",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$msg\">",
@@ -97,35 +97,15 @@
   "id": "_classify_severity:2646dd5d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
- },
- {
-  "helper": "grep",
-  "mode": "direct",
-  "flags": "-q",
-  "patterns": 1,
-  "line": 735,
-  "end_line": 735,
-  "enclosing_function": "scan_global",
-  "dynamic": false,
-  "file_argument_text": "<stdin: yara -r \"$rule\" \"$SCAN_DIR\" 2 > /dev/null>",
-  "dialect": "bre",
-  "shape": "match",
-  "pipeline": "yara -r \"$rule\" \"$SCAN_DIR\" 2 > /dev/null",
-  "pattern": ".",
-  "pattern_raw": ".",
-  "id": "scan_global:103a7ae0",
-  "resolved": false,
-  "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qIE",
   "patterns": 1,
-  "line": 1020,
-  "end_line": 1020,
+  "line": 1081,
+  "end_line": 1081,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -141,15 +121,15 @@
   "resolved_by": "executed the KNOWN_CRED_* definitions",
   "id": "_known_cred_check:1ded89a2",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -169,19 +149,19 @@
   "pattern": "(^|[^A-Za-z0-9])(glpat-[A-Za-z0-9_-]{20,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[4] (gitlab_pat)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:1b5cd001",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -201,19 +181,19 @@
   "pattern": "(^|[^A-Za-z0-9])(SG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[9] (sendgrid_key)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:234b6086",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -233,19 +213,19 @@
   "pattern": "(^|[^A-Za-z0-9])([Aa][Ww][Ss]_[Ss][Ee][Cc][Rr][Ee][Tt]_[Aa][Cc][Cc][Ee][Ss][Ss]_[Kk][Ee][Yy][[:space:]]*[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9/+=]{40})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[1] (aws_secret_access_key)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:2478889c",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -265,19 +245,19 @@
   "pattern": "(^|[^A-Za-z0-9])(xox[bpars]-[0-9]{8,14}-[0-9]{8,14}(-[0-9]{8,14})?-[A-Za-z0-9]{20,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[6] (slack_token)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:2a7a18ec",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -297,19 +277,19 @@
   "pattern": "(^|[^A-Za-z0-9])(AIza[0-9A-Za-z_-]{35})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[7] (google_api_key)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:2d630d63",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -329,19 +309,19 @@
   "pattern": "(^|[^A-Za-z0-9])(pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[11] (pypi_token)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:3be9fdce",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -361,19 +341,19 @@
   "pattern": "(^|[^A-Za-z0-9])([sr]k_live_[A-Za-z0-9]{24,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[5] (stripe_live_key)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:5380d6dc",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -393,19 +373,19 @@
   "pattern": "(^|[^A-Za-z0-9])(sk-proj-[A-Za-z0-9_-]{40,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[14] (openai_project_key)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:679d2785",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -425,19 +405,19 @@
   "pattern": "(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{36,255})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[2] (github_token)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:69706f18",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -457,19 +437,19 @@
   "pattern": "(^|[^A-Za-z0-9])(sk-[A-Za-z0-9]{48})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[15] (openai_legacy_key)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:7832a9f9",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -489,19 +469,19 @@
   "pattern": "(^|[^A-Za-z0-9])(ya29\\.[0-9A-Za-z_-]{30,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[8] (google_oauth_token)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:91307535",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -521,19 +501,19 @@
   "pattern": "(^|[^A-Za-z0-9])(dop_v1_[a-f0-9]{64})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[17] (digitalocean_token)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:926d8bfc",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -553,19 +533,19 @@
   "pattern": "(^|[^A-Za-z0-9])(shp(at|ca|pa|ss)_[a-f0-9]{32})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[16] (shopify_token)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:967eda71",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -585,19 +565,19 @@
   "pattern": "(^|[^A-Za-z0-9])(hf_[A-Za-z0-9]{34,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[12] (huggingface_token)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:97ed4be3",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -617,19 +597,19 @@
   "pattern": "(^|[^A-Za-z0-9])(github_pat_[A-Za-z0-9_]{50,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[3] (github_fine_grained_pat)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:b0e8c222",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -649,19 +629,19 @@
   "pattern": "(^|[^A-Za-z0-9])(sk-ant-(api|admin)[0-9]{2}-[A-Za-z0-9_-]{60,})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[13] (anthropic_key)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:b78ba3f1",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -681,19 +661,19 @@
   "pattern": "(^|[^A-Za-z0-9])(npm_[A-Za-z0-9]{36})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[10] (npm_token)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:c5301ce8",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ohIE",
   "patterns": 2,
-  "line": 1022,
-  "end_line": 1023,
+  "line": 1083,
+  "end_line": 1084,
   "enclosing_function": "_known_cred_check",
   "dynamic": true,
   "file_argument_text": "\"$target\"",
@@ -713,19 +693,19 @@
   "pattern": "(^|[^A-Za-z0-9])((AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[0-9A-Z]{16})([^A-Za-z0-9]|$)",
   "resolved": true,
   "resolved_by": "KNOWN_CRED_PATS[0] (aws_access_key_id)",
-  "parent_line": 1022,
+  "parent_line": 1083,
   "excl": "EXAMPLE|SAMPLE|DUMMY|PLACEHOLDER|YOUR|REDACTED|FAKE|CHANGEME|x{6,}|0{10,}|\\*{3,}|\\.{3}|1234567890|abcdefgh|([A-Za-z0-9])\\1{9,}|ghp_16C7e42F292c6912E7710c838347Ae178B4a",
   "id": "_known_cred_check:e8d7884a",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qIE",
   "patterns": 1,
-  "line": 1032,
-  "end_line": 1032,
+  "line": 1093,
+  "end_line": 1093,
   "enclosing_function": "_known_cred_check",
   "dynamic": false,
   "file_argument_text": "\"$target\"",
@@ -736,15 +716,15 @@
   "id": "_known_cred_check:903001e8",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1055,
-  "end_line": 1057,
+  "line": 1116,
+  "end_line": 1118,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -754,15 +734,15 @@
   "id": "scan_universal_patterns:756aaf1e",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
-  "flags": "-EA",
+  "flags": "-aEA",
   "patterns": 2,
-  "line": 1079,
-  "end_line": 1081,
+  "line": 1143,
+  "end_line": 1145,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -770,7 +750,7 @@
   "context_lines": 5,
   "shape": "pipe2",
   "dialect2": "ere",
-  "flags2": "-E",
+  "flags2": "-aE",
   "between": "tr '\\r\\n\\t' '   '",
   "pattern": "-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----",
   "pattern_raw": "'-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----'",
@@ -779,15 +759,15 @@
   "id": "scan_universal_patterns:7ae24e41",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1092,
-  "end_line": 1092,
+  "line": 1156,
+  "end_line": 1156,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -797,15 +777,15 @@
   "id": "scan_universal_patterns:c0bff45a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1106,
-  "end_line": 1106,
+  "line": 1170,
+  "end_line": 1170,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -815,15 +795,15 @@
   "id": "scan_universal_patterns:5207e400",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1111,
-  "end_line": 1113,
+  "line": 1175,
+  "end_line": 1177,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -833,15 +813,15 @@
   "id": "scan_universal_patterns:6d7cf6fa",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1129,
-  "end_line": 1131,
+  "line": 1193,
+  "end_line": 1195,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -851,15 +831,15 @@
   "id": "scan_universal_patterns:00775ea3",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1137,
-  "end_line": 1139,
+  "line": 1201,
+  "end_line": 1203,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -869,15 +849,15 @@
   "id": "scan_universal_patterns:b55bbb48",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1144,
-  "end_line": 1146,
+  "line": 1208,
+  "end_line": 1210,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -887,15 +867,15 @@
   "id": "scan_universal_patterns:fff072ac",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1151,
-  "end_line": 1153,
+  "line": 1215,
+  "end_line": 1217,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -905,15 +885,15 @@
   "id": "scan_universal_patterns:7fa915b5",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1158,
-  "end_line": 1160,
+  "line": 1222,
+  "end_line": 1224,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -923,15 +903,15 @@
   "id": "scan_universal_patterns:2666c7c9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1166,
-  "end_line": 1168,
+  "line": 1230,
+  "end_line": 1232,
   "enclosing_function": "scan_universal_patterns",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -941,15 +921,15 @@
   "id": "scan_universal_patterns:8265b061",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qE",
   "patterns": 1,
-  "line": 1190,
-  "end_line": 1190,
+  "line": 1254,
+  "end_line": 1254,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$out\">",
@@ -961,15 +941,15 @@
   "id": "scan_python:40d0a001",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-oE",
   "patterns": 1,
-  "line": 1192,
-  "end_line": 1192,
+  "line": 1256,
+  "end_line": 1256,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$out\">",
@@ -981,15 +961,15 @@
   "id": "scan_python:3f9e98b4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-",
   "patterns": 2,
-  "line": 1193,
-  "end_line": 1193,
+  "line": 1257,
+  "end_line": 1257,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$out\">",
@@ -1005,15 +985,15 @@
   "id": "scan_python:a32a0b20",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1201,
-  "end_line": 1201,
+  "line": 1265,
+  "end_line": 1265,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1023,15 +1003,15 @@
   "id": "scan_python:0c065ebc",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1207,
-  "end_line": 1207,
+  "line": 1271,
+  "end_line": 1271,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1041,15 +1021,15 @@
   "id": "scan_python:191a3086",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1213,
-  "end_line": 1213,
+  "line": 1277,
+  "end_line": 1277,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1059,15 +1039,15 @@
   "id": "scan_python:6da7ee0a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1221,
-  "end_line": 1221,
+  "line": 1285,
+  "end_line": 1285,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1077,15 +1057,15 @@
   "id": "scan_python:a01d004d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1227,
-  "end_line": 1227,
+  "line": 1291,
+  "end_line": 1291,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1095,15 +1075,15 @@
   "id": "scan_python:62aea149",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1232,
-  "end_line": 1232,
+  "line": 1296,
+  "end_line": 1296,
   "enclosing_function": "scan_python",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1113,15 +1093,15 @@
   "id": "scan_python:de1efe6a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1293,
-  "end_line": 1293,
+  "line": 1357,
+  "end_line": 1357,
   "enclosing_function": "scan_javascript",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1131,15 +1111,15 @@
   "id": "scan_javascript:a8f566c6",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1299,
-  "end_line": 1299,
+  "line": 1363,
+  "end_line": 1363,
   "enclosing_function": "scan_javascript",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1149,15 +1129,15 @@
   "id": "scan_javascript:f2a56341",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1305,
-  "end_line": 1305,
+  "line": 1369,
+  "end_line": 1369,
   "enclosing_function": "scan_javascript",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1167,15 +1147,15 @@
   "id": "scan_javascript:b7f32445",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1311,
-  "end_line": 1311,
+  "line": 1375,
+  "end_line": 1375,
   "enclosing_function": "scan_javascript",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1185,15 +1165,15 @@
   "id": "scan_javascript:344dd4e9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1316,
-  "end_line": 1316,
+  "line": 1380,
+  "end_line": 1380,
   "enclosing_function": "scan_javascript",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1203,15 +1183,15 @@
   "id": "scan_javascript:736f3f65",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1322,
-  "end_line": 1322,
+  "line": 1386,
+  "end_line": 1386,
   "enclosing_function": "scan_javascript",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1221,15 +1201,15 @@
   "id": "scan_javascript:30b2e6a5",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1328,
-  "end_line": 1328,
+  "line": 1392,
+  "end_line": 1392,
   "enclosing_function": "scan_javascript",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1239,15 +1219,15 @@
   "id": "scan_javascript:8c727f34",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qE",
   "patterns": 1,
-  "line": 1346,
-  "end_line": 1346,
+  "line": 1410,
+  "end_line": 1410,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$out\">",
@@ -1259,15 +1239,15 @@
   "id": "scan_c_cpp:7a5c94c0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-oE",
   "patterns": 1,
-  "line": 1348,
-  "end_line": 1348,
+  "line": 1412,
+  "end_line": 1412,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$out\">",
@@ -1279,15 +1259,15 @@
   "id": "scan_c_cpp:d9e9c699",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1357,
-  "end_line": 1357,
+  "line": 1421,
+  "end_line": 1421,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1297,15 +1277,15 @@
   "id": "scan_c_cpp:9e6a96c3",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1363,
-  "end_line": 1363,
+  "line": 1427,
+  "end_line": 1427,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1315,15 +1295,15 @@
   "id": "scan_c_cpp:23c56d6f",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1369,
-  "end_line": 1369,
+  "line": 1433,
+  "end_line": 1433,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1333,15 +1313,15 @@
   "id": "scan_c_cpp:bcd8b792",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1375,
-  "end_line": 1375,
+  "line": 1439,
+  "end_line": 1439,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1351,15 +1331,15 @@
   "id": "scan_c_cpp:f77e57f4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1380,
-  "end_line": 1380,
+  "line": 1444,
+  "end_line": 1444,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1369,15 +1349,15 @@
   "id": "scan_c_cpp:5d5c7258",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1385,
-  "end_line": 1385,
+  "line": 1449,
+  "end_line": 1449,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1387,15 +1367,15 @@
   "id": "scan_c_cpp:c3cb25fe",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1390,
-  "end_line": 1390,
+  "line": 1454,
+  "end_line": 1454,
   "enclosing_function": "scan_c_cpp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1405,15 +1385,15 @@
   "id": "scan_c_cpp:7b5253bf",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1414,
-  "end_line": 1414,
+  "line": 1478,
+  "end_line": 1478,
   "enclosing_function": "scan_shell",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1423,15 +1403,15 @@
   "id": "scan_shell:01c8da54",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1420,
-  "end_line": 1420,
+  "line": 1484,
+  "end_line": 1484,
   "enclosing_function": "scan_shell",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1441,15 +1421,15 @@
   "id": "scan_shell:800600a8",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1426,
-  "end_line": 1426,
+  "line": 1490,
+  "end_line": 1490,
   "enclosing_function": "scan_shell",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1459,15 +1439,15 @@
   "id": "scan_shell:734409a9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1431,
-  "end_line": 1431,
+  "line": 1495,
+  "end_line": 1495,
   "enclosing_function": "scan_shell",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1477,15 +1457,15 @@
   "id": "scan_shell:6b0960a3",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1436,
-  "end_line": 1436,
+  "line": 1500,
+  "end_line": 1500,
   "enclosing_function": "scan_shell",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1495,15 +1475,15 @@
   "id": "scan_shell:69e5dae7",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1450,
-  "end_line": 1450,
+  "line": 1514,
+  "end_line": 1514,
   "enclosing_function": "scan_java",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1513,15 +1493,15 @@
   "id": "scan_java:8620780e",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1456,
-  "end_line": 1456,
+  "line": 1520,
+  "end_line": 1520,
   "enclosing_function": "scan_java",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1531,15 +1511,15 @@
   "id": "scan_java:7f135878",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1462,
-  "end_line": 1462,
+  "line": 1526,
+  "end_line": 1526,
   "enclosing_function": "scan_java",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1549,15 +1529,15 @@
   "id": "scan_java:200117da",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1467,
-  "end_line": 1467,
+  "line": 1531,
+  "end_line": 1531,
   "enclosing_function": "scan_java",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1567,15 +1547,15 @@
   "id": "scan_java:30d87d8c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1473,
-  "end_line": 1473,
+  "line": 1537,
+  "end_line": 1537,
   "enclosing_function": "scan_java",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1585,15 +1565,15 @@
   "id": "scan_java:18a6e7ee",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1479,
-  "end_line": 1479,
+  "line": 1543,
+  "end_line": 1543,
   "enclosing_function": "scan_java",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1603,15 +1583,15 @@
   "id": "scan_java:cd3a6c59",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1485,
-  "end_line": 1485,
+  "line": 1549,
+  "end_line": 1549,
   "enclosing_function": "scan_java",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1621,15 +1601,15 @@
   "id": "scan_java:1edefca8",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1499,
-  "end_line": 1499,
+  "line": 1563,
+  "end_line": 1563,
   "enclosing_function": "scan_php",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1639,15 +1619,15 @@
   "id": "scan_php:7c444593",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1505,
-  "end_line": 1505,
+  "line": 1569,
+  "end_line": 1569,
   "enclosing_function": "scan_php",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1657,15 +1637,15 @@
   "id": "scan_php:4cb4a838",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1511,
-  "end_line": 1511,
+  "line": 1575,
+  "end_line": 1575,
   "enclosing_function": "scan_php",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1675,15 +1655,15 @@
   "id": "scan_php:9b45c584",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1517,
-  "end_line": 1517,
+  "line": 1581,
+  "end_line": 1581,
   "enclosing_function": "scan_php",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1693,15 +1673,15 @@
   "id": "scan_php:d39f663c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1523,
-  "end_line": 1523,
+  "line": 1587,
+  "end_line": 1587,
   "enclosing_function": "scan_php",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1711,15 +1691,15 @@
   "id": "scan_php:f33baac4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1538,
-  "end_line": 1538,
+  "line": 1602,
+  "end_line": 1602,
   "enclosing_function": "scan_ruby",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1729,15 +1709,15 @@
   "id": "scan_ruby:c79cbe30",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1544,
-  "end_line": 1544,
+  "line": 1608,
+  "end_line": 1608,
   "enclosing_function": "scan_ruby",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1747,15 +1727,15 @@
   "id": "scan_ruby:75b5ba07",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1550,
-  "end_line": 1550,
+  "line": 1614,
+  "end_line": 1614,
   "enclosing_function": "scan_ruby",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1765,15 +1745,15 @@
   "id": "scan_ruby:0af0024d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1556,
-  "end_line": 1556,
+  "line": 1620,
+  "end_line": 1620,
   "enclosing_function": "scan_ruby",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1783,15 +1763,15 @@
   "id": "scan_ruby:78866956",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1571,
-  "end_line": 1571,
+  "line": 1635,
+  "end_line": 1635,
   "enclosing_function": "scan_go",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1801,15 +1781,15 @@
   "id": "scan_go:a0332ed5",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1576,
-  "end_line": 1576,
+  "line": 1640,
+  "end_line": 1640,
   "enclosing_function": "scan_go",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1819,15 +1799,15 @@
   "id": "scan_go:71263a77",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1582,
-  "end_line": 1582,
+  "line": 1646,
+  "end_line": 1646,
   "enclosing_function": "scan_go",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1837,15 +1817,15 @@
   "id": "scan_go:537c8723",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1587,
-  "end_line": 1587,
+  "line": 1651,
+  "end_line": 1651,
   "enclosing_function": "scan_go",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1855,15 +1835,15 @@
   "id": "scan_go:8a5a753d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1592,
-  "end_line": 1592,
+  "line": 1656,
+  "end_line": 1656,
   "enclosing_function": "scan_go",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1873,15 +1853,15 @@
   "id": "scan_go:8ea2e6e8",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1592,
-  "end_line": 1592,
+  "line": 1656,
+  "end_line": 1656,
   "enclosing_function": "scan_go",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -1891,15 +1871,15 @@
   "id": "scan_go:b4cdf7e3",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_flat",
   "mode": "flat",
   "flags": "-ziE -e PAT FILE",
   "patterns": 1,
-  "line": 1632,
-  "end_line": 1632,
+  "line": 1737,
+  "end_line": 1737,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -1909,15 +1889,15 @@
   "id": "scan_xml:a2c89c53",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_flat",
   "mode": "flat",
   "flags": "-ziE -e PAT FILE",
   "patterns": 1,
-  "line": 1638,
-  "end_line": 1638,
+  "line": 1743,
+  "end_line": 1743,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -1927,15 +1907,15 @@
   "id": "scan_xml:f5fb29da",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_flat",
   "mode": "flat",
   "flags": "-ziE -e PAT FILE",
   "patterns": 1,
-  "line": 1644,
-  "end_line": 1644,
+  "line": 1749,
+  "end_line": 1749,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -1945,15 +1925,15 @@
   "id": "scan_xml:69187c7a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_excl",
   "mode": "excl",
   "flags": "-ahiE -e PAT FILE | grep -aviE -e EXCL",
   "patterns": 2,
-  "line": 1659,
-  "end_line": 1662,
+  "line": 1767,
+  "end_line": 1770,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -1965,15 +1945,15 @@
   "id": "scan_xml:7c9c87a6",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1687,
-  "end_line": 1687,
+  "line": 1795,
+  "end_line": 1795,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -1983,15 +1963,15 @@
   "id": "scan_xml:dfc9aed7",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1691,
-  "end_line": 1691,
+  "line": 1799,
+  "end_line": 1799,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -2001,15 +1981,15 @@
   "id": "scan_xml:85d7be4d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1694,
-  "end_line": 1694,
+  "line": 1802,
+  "end_line": 1802,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -2019,15 +1999,15 @@
   "id": "scan_xml:86141cd0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1699,
-  "end_line": 1699,
+  "line": 1807,
+  "end_line": 1807,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -2037,15 +2017,15 @@
   "id": "scan_xml:8708ae56",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1706,
-  "end_line": 1706,
+  "line": 1814,
+  "end_line": 1814,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -2055,15 +2035,15 @@
   "id": "scan_xml:147058dd",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1710,
-  "end_line": 1710,
+  "line": 1818,
+  "end_line": 1818,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -2073,15 +2053,15 @@
   "id": "scan_xml:bd93ce7f",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_excl",
   "mode": "excl",
   "flags": "-ahiE -e PAT FILE | grep -aviE -e EXCL",
   "patterns": 2,
-  "line": 1714,
-  "end_line": 1716,
+  "line": 1822,
+  "end_line": 1824,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -2093,15 +2073,15 @@
   "id": "scan_xml:fdf89d14",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 1720,
-  "end_line": 1720,
+  "line": 1828,
+  "end_line": 1828,
   "enclosing_function": "scan_xml",
   "dynamic": false,
   "file_argument_text": "\"$x\"",
@@ -2111,15 +2091,15 @@
   "id": "scan_xml:c29537c5",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1737,
-  "end_line": 1737,
+  "line": 1846,
+  "end_line": 1846,
   "enclosing_function": "scan_yaml",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2129,15 +2109,15 @@
   "id": "scan_yaml:9c3e90c6",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1746,
-  "end_line": 1746,
+  "line": 1855,
+  "end_line": 1855,
   "enclosing_function": "scan_yaml",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2147,15 +2127,15 @@
   "id": "scan_yaml:c6aab7ca",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1752,
-  "end_line": 1752,
+  "line": 1861,
+  "end_line": 1861,
   "enclosing_function": "scan_yaml",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2165,15 +2145,15 @@
   "id": "scan_yaml:96b7cb8f",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1757,
-  "end_line": 1757,
+  "line": 1866,
+  "end_line": 1866,
   "enclosing_function": "scan_yaml",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2183,15 +2163,15 @@
   "id": "scan_yaml:f81bcd86",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1763,
-  "end_line": 1763,
+  "line": 1872,
+  "end_line": 1872,
   "enclosing_function": "scan_yaml",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2201,15 +2181,15 @@
   "id": "scan_yaml:45249207",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-q",
   "patterns": 1,
-  "line": 1783,
-  "end_line": 1783,
+  "line": 1892,
+  "end_line": 1892,
   "enclosing_function": "scan_terraform",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$out\">",
@@ -2221,15 +2201,15 @@
   "id": "scan_terraform:8310d21c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-c",
   "patterns": 1,
-  "line": 1785,
-  "end_line": 1785,
+  "line": 1894,
+  "end_line": 1894,
   "enclosing_function": "scan_terraform",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$out\">",
@@ -2241,15 +2221,15 @@
   "id": "scan_terraform:8310d21c#2",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1794,
-  "end_line": 1794,
+  "line": 1903,
+  "end_line": 1903,
   "enclosing_function": "scan_terraform",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2259,15 +2239,15 @@
   "id": "scan_terraform:3e786571",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1800,
-  "end_line": 1800,
+  "line": 1909,
+  "end_line": 1909,
   "enclosing_function": "scan_terraform",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2277,15 +2257,15 @@
   "id": "scan_terraform:44145451",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1806,
-  "end_line": 1806,
+  "line": 1915,
+  "end_line": 1915,
   "enclosing_function": "scan_terraform",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2295,15 +2275,15 @@
   "id": "scan_terraform:880b4467",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1811,
-  "end_line": 1811,
+  "line": 1920,
+  "end_line": 1920,
   "enclosing_function": "scan_terraform",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2313,15 +2293,15 @@
   "id": "scan_terraform:0e393e53",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1835,
-  "end_line": 1835,
+  "line": 1944,
+  "end_line": 1944,
   "enclosing_function": "scan_docker",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2331,15 +2311,15 @@
   "id": "scan_docker:bdb828f1",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1841,
-  "end_line": 1841,
+  "line": 1950,
+  "end_line": 1950,
   "enclosing_function": "scan_docker",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2349,15 +2329,15 @@
   "id": "scan_docker:8e3d0911",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1847,
-  "end_line": 1847,
+  "line": 1956,
+  "end_line": 1956,
   "enclosing_function": "scan_docker",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2367,15 +2347,15 @@
   "id": "scan_docker:133b4cbf",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1870,
-  "end_line": 1870,
+  "line": 1979,
+  "end_line": 1979,
   "enclosing_function": "scan_docker",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2385,15 +2365,15 @@
   "id": "scan_docker:662d733c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1885,
-  "end_line": 1885,
+  "line": 1994,
+  "end_line": 1994,
   "enclosing_function": "scan_sql",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2403,15 +2383,15 @@
   "id": "scan_sql:ad254175",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1891,
-  "end_line": 1891,
+  "line": 2000,
+  "end_line": 2000,
   "enclosing_function": "scan_sql",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2421,15 +2401,15 @@
   "id": "scan_sql:ba5a5fc0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1897,
-  "end_line": 1897,
+  "line": 2006,
+  "end_line": 2006,
   "enclosing_function": "scan_sql",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2439,15 +2419,15 @@
   "id": "scan_sql:8bf47f29",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 1903,
-  "end_line": 1903,
+  "line": 2012,
+  "end_line": 2012,
   "enclosing_function": "scan_sql",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2457,15 +2437,15 @@
   "id": "scan_sql:8e7ee887",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-iE",
   "patterns": 1,
-  "line": 1918,
-  "end_line": 1918,
+  "line": 2027,
+  "end_line": 2027,
   "enclosing_function": "scan_binary",
   "dynamic": false,
   "file_argument_text": "<stdin: strings \"$f\" 2 > /dev/null>",
@@ -2477,15 +2457,15 @@
   "id": "scan_binary:6d7a4ce4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-",
   "patterns": 1,
-  "line": 1932,
-  "end_line": 1932,
+  "line": 2041,
+  "end_line": 2041,
   "enclosing_function": "scan_archive",
   "dynamic": false,
   "file_argument_text": "<stdin: unzip -l \"$f\" 2 > /dev/null>",
@@ -2497,15 +2477,15 @@
   "id": "scan_archive:511fc2d9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2316,
-  "end_line": 2316,
+  "line": 2425,
+  "end_line": 2425,
   "enclosing_function": "scan_package_json",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2515,15 +2495,15 @@
   "id": "scan_package_json:eee0f204",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2323,
-  "end_line": 2323,
+  "line": 2432,
+  "end_line": 2432,
   "enclosing_function": "scan_package_json",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2533,15 +2513,15 @@
   "id": "scan_package_json:f1daacbe",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_excl",
   "mode": "excl",
   "flags": "-ahiE -e PAT FILE | grep -aviE -e EXCL",
   "patterns": 2,
-  "line": 2370,
-  "end_line": 2372,
+  "line": 2479,
+  "end_line": 2481,
   "enclosing_function": "scan_package_json",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2553,15 +2533,15 @@
   "id": "scan_package_json:ca7071a9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2388,
-  "end_line": 2390,
+  "line": 2497,
+  "end_line": 2499,
   "enclosing_function": "scan_requirements",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2571,15 +2551,15 @@
   "id": "scan_requirements:6de6233b",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2394,
-  "end_line": 2394,
+  "line": 2503,
+  "end_line": 2503,
   "enclosing_function": "scan_requirements",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2589,15 +2569,15 @@
   "id": "scan_requirements:ddb43b39",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2398,
-  "end_line": 2398,
+  "line": 2507,
+  "end_line": 2507,
   "enclosing_function": "scan_requirements",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2607,15 +2587,15 @@
   "id": "scan_requirements:3517c85f",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2403,
-  "end_line": 2403,
+  "line": 2512,
+  "end_line": 2512,
   "enclosing_function": "scan_requirements",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2625,15 +2605,15 @@
   "id": "scan_requirements:440003fb",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_excl",
   "mode": "excl",
   "flags": "-ahiE -e PAT FILE | grep -aviE -e EXCL",
   "patterns": 2,
-  "line": 2407,
-  "end_line": 2407,
+  "line": 2516,
+  "end_line": 2516,
   "enclosing_function": "scan_requirements",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2645,15 +2625,15 @@
   "id": "scan_requirements:05b625f0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2457,
-  "end_line": 2457,
+  "line": 2566,
+  "end_line": 2566,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2663,15 +2643,15 @@
   "id": "scan_gradle:8a68cb2a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2463,
-  "end_line": 2463,
+  "line": 2572,
+  "end_line": 2572,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2681,15 +2661,15 @@
   "id": "scan_gradle:7573d0ff",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2469,
-  "end_line": 2469,
+  "line": 2578,
+  "end_line": 2578,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2699,15 +2679,15 @@
   "id": "scan_gradle:029c4e78",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2475,
-  "end_line": 2475,
+  "line": 2584,
+  "end_line": 2584,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2717,15 +2697,15 @@
   "id": "scan_gradle:570fa97d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2483,
-  "end_line": 2483,
+  "line": 2592,
+  "end_line": 2592,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2735,15 +2715,15 @@
   "id": "scan_gradle:fadd08f9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2487,
-  "end_line": 2487,
+  "line": 2596,
+  "end_line": 2596,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2753,15 +2733,15 @@
   "id": "scan_gradle:5a6eac32",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2498,
-  "end_line": 2498,
+  "line": 2607,
+  "end_line": 2607,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2771,15 +2751,15 @@
   "id": "scan_gradle:f4fea15a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2506,
-  "end_line": 2506,
+  "line": 2615,
+  "end_line": 2615,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2789,15 +2769,15 @@
   "id": "scan_gradle:a0d82bf0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2516,
-  "end_line": 2516,
+  "line": 2625,
+  "end_line": 2625,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2807,15 +2787,15 @@
   "id": "scan_gradle:6e68c2a1",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2524,
-  "end_line": 2524,
+  "line": 2633,
+  "end_line": 2633,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2825,15 +2805,15 @@
   "id": "scan_gradle:e2a9bda6",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2530,
-  "end_line": 2530,
+  "line": 2639,
+  "end_line": 2639,
   "enclosing_function": "scan_gradle",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -2843,15 +2823,15 @@
   "id": "scan_gradle:dbaf2522",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2598,
-  "end_line": 2598,
+  "line": 2707,
+  "end_line": 2707,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -2861,15 +2841,15 @@
   "id": "scan_bat:77628008",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2603,
-  "end_line": 2603,
+  "line": 2712,
+  "end_line": 2712,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -2879,15 +2859,15 @@
   "id": "scan_bat:14f37147",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2609,
-  "end_line": 2609,
+  "line": 2718,
+  "end_line": 2718,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -2897,15 +2877,15 @@
   "id": "scan_bat:34cff2cf",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2615,
-  "end_line": 2615,
+  "line": 2724,
+  "end_line": 2724,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -2915,15 +2895,15 @@
   "id": "scan_bat:121f68b7",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2622,
-  "end_line": 2622,
+  "line": 2731,
+  "end_line": 2731,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -2933,15 +2913,15 @@
   "id": "scan_bat:9292f881",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2629,
-  "end_line": 2629,
+  "line": 2738,
+  "end_line": 2738,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -2951,15 +2931,15 @@
   "id": "scan_bat:c7db3808",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2638,
-  "end_line": 2638,
+  "line": 2747,
+  "end_line": 2747,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -2969,15 +2949,15 @@
   "id": "scan_bat:b5897b8d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2645,
-  "end_line": 2645,
+  "line": 2754,
+  "end_line": 2754,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -2987,15 +2967,15 @@
   "id": "scan_bat:8f60698e",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2649,
-  "end_line": 2649,
+  "line": 2758,
+  "end_line": 2758,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3005,15 +2985,15 @@
   "id": "scan_bat:a940fd3e",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2655,
-  "end_line": 2655,
+  "line": 2764,
+  "end_line": 2764,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3023,15 +3003,15 @@
   "id": "scan_bat:badf2c7a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2656,
-  "end_line": 2656,
+  "line": 2765,
+  "end_line": 2765,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3041,15 +3021,15 @@
   "id": "scan_bat:9d7bd3aa",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2657,
-  "end_line": 2657,
+  "line": 2766,
+  "end_line": 2766,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3059,15 +3039,15 @@
   "id": "scan_bat:f0ea9817",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2658,
-  "end_line": 2658,
+  "line": 2767,
+  "end_line": 2767,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3077,15 +3057,15 @@
   "id": "scan_bat:b72012ea",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2667,
-  "end_line": 2667,
+  "line": 2776,
+  "end_line": 2776,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3095,15 +3075,15 @@
   "id": "scan_bat:b0451410",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2668,
-  "end_line": 2668,
+  "line": 2777,
+  "end_line": 2777,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3113,15 +3093,15 @@
   "id": "scan_bat:762ab457",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2674,
-  "end_line": 2674,
+  "line": 2783,
+  "end_line": 2783,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3131,15 +3111,15 @@
   "id": "scan_bat:91cd9ad7",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2680,
-  "end_line": 2680,
+  "line": 2789,
+  "end_line": 2789,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3149,15 +3129,15 @@
   "id": "scan_bat:30889504",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2686,
-  "end_line": 2686,
+  "line": 2795,
+  "end_line": 2795,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3167,15 +3147,15 @@
   "id": "scan_bat:3ad069e5",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2689,
-  "end_line": 2689,
+  "line": 2798,
+  "end_line": 2798,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3185,15 +3165,15 @@
   "id": "scan_bat:4629d86d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2692,
-  "end_line": 2692,
+  "line": 2801,
+  "end_line": 2801,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3203,15 +3183,15 @@
   "id": "scan_bat:0eefd592",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2698,
-  "end_line": 2698,
+  "line": 2807,
+  "end_line": 2807,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3221,15 +3201,15 @@
   "id": "scan_bat:72374c48",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2701,
-  "end_line": 2701,
+  "line": 2810,
+  "end_line": 2810,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3239,15 +3219,15 @@
   "id": "scan_bat:607b26eb",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2701,
-  "end_line": 2701,
+  "line": 2810,
+  "end_line": 2810,
   "enclosing_function": "scan_bat",
   "dynamic": true,
   "file_argument_text": "\"$v\"",
@@ -3262,15 +3242,15 @@
   "resolved_by": "the single static assignment of FETCH",
   "id": "scan_bat:d760be9d",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2704,
-  "end_line": 2704,
+  "line": 2813,
+  "end_line": 2813,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3280,15 +3260,15 @@
   "id": "scan_bat:385e3d42",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2707,
-  "end_line": 2707,
+  "line": 2816,
+  "end_line": 2816,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3298,15 +3278,15 @@
   "id": "scan_bat:503ba16c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2710,
-  "end_line": 2710,
+  "line": 2819,
+  "end_line": 2819,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3316,15 +3296,15 @@
   "id": "scan_bat:4c68edb1",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2713,
-  "end_line": 2713,
+  "line": 2822,
+  "end_line": 2822,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3334,15 +3314,15 @@
   "id": "scan_bat:00d95973",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2716,
-  "end_line": 2716,
+  "line": 2825,
+  "end_line": 2825,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3352,15 +3332,15 @@
   "id": "scan_bat:ac1f77c4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2719,
-  "end_line": 2719,
+  "line": 2828,
+  "end_line": 2828,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3370,15 +3350,15 @@
   "id": "scan_bat:32597f20",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2727,
-  "end_line": 2727,
+  "line": 2836,
+  "end_line": 2836,
   "enclosing_function": "scan_bat",
   "dynamic": false,
   "file_argument_text": "\"$v\"",
@@ -3388,15 +3368,15 @@
   "id": "scan_bat:21571c17",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2760,
-  "end_line": 2760,
+  "line": 2869,
+  "end_line": 2869,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3406,15 +3386,15 @@
   "id": "scan_setup_py:4d5b96de",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2765,
-  "end_line": 2765,
+  "line": 2874,
+  "end_line": 2874,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3424,15 +3404,15 @@
   "id": "scan_setup_py:735f1a0e",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2773,
-  "end_line": 2773,
+  "line": 2882,
+  "end_line": 2882,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3442,15 +3422,15 @@
   "id": "scan_setup_py:52c2e8d3",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2774,
-  "end_line": 2774,
+  "line": 2883,
+  "end_line": 2883,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3460,15 +3440,15 @@
   "id": "scan_setup_py:55875312",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2775,
-  "end_line": 2775,
+  "line": 2884,
+  "end_line": 2884,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3478,15 +3458,15 @@
   "id": "scan_setup_py:79802a78",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2780,
-  "end_line": 2780,
+  "line": 2889,
+  "end_line": 2889,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3496,15 +3476,15 @@
   "id": "scan_setup_py:cc45626e",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2781,
-  "end_line": 2781,
+  "line": 2890,
+  "end_line": 2890,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3514,15 +3494,15 @@
   "id": "scan_setup_py:c2682194",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2782,
-  "end_line": 2782,
+  "line": 2891,
+  "end_line": 2891,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3532,15 +3512,15 @@
   "id": "scan_setup_py:b1d32b4d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2787,
-  "end_line": 2787,
+  "line": 2896,
+  "end_line": 2896,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3550,15 +3530,15 @@
   "id": "scan_setup_py:55c00fbc",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2796,
-  "end_line": 2796,
+  "line": 2905,
+  "end_line": 2905,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3568,15 +3548,15 @@
   "id": "scan_setup_py:09c3b1a1",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2799,
-  "end_line": 2799,
+  "line": 2908,
+  "end_line": 2908,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3586,15 +3566,15 @@
   "id": "scan_setup_py:2712e837",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 2802,
-  "end_line": 2802,
+  "line": 2911,
+  "end_line": 2911,
   "enclosing_function": "scan_setup_py",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3604,15 +3584,15 @@
   "id": "scan_setup_py:3a22172b",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2840,
-  "end_line": 2842,
+  "line": 2949,
+  "end_line": 2951,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3622,15 +3602,15 @@
   "id": "scan_cmake:c44feb64",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2851,
-  "end_line": 2853,
+  "line": 2960,
+  "end_line": 2962,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3640,15 +3620,15 @@
   "id": "scan_cmake:d87a2fe2",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2859,
-  "end_line": 2859,
+  "line": 2968,
+  "end_line": 2968,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3658,15 +3638,15 @@
   "id": "scan_cmake:0f48390d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2866,
-  "end_line": 2866,
+  "line": 2975,
+  "end_line": 2975,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3676,15 +3656,15 @@
   "id": "scan_cmake:ba8c0d8f",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2873,
-  "end_line": 2873,
+  "line": 2982,
+  "end_line": 2982,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3694,15 +3674,15 @@
   "id": "scan_cmake:fd0ea370",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2880,
-  "end_line": 2882,
+  "line": 2989,
+  "end_line": 2991,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3712,15 +3692,15 @@
   "id": "scan_cmake:5374d961",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2890,
-  "end_line": 2890,
+  "line": 2999,
+  "end_line": 2999,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3730,15 +3710,15 @@
   "id": "scan_cmake:b813bb83",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2894,
-  "end_line": 2894,
+  "line": 3003,
+  "end_line": 3003,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3748,15 +3728,15 @@
   "id": "scan_cmake:4af87368",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2899,
-  "end_line": 2899,
+  "line": 3008,
+  "end_line": 3008,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3766,15 +3746,15 @@
   "id": "scan_cmake:66a4ab53",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2905,
-  "end_line": 2905,
+  "line": 3014,
+  "end_line": 3014,
   "enclosing_function": "scan_cmake",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3784,15 +3764,15 @@
   "id": "scan_cmake:9112047e",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2939,
-  "end_line": 2939,
+  "line": 3048,
+  "end_line": 3048,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3802,15 +3782,15 @@
   "id": "scan_html:96f5b6cc",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2945,
-  "end_line": 2945,
+  "line": 3054,
+  "end_line": 3054,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3820,15 +3800,15 @@
   "id": "scan_html:a337dcbe",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2951,
-  "end_line": 2951,
+  "line": 3060,
+  "end_line": 3060,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3838,15 +3818,15 @@
   "id": "scan_html:8cca910d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2959,
-  "end_line": 2959,
+  "line": 3068,
+  "end_line": 3068,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3856,15 +3836,15 @@
   "id": "scan_html:f961e22b",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2966,
-  "end_line": 2966,
+  "line": 3075,
+  "end_line": 3075,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3874,15 +3854,15 @@
   "id": "scan_html:63179f60",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2973,
-  "end_line": 2973,
+  "line": 3082,
+  "end_line": 3082,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3892,15 +3872,15 @@
   "id": "scan_html:18befa53",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2979,
-  "end_line": 2979,
+  "line": 3088,
+  "end_line": 3088,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3910,15 +3890,15 @@
   "id": "scan_html:b568522c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2987,
-  "end_line": 2987,
+  "line": 3096,
+  "end_line": 3096,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3928,15 +3908,15 @@
   "id": "scan_html:8b3b0c2b",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 2991,
-  "end_line": 2991,
+  "line": 3100,
+  "end_line": 3100,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3946,15 +3926,15 @@
   "id": "scan_html:91e26075",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3000,
-  "end_line": 3000,
+  "line": 3109,
+  "end_line": 3109,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3964,15 +3944,15 @@
   "id": "scan_html:099bb183",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3006,
-  "end_line": 3006,
+  "line": 3115,
+  "end_line": 3115,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -3982,15 +3962,15 @@
   "id": "scan_html:2acdf3d7",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3009,
-  "end_line": 3009,
+  "line": 3118,
+  "end_line": 3118,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4000,15 +3980,15 @@
   "id": "scan_html:ab9c61ba",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3012,
-  "end_line": 3012,
+  "line": 3121,
+  "end_line": 3121,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4018,15 +3998,15 @@
   "id": "scan_html:19a2d5c4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3015,
-  "end_line": 3015,
+  "line": 3124,
+  "end_line": 3124,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4036,15 +4016,15 @@
   "id": "scan_html:b5a5f84b",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3018,
-  "end_line": 3018,
+  "line": 3127,
+  "end_line": 3127,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4054,15 +4034,15 @@
   "id": "scan_html:10362973",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3021,
-  "end_line": 3021,
+  "line": 3130,
+  "end_line": 3130,
   "enclosing_function": "scan_html",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4072,15 +4052,15 @@
   "id": "scan_html:ae61099a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3050,
-  "end_line": 3050,
+  "line": 3159,
+  "end_line": 3159,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4090,15 +4070,15 @@
   "id": "scan_makefile:a6cd98e0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3059,
-  "end_line": 3059,
+  "line": 3168,
+  "end_line": 3168,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4108,15 +4088,15 @@
   "id": "scan_makefile:f3928a14",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3065,
-  "end_line": 3065,
+  "line": 3174,
+  "end_line": 3174,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4126,15 +4106,15 @@
   "id": "scan_makefile:c419a0c3",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3072,
-  "end_line": 3072,
+  "line": 3181,
+  "end_line": 3181,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4144,15 +4124,15 @@
   "id": "scan_makefile:0bf9fefe",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3079,
-  "end_line": 3081,
+  "line": 3188,
+  "end_line": 3190,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4162,15 +4142,15 @@
   "id": "scan_makefile:d317206a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3087,
-  "end_line": 3087,
+  "line": 3196,
+  "end_line": 3196,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4180,15 +4160,15 @@
   "id": "scan_makefile:9442c23a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3094,
-  "end_line": 3094,
+  "line": 3203,
+  "end_line": 3203,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4198,15 +4178,15 @@
   "id": "scan_makefile:78ce08cd",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3100,
-  "end_line": 3100,
+  "line": 3209,
+  "end_line": 3209,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4216,15 +4196,15 @@
   "id": "scan_makefile:73bce091",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3108,
-  "end_line": 3108,
+  "line": 3217,
+  "end_line": 3217,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4234,15 +4214,15 @@
   "id": "scan_makefile:b2f503ef",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3114,
-  "end_line": 3114,
+  "line": 3223,
+  "end_line": 3223,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4252,15 +4232,15 @@
   "id": "scan_makefile:313d9067",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3117,
-  "end_line": 3117,
+  "line": 3226,
+  "end_line": 3226,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4270,15 +4250,15 @@
   "id": "scan_makefile:1d91361d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3120,
-  "end_line": 3120,
+  "line": 3229,
+  "end_line": 3229,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4288,15 +4268,15 @@
   "id": "scan_makefile:3fdfe228",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3128,
-  "end_line": 3128,
+  "line": 3237,
+  "end_line": 3237,
   "enclosing_function": "scan_makefile",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4306,15 +4286,15 @@
   "id": "scan_makefile:8ec7c2e5",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qa",
   "patterns": 1,
-  "line": 3173,
-  "end_line": 3173,
+  "line": 3282,
+  "end_line": 3282,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "<stdin: head -c 1024 \"$f\" 2 > /dev/null>",
@@ -4326,15 +4306,15 @@
   "id": "scan_pdf:b550e93d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3198,
-  "end_line": 3198,
+  "line": 3307,
+  "end_line": 3307,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4344,15 +4324,15 @@
   "id": "scan_pdf:723e1e4c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3208,
-  "end_line": 3208,
+  "line": 3317,
+  "end_line": 3317,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4362,15 +4342,15 @@
   "id": "scan_pdf:0a6b6671",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3215,
-  "end_line": 3215,
+  "line": 3324,
+  "end_line": 3324,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4380,15 +4360,15 @@
   "id": "scan_pdf:7ae163ca",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3221,
-  "end_line": 3221,
+  "line": 3330,
+  "end_line": 3330,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4398,15 +4378,15 @@
   "id": "scan_pdf:c228758d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3227,
-  "end_line": 3227,
+  "line": 3336,
+  "end_line": 3336,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4416,15 +4396,15 @@
   "id": "scan_pdf:d6eacff4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3231,
-  "end_line": 3231,
+  "line": 3340,
+  "end_line": 3340,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$searchable\"",
@@ -4434,15 +4414,15 @@
   "id": "scan_pdf:7f7656bc",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3240,
-  "end_line": 3240,
+  "line": 3349,
+  "end_line": 3349,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$searchable\"",
@@ -4452,15 +4432,15 @@
   "id": "scan_pdf:caa2fd2a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3246,
-  "end_line": 3246,
+  "line": 3355,
+  "end_line": 3355,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4470,15 +4450,15 @@
   "id": "scan_pdf:59ddc09a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3252,
-  "end_line": 3252,
+  "line": 3361,
+  "end_line": 3361,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4488,15 +4468,15 @@
   "id": "scan_pdf:1ba71149",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3259,
-  "end_line": 3260,
+  "line": 3368,
+  "end_line": 3369,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$searchable\"",
@@ -4506,15 +4486,15 @@
   "id": "scan_pdf:b9a48bb0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3265,
-  "end_line": 3266,
+  "line": 3374,
+  "end_line": 3375,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$searchable\"",
@@ -4524,15 +4504,15 @@
   "id": "scan_pdf:80f60df6",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3273,
-  "end_line": 3273,
+  "line": 3382,
+  "end_line": 3382,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4542,15 +4522,15 @@
   "id": "scan_pdf:d010d53c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3276,
-  "end_line": 3276,
+  "line": 3385,
+  "end_line": 3385,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4560,15 +4540,15 @@
   "id": "scan_pdf:a8c0600b",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "_pdf_has",
   "mode": "line_a",
   "flags": "-qaE",
   "patterns": 1,
-  "line": 3279,
-  "end_line": 3279,
+  "line": 3388,
+  "end_line": 3388,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$names\"",
@@ -4578,15 +4558,15 @@
   "id": "scan_pdf:b1d52866",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ao",
   "patterns": 1,
-  "line": 3287,
-  "end_line": 3287,
+  "line": 3396,
+  "end_line": 3396,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$searchable\"",
@@ -4597,15 +4577,15 @@
   "id": "scan_pdf:ff278c8d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-ao",
   "patterns": 1,
-  "line": 3297,
-  "end_line": 3297,
+  "line": 3406,
+  "end_line": 3406,
   "enclosing_function": "scan_pdf",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4616,15 +4596,15 @@
   "id": "scan_pdf:01f09c79",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep",
   "mode": "direct",
   "flags": "-qE",
   "patterns": 1,
-  "line": 3363,
-  "end_line": 3364,
+  "line": 3500,
+  "end_line": 3501,
   "enclosing_function": "scan_unknown",
   "dynamic": false,
   "file_argument_text": "<stdin: echo \"$mime\">",
@@ -4636,15 +4616,15 @@
   "id": "scan_unknown:d9808d1c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3427,
-  "end_line": 3427,
+  "line": 3564,
+  "end_line": 3564,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -4659,15 +4639,15 @@
   "resolved_by": "the single static assignment of IEXA",
   "id": "_ps_rules:09d46b69",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3427,
-  "end_line": 3427,
+  "line": 3564,
+  "end_line": 3564,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -4682,15 +4662,15 @@
   "resolved_by": "the single static assignment of FETCH",
   "id": "_ps_rules:4888373e",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3428,
-  "end_line": 3428,
+  "line": 3565,
+  "end_line": 3565,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4700,15 +4680,15 @@
   "id": "_ps_rules:e28657f0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3436,
-  "end_line": 3436,
+  "line": 3573,
+  "end_line": 3573,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4718,15 +4698,15 @@
   "id": "_ps_rules:efdc5854",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3437,
-  "end_line": 3437,
+  "line": 3574,
+  "end_line": 3574,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4736,15 +4716,15 @@
   "id": "_ps_rules:cc4fa7e7",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3444,
-  "end_line": 3444,
+  "line": 3581,
+  "end_line": 3581,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4754,15 +4734,15 @@
   "id": "_ps_rules:5b4a4afe",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3445,
-  "end_line": 3445,
+  "line": 3582,
+  "end_line": 3582,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -4777,15 +4757,15 @@
   "resolved_by": "the single static assignment of IEXA",
   "id": "_ps_rules:09d46b69#2",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3446,
-  "end_line": 3446,
+  "line": 3583,
+  "end_line": 3583,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4795,15 +4775,15 @@
   "id": "_ps_rules:33c515a9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3452,
-  "end_line": 3452,
+  "line": 3589,
+  "end_line": 3589,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4813,15 +4793,15 @@
   "id": "_ps_rules:484f14c6",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3458,
-  "end_line": 3458,
+  "line": 3595,
+  "end_line": 3595,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4831,15 +4811,15 @@
   "id": "_ps_rules:9cbe40ca",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3462,
-  "end_line": 3462,
+  "line": 3599,
+  "end_line": 3599,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4849,15 +4829,15 @@
   "id": "_ps_rules:cd51473d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3469,
-  "end_line": 3469,
+  "line": 3606,
+  "end_line": 3606,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4867,15 +4847,15 @@
   "id": "_ps_rules:9d8227fd",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3470,
-  "end_line": 3470,
+  "line": 3607,
+  "end_line": 3607,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4885,15 +4865,15 @@
   "id": "_ps_rules:c2a414b4",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3471,
-  "end_line": 3471,
+  "line": 3608,
+  "end_line": 3608,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4903,15 +4883,15 @@
   "id": "_ps_rules:6636b9f1",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3478,
-  "end_line": 3478,
+  "line": 3615,
+  "end_line": 3615,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4921,15 +4901,15 @@
   "id": "_ps_rules:ab7de441",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3478,
-  "end_line": 3478,
+  "line": 3615,
+  "end_line": 3615,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4939,15 +4919,15 @@
   "id": "_ps_rules:d9c0b358",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3479,
-  "end_line": 3479,
+  "line": 3616,
+  "end_line": 3616,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -4962,15 +4942,15 @@
   "resolved_by": "the single static assignment of IEXA",
   "id": "_ps_rules:09d46b69#3",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3479,
-  "end_line": 3479,
+  "line": 3616,
+  "end_line": 3616,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4980,15 +4960,15 @@
   "id": "_ps_rules:22026a73",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3480,
-  "end_line": 3480,
+  "line": 3617,
+  "end_line": 3617,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -4998,15 +4978,15 @@
   "id": "_ps_rules:f33ac09c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3486,
-  "end_line": 3486,
+  "line": 3623,
+  "end_line": 3623,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5016,15 +4996,15 @@
   "id": "_ps_rules:f717b9a1",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3487,
-  "end_line": 3487,
+  "line": 3624,
+  "end_line": 3624,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5034,15 +5014,15 @@
   "id": "_ps_rules:b1907f95",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3493,
-  "end_line": 3493,
+  "line": 3630,
+  "end_line": 3630,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5052,15 +5032,15 @@
   "id": "_ps_rules:54bd02ab",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3501,
-  "end_line": 3501,
+  "line": 3638,
+  "end_line": 3638,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5070,15 +5050,15 @@
   "id": "_ps_rules:696fe009",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3502,
-  "end_line": 3502,
+  "line": 3639,
+  "end_line": 3639,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5088,15 +5068,15 @@
   "id": "_ps_rules:9152b1e9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3509,
-  "end_line": 3509,
+  "line": 3646,
+  "end_line": 3646,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5106,15 +5086,15 @@
   "id": "_ps_rules:564df49b",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3510,
-  "end_line": 3510,
+  "line": 3647,
+  "end_line": 3647,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -5129,15 +5109,15 @@
   "resolved_by": "the single static assignment of IEXA",
   "id": "_ps_rules:09d46b69#4",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3510,
-  "end_line": 3510,
+  "line": 3647,
+  "end_line": 3647,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -5152,15 +5132,15 @@
   "resolved_by": "the single static assignment of RUN",
   "id": "_ps_rules:6bbfc7df",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3522,
-  "end_line": 3522,
+  "line": 3659,
+  "end_line": 3659,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -5175,15 +5155,15 @@
   "resolved_by": "the single static assignment of IEXA",
   "id": "_ps_rules:09d46b69#5",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3526,
-  "end_line": 3526,
+  "line": 3663,
+  "end_line": 3663,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5193,15 +5173,15 @@
   "id": "_ps_rules:f0328e4f",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3531,
-  "end_line": 3531,
+  "line": 3668,
+  "end_line": 3668,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -5216,15 +5196,15 @@
   "resolved_by": "the single static assignment of FETCH",
   "id": "_ps_rules:4888373e#2",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3531,
-  "end_line": 3531,
+  "line": 3668,
+  "end_line": 3668,
   "enclosing_function": "_ps_rules",
   "dynamic": true,
   "file_argument_text": "\"$f\"",
@@ -5239,15 +5219,15 @@
   "resolved_by": "the single static assignment of RUN",
   "id": "_ps_rules:6bbfc7df#2",
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3534,
-  "end_line": 3534,
+  "line": 3671,
+  "end_line": 3671,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5257,15 +5237,15 @@
   "id": "_ps_rules:9c477276",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3537,
-  "end_line": 3537,
+  "line": 3674,
+  "end_line": 3674,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5275,15 +5255,15 @@
   "id": "_ps_rules:d6e1294f",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3540,
-  "end_line": 3540,
+  "line": 3677,
+  "end_line": 3677,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5293,15 +5273,15 @@
   "id": "_ps_rules:ffb1fb29",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3543,
-  "end_line": 3543,
+  "line": 3680,
+  "end_line": 3680,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5311,15 +5291,15 @@
   "id": "_ps_rules:c68bf786",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3546,
-  "end_line": 3546,
+  "line": 3683,
+  "end_line": 3683,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5329,15 +5309,15 @@
   "id": "_ps_rules:c478b478",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3549,
-  "end_line": 3549,
+  "line": 3686,
+  "end_line": 3686,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5347,15 +5327,15 @@
   "id": "_ps_rules:2c272b15",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3554,
-  "end_line": 3554,
+  "line": 3691,
+  "end_line": 3691,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5365,15 +5345,15 @@
   "id": "_ps_rules:10df4e5d",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3559,
-  "end_line": 3559,
+  "line": 3696,
+  "end_line": 3696,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5383,15 +5363,15 @@
   "id": "_ps_rules:c3dcea01",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check_i",
   "mode": "line_i",
   "flags": "-qiE -e",
   "patterns": 1,
-  "line": 3562,
-  "end_line": 3562,
+  "line": 3699,
+  "end_line": 3699,
   "enclosing_function": "_ps_rules",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5401,15 +5381,15 @@
   "id": "_ps_rules:00fa62c6",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_flat",
   "mode": "flat",
   "flags": "-ziE -e PAT FILE",
   "patterns": 1,
-  "line": 3581,
-  "end_line": 3581,
+  "line": 3719,
+  "end_line": 3719,
   "enclosing_function": "scan_powershell_xml",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5419,15 +5399,15 @@
   "id": "scan_powershell_xml:a2c89c53",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3593,
-  "end_line": 3593,
+  "line": 3732,
+  "end_line": 3732,
   "enclosing_function": "scan_rust",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5437,15 +5417,15 @@
   "id": "scan_rust:e9f4705a",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3597,
-  "end_line": 3597,
+  "line": 3736,
+  "end_line": 3736,
   "enclosing_function": "scan_rust",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5455,15 +5435,15 @@
   "id": "scan_rust:386251fd",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3601,
-  "end_line": 3601,
+  "line": 3740,
+  "end_line": 3740,
   "enclosing_function": "scan_rust",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5473,15 +5453,15 @@
   "id": "scan_rust:b3a9ef93",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3615,
-  "end_line": 3615,
+  "line": 3754,
+  "end_line": 3754,
   "enclosing_function": "scan_kotlin",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5491,15 +5471,15 @@
   "id": "scan_kotlin:ec5a7e9b",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3618,
-  "end_line": 3618,
+  "line": 3757,
+  "end_line": 3757,
   "enclosing_function": "scan_kotlin",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5509,15 +5489,15 @@
   "id": "scan_kotlin:9b4ca6ec",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3621,
-  "end_line": 3621,
+  "line": 3760,
+  "end_line": 3760,
   "enclosing_function": "scan_kotlin",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5527,15 +5507,15 @@
   "id": "scan_kotlin:d6a5f26e",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3634,
-  "end_line": 3634,
+  "line": 3773,
+  "end_line": 3773,
   "enclosing_function": "scan_csharp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5545,15 +5525,15 @@
   "id": "scan_csharp:0b2204b0",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3637,
-  "end_line": 3637,
+  "line": 3776,
+  "end_line": 3776,
   "enclosing_function": "scan_csharp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5563,15 +5543,15 @@
   "id": "scan_csharp:9b4ca6ec",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3640,
-  "end_line": 3640,
+  "line": 3779,
+  "end_line": 3779,
   "enclosing_function": "scan_csharp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5581,15 +5561,15 @@
   "id": "scan_csharp:d3950722",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3644,
-  "end_line": 3644,
+  "line": 3783,
+  "end_line": 3783,
   "enclosing_function": "scan_csharp",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5599,15 +5579,15 @@
   "id": "scan_csharp:d6592bb1",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3751,
-  "end_line": 3752,
+  "line": 3890,
+  "end_line": 3891,
   "enclosing_function": "classify_file",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5617,15 +5597,15 @@
   "id": "classify_file:df96137c",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  },
  {
   "helper": "grep_check",
   "mode": "line",
   "flags": "-qE -e",
   "patterns": 1,
-  "line": 3761,
-  "end_line": 3762,
+  "line": 3900,
+  "end_line": 3901,
   "enclosing_function": "classify_file",
   "dynamic": false,
   "file_argument_text": "\"$f\"",
@@ -5635,6 +5615,6 @@
   "id": "classify_file:54a7fdd9",
   "resolved": false,
   "source": "scan_pipeline.sh",
-  "source_sha256": "1bc321c2eb261b9c6b9eef0ab4060d5c6284922ee9ec8534e9b4de556dd308ce"
+  "source_sha256": "c059dffe0e3513083e15519b933df26a4add2dd6d779cff51fb0597a1854c93f"
  }
 ]
