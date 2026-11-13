@@ -143,6 +143,8 @@ if [[ -n "${SINCE_COMMIT:-}" ]]; then
     # two and git's quoting of a non-ASCII or special name ("\303\251.py") matched no file, so such a changed
     # file was never scanned. scan_pipeline.sh joins the names to the scan directory.
     DIFF_TMP="${WORK_DIR}/.diff_files.$$"
+    # A fetch ended by a signal while git ran must not leave the temporary list behind.
+    trap 'rm -f "$DIFF_TMP"' EXIT
     if git -C "$DEST" diff -z --name-only "${SINCE_COMMIT}" HEAD > "$DIFF_TMP" 2>/dev/null && [[ -s "$DIFF_TMP" ]]; then
         mv -f "$DIFF_TMP" "${WORK_DIR}/.diff_files"
         info "Diff mode: $(grep -zc '' "${WORK_DIR}/.diff_files" || true) changed file(s)"
@@ -150,6 +152,7 @@ if [[ -n "${SINCE_COMMIT:-}" ]]; then
         rm -f "$DIFF_TMP"
         warn "Diff mode: commit ${SINCE_COMMIT} not reachable or no files changed — falling back to full scan"
     fi
+    trap - EXIT
 fi
 
 # ── Remove git metadata ───────────────────────────────────────────────────────
@@ -159,9 +162,18 @@ ok ".git metadata removed"
 # ── SHA-256 manifest ──────────────────────────────────────────────────────────
 MANIFEST="${DEST}/.manifest_sha256.txt"
 info "Computing SHA-256 manifest…"
-find "$DEST" -type f | sort | while read -r f; do
-    sha256sum "$f"
-done > "$MANIFEST"
+# The repository chooses what is at $MANIFEST. A repository that ships .manifest_sha256.txt as a symlink (git, rsync
+# and cp all keep it) made `… > "$MANIFEST"` write through the link, into any file this user can write, with lines
+# whose path part is a file name the repository chose. So the list is written to a file of ours outside the copy and
+# moved over the name; a symlink at the name is removed first, never followed. The names pass as NUL-terminated
+# words (a name with a newline, a leading blank or a backslash cannot split or corrupt a line), and the manifest no
+# longer lists itself (it used to, with the hash of the empty file it was at that moment).
+rm -f -- "$MANIFEST"
+MANIFEST_TMP="${WORK_DIR}/.manifest.$$"
+trap 'rm -f "$MANIFEST_TMP"' EXIT
+find "$DEST" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum > "$MANIFEST_TMP"
+mv -f -- "$MANIFEST_TMP" "$MANIFEST"
+trap - EXIT
 ok "Manifest written: $MANIFEST"
 
 # ── Quick pattern triage ──────────────────────────────────────────────────────

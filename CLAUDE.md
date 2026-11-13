@@ -63,6 +63,8 @@ Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantin
   [{"rule": "CWE-798", "path": "tests/fixtures/dummy_key.py", "reason": "test fixture only"}]
   ```
 
+Exclusions leave a trace. A `.transitignore` that yields at least one pattern (CRLF lines and a last line without a newline are read) adds one WARN `transitignore:exclusions_applied(<n> pattern(s))`; if its patterns leave **nothing** to scan in a repository that has files, the run FAILs `engine:nothing_scanned` (not downgraded by `--min-severity`, not allowlistable; layers 4 and 5 become `skipped:nothing scanned (every file excluded)`). No file is skipped by name: the fetcher's root `.manifest_sha256.txt` is scanned like any file and stays out of the ZIP, a nested one is scanned and ships.
+
 ## Regenerating documentation artefacts
 
 ```bash

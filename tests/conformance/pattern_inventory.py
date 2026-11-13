@@ -50,8 +50,8 @@ DEFAULT_OUT = Path(__file__).resolve().parent / "patterns.json"
 HELPERS: dict[str, tuple[str, bool, str, str]] = {
     "grep_check": ("line", False, "PF", "-qE -e"),
     "grep_check_i": ("line_i", True, "PF", "-qiE -e"),
-    "grep_check_excl": ("excl", True, "PEF", "-hiE -e PAT FILE | grep -viE -e EXCL"),
-    "grep_flat": ("flat", True, "PF", "tr '\\r\\n\\t' '   ' < FILE | grep -iE -e"),
+    "grep_check_excl": ("excl", True, "PEF", "-ahiE -e PAT FILE | grep -aviE -e EXCL"),
+    "grep_flat": ("flat", True, "PF", "-ziE -e PAT FILE"),
     "_pdf_has": ("line_a", False, "FP", "-qaE"),
 }
 

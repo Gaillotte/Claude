@@ -103,6 +103,8 @@ FETCH_ARGS=("$REPO_INPUT")
 
 rm -f "${WORK_DIR}/.fetch_result" "${WORK_DIR}/.diff_files" \
       "${WORK_DIR}/.scan_verdict" "${WORK_DIR}/.scan_report_json"
+# The temporary lists of a fetch that was killed (.diff_files.<pid>, .manifest.<pid>) are of no use to anyone.
+rm -f "${WORK_DIR}"/.diff_files.* "${WORK_DIR}"/.manifest.*
 FETCH_OUTPUT=$(WORK_DIR="$WORK_DIR" GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
     SINCE_COMMIT="$SINCE_COMMIT" OFFLINE="$OFFLINE" \
     bash "${SCRIPT_DIR}/fetch_repo.sh" "${FETCH_ARGS[@]}" 2>&1) || {
@@ -171,7 +173,14 @@ if [[ "$VERDICT" == "PASS" ]]; then
         # Archive paths must be repo-relative: zipping "$FETCH_DIR" by absolute
         # path would store the internal WORK_DIR layout inside the archive and
         # leak server-side paths. Zip from inside the directory instead.
-        ZIP_FLAGS=(-r)
+        # Only the fetcher's own manifest, at the root, stays out of the archive: zip -x matches the stored
+        # name, so a file of the same name in a sub-directory is archived. It is no longer skipped by the scan
+        # (D-038), so whatever ships has been scanned. Pinned by Layer J of tests/run_tests.sh.
+        # -y stores a symlink as a link. Without it zip reads the target in: a link to a directory put that whole
+        # tree, and a link to a file outside the repository (or outside the pipeline's work area) that file, into
+        # the approved archive, although the scan lists regular files only and never follows a link. The scan
+        # reports every link (FAIL when it leaves the scanned directory).
+        ZIP_FLAGS=(-r -y)
         [[ "$VERBOSITY" == "quiet" ]] && ZIP_FLAGS+=(-q)
         if ! ( cd "$FETCH_DIR" && zip "${ZIP_FLAGS[@]}" "$ARCHIVE" . -x ".manifest_sha256.txt" ); then
             die "ZIP archive creation failed (disk full? insufficient permissions?)"

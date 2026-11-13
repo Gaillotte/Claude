@@ -6,6 +6,13 @@ set -euo pipefail
 # Require bash 4+ for associative arrays
 [[ ${BASH_VERSINFO[0]} -ge 4 ]] || { echo "[ERROR] bash 4+ required (on macOS: brew install bash)" >&2; exit 1; }
 
+# Every rule below is ASCII and is meant to see bytes. In a UTF-8 locale GNU grep's `.` and `[^x]` do not match an
+# invalid byte, so one 0xFF in a line stopped every line-spanning rule from matching it (`curl … \xff | bash` was
+# not a curl-pipe-shell), and a file with an encoding error is "binary" to the plain greps. The Docker image runs in
+# the C locale; a native install usually does not. The locale of the scan is therefore fixed here. The console
+# sanitiser compensates for the one thing a UTF-8 locale gave it (see _san).
+export LC_ALL=C
+
 # The Python helpers (office, jar, PDF and manifest readers, the report writer, the tool result readers)
 # live in transit/ next to this script. Failing here, loudly, beats a scan whose helpers silently
 # report nothing because they could not be found.
@@ -34,7 +41,9 @@ log()    { [[ "$VERBOSITY" != "quiet" ]] && { _clr; echo "[$(date '+%H:%M:%S')] 
 # control byte: CR overwrites the line, CSI/OSC retitle or drive the terminal) is
 # printed raw by %s, so control bytes are replaced first. The progress line _clr
 # draws its own escapes and is not touched.
-_san()   { _SAN="$*"; _SAN="${_SAN//[[:cntrl:]]/?}"; }
+# In the C locale [[:cntrl:]] sees bytes: the C1 controls (U+0080 to U+009F, which a UTF-8 terminal obeys: U+009B is
+# a CSI) are the two bytes C2 80 to C2 9F, so they are replaced as a pair.
+_san()   { _SAN="$*"; _SAN="${_SAN//[[:cntrl:]]/?}"; _SAN="${_SAN//$'\xc2'[$'\x80'-$'\x9f']/?}"; }
 info()   { [[ "$VERBOSITY" != "quiet" ]] && { _clr; _san "$*"; printf '\033[34m[INFO]\033[0m  %s\n' "$_SAN"; } || true; }
 warn()   { _clr; _san "$*"; printf '\033[33m[WARN]\033[0m  %s\n' "$_SAN" >&2; }
 ok()     { [[ "$VERBOSITY" != "quiet" ]] && { _clr; _san "$*"; printf '\033[32m[OK]\033[0m    %s\n' "$_SAN"; } || true; }
@@ -269,7 +278,11 @@ fi
 # Structured findings, one JSON object per line; folded into the JSON report at the
 # end. A temporary file, removed on exit.
 FINDINGS_JL=$(mktemp "${WORK_DIR}/findings_XXXXXX.jsonl")
-trap 'rm -f "$FINDINGS_JL"' EXIT
+# The other temporary files of a run are named in these two variables while they exist (the file listing of
+# scan_by_type, the comment-free view of scan_xml), so that a run ended by a signal leaves none behind either.
+_TMP_LIST=""
+XML_TMP=""
+trap 'rm -f "$FINDINGS_JL" "${_TMP_LIST:-}" "${XML_TMP:-}"' EXIT
 
 # Layers 3 (dependency CVEs) and 6 (ScanCode) are off in this deployment. They are
 # recorded as skipped in the coverage block rather than left out of it: a layer that
@@ -510,15 +523,27 @@ grep_check_excl() { grep -ahiE -e "$1" "$3" 2>/dev/null | grep -aviE -e "$2" >/d
 # of the file: 0.2 s at 6 MB, 2.2 s at 60 MB, 12 s at 300 MB (the same through a tr pipe took 62 s at 300 MB,
 # because grep re-copies a partial line for each pipe read). The memory is what grep needs to hold one line
 # that is the whole file, about twice its size. A grep that cannot run to the end (exit 2 or more: out of
-# memory, an I/O error, the file gone) is neither a match nor a clean file; the callers turn a match into a
-# FAIL, so it counts as a match, with a warning on the console.
+# memory, an I/O error, the file gone) is neither a match nor a clean file: it is reported as the FAIL
+# engine:search_incomplete on the file, and is "no match" to the caller (see below). The memory is the one
+# unbounded resource of this helper: a file much larger than the memory of the host cannot be searched.
 grep_flat() {
     local rc=0
     grep -ziE -e "$1" "$2" >/dev/null || rc=$?
     if (( rc <= 1 )); then return "$rc"; fi
-    warn "grep_flat: the search of $2 could not be completed (grep exit ${rc}); treating it as a match"
-    return 0
+    # Neither a match nor a clean file: the search did not finish. It used to count as a match (fail-closed), and
+    # the report then named a specific attack (CWE-611, CWE-776) that was not there, with the real cause only on
+    # the console. It is now its own finding on the file (FLAT_FILE names the file when $2 is a temporary view of
+    # it), once per file, and the caller is told through FLAT_INCOMPLETE so that it does not record a PASS as well.
+    local subject="${FLAT_FILE:-$2}"
+    warn "grep_flat: the search of ${subject} could not be completed (grep exit ${rc})"
+    FLAT_INCOMPLETE=true
+    if [[ "${FINDINGS["$subject"]:-}" != *"engine:search_incomplete"* ]]; then
+        record_fail_hard "$subject" "engine:search_incomplete"
+    fi
+    return 1
 }
+FLAT_INCOMPLETE=false
+FLAT_FILE=""
 
 # ── Known credential formats ─────────────────────────────────────────────────
 # Providers issue tokens with a fixed, distinctive shape — a literal prefix plus a
@@ -731,13 +756,31 @@ scan_global() {
         local yara_files=( "${WORK_DIR}/yara-rules/"*.yar )
         if [[ -f "${yara_files[0]:-}" ]]; then
             info "yara…"
+            # The output and the exit status of each run are read apart. The status used to be thrown away
+            # (`yara … 2>/dev/null | grep -q .`): a rule file with a syntax error, or a yara that crashed, printed
+            # to stderr and exited non-zero, and the layer still read "ran, no IOC". And under pipefail `grep -q`
+            # leaves at the first line, so a yara still writing died of SIGPIPE, the pipeline returned 141, and the
+            # `if` read the matches as none. A rule file that did not run to the end is a tool failure (D-015); the
+            # layer is "ran" only when every rule file ran with status 0.
+            local rule y_out y_rc y_bad="" y_hits=false
             for rule in "${yara_files[@]}"; do
-                if yara -r "$rule" "$SCAN_DIR" 2>/dev/null | grep -q .; then
+                y_rc=0
+                y_out=$(yara -r "$rule" "$SCAN_DIR" 2>/dev/null) || y_rc=$?
+                if [[ -n "$y_out" ]]; then
                     record_fail "$SCAN_DIR" "yara:ioc_match:$(basename "$rule")"
+                    y_hits=true
+                fi
+                if (( y_rc != 0 )); then
+                    record_warn "__global__" "yara:scan_error_exit_${y_rc}:$(basename "$rule")"
+                    [[ -n "$y_bad" ]] || y_bad="$y_rc"
                 fi
             done
-            ok "YARA: no IOC"
-            record_layer L1_ioc_yara "ran"
+            if [[ -n "$y_bad" ]]; then
+                record_layer L1_ioc_yara "skipped:yara failed (exit ${y_bad})"
+            else
+                [[ "$y_hits" == true ]] || ok "YARA: no IOC"
+                record_layer L1_ioc_yara "ran"
+            fi
         else
             # yara is installed and the directory exists, but there is no rule to run: nothing was examined.
             record_warn "__global__" "yara rules directory has no .yar files — IOC scan skipped"
@@ -898,11 +941,29 @@ scan_dependencies() {
             local trivy_out trivy_rc=0 vuln_count="" trivy_state="ran"
             trivy_out=$(trivy fs --quiet --exit-code 0 --format json \
                         ${trivy_extra[@]+"${trivy_extra[@]}"} "$SCAN_DIR" 2>/dev/null) || trivy_rc=$?
+            # The shape is checked, like semgrep's and detect-secrets': any JSON object used to read as "0
+            # vulnerabilities" (`{}`, an error object). trivy always writes SchemaVersion; Results is left out when
+            # there is nothing to report, so either key makes the document trivy's.
             vuln_count=$(printf '%s\n' "$trivy_out" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-total = sum(len(r.get('Vulnerabilities') or [])
-            for r in data.get('Results') or [])
+if not isinstance(data, dict) or not ('SchemaVersion' in data or 'Results' in data):
+    sys.exit(1)
+results = data.get('Results')
+if results is None:
+    results = []
+if not isinstance(results, list):
+    sys.exit(1)
+total = 0
+for r in results:
+    if not isinstance(r, dict):
+        sys.exit(1)
+    v = r.get('Vulnerabilities')
+    if v is None:
+        continue
+    if not isinstance(v, list):
+        sys.exit(1)
+    total += len(v)
 print(total)
 " 2>/dev/null) || vuln_count=""
             if (( trivy_rc != 0 )); then
@@ -1076,9 +1137,12 @@ scan_universal_patterns() {
     # That also covers a key held on one line as a JSON string, where the
     # newlines are the two characters \n, and a PGP block, whose armor headers
     # push the body a line or two down.
-    if grep -E -A5 -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----' "$f" 2>/dev/null \
+    #
+    # Both greps read the file as text (-a), like grep_check_excl: a NUL byte appended to a file made the first
+    # grep treat it as binary and print nothing to the pipe, so a complete key passed.
+    if grep -aE -A5 -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----' "$f" 2>/dev/null \
          | tr '\r\n\t' '   ' \
-         | grep -E -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}' \
+         | grep -aE -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}' \
          >/dev/null; then
         record_fail "$f" "CWE-321:hardcoded_private_key"
         triggered=true
@@ -1609,17 +1673,58 @@ scan_xml() {
     # looking <password> values inside a comment block, and an `<!ENTITY` in a
     # comment is not a declaration at all. Without python3 the raw file is
     # scanned instead, which errs towards reporting.
+    #
+    # The view is also decoded. A document in UTF-16 or UTF-32 has a NUL between its characters, so no rule below
+    # (all of them ASCII) matched it, and expat, libxml2 and Java parse it without complaint: a byte-order mark, or
+    # the NUL bytes of a wide encoding with none, are read and the view is written as UTF-8.
+    #
+    # The comments are removed with str.find, not with a regular expression. `<!--.*?-->` over the whole file is
+    # quadratic when the openers never close: 25,000 `<!--` (100 KB) took 11 s and a few MB would not have ended.
+    # An opener with no closer ends the search (no later `-->` exists either) and the rest of the file is kept.
     if has_cmd python3; then
         tmp=$(mktemp "${TMPDIR:-/tmp}/aitransit_xml_XXXXXX" 2>/dev/null) || tmp=""
+        XML_TMP="$tmp"
         if [[ -n "$tmp" ]]; then
             python3 -c '
-import re, sys
+import sys
 d = open(sys.argv[1], "rb").read()
-sys.stdout.buffer.write(re.sub(rb"<!--.*?-->", b" ", d, flags=re.S))
+enc = None
+if d[:4] in (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"):
+    enc = "utf-32"
+elif d[:2] in (b"\xff\xfe", b"\xfe\xff"):
+    enc = "utf-16"
+elif d[:4] == b"<\x00\x00\x00":
+    enc = "utf-32-le"
+elif d[:4] == b"\x00\x00\x00<":
+    enc = "utf-32-be"
+elif d[:3] != b"\xef\xbb\xbf":
+    head = d[:1024]
+    half = max(1, len(head) // 2)
+    even, odd = head[0::2].count(0), head[1::2].count(0)
+    if odd * 2 > half and even * 8 < half:
+        enc = "utf-16-le"
+    elif even * 2 > half and odd * 8 < half:
+        enc = "utf-16-be"
+if enc:
+    d = d.decode(enc, "replace").encode("utf-8")
+out, i = [], 0
+while True:
+    a = d.find(b"<!--", i)
+    if a < 0:
+        break
+    b = d.find(b"-->", a + 4)
+    if b < 0:
+        break
+    out.append(d[i:a])
+    out.append(b" ")
+    i = b + 3
+out.append(d[i:])
+sys.stdout.buffer.write(b"".join(out))
 ' "$f" > "$tmp" 2>/dev/null || true
             [[ -s "$tmp" ]] && x="$tmp"
         fi
     fi
+    FLAT_FILE="$f"; FLAT_INCOMPLETE=false
 
     # ── XXE ──────────────────────────────────────────────────────────────
     # The primitive is an ENTITY that points at something, not a DOCTYPE. A bare
@@ -1644,6 +1749,9 @@ sys.stdout.buffer.write(re.sub(rb"<!--.*?-->", b" ", d, flags=re.S))
     if grep_flat '<!ENTITY[^>]*[[:space:]](SYSTEM|PUBLIC)[[:space:]]' "$x"; then
         record_warn "$f" "CWE-611:xml_declares_an_external_entity"
     fi
+
+    [[ "$FLAT_INCOMPLETE" == true ]] && failed=true
+    FLAT_FILE=""
 
     # ── Credentials ──────────────────────────────────────────────────────
     # The ELEMENT NAME is the credential word. The earlier rule let [^>]*> run
@@ -1724,6 +1832,7 @@ sys.stdout.buffer.write(re.sub(rb"<!--.*?-->", b" ", d, flags=re.S))
     esac
 
     [[ -n "$tmp" ]] && rm -f "$tmp"
+    XML_TMP=""
     $failed || record_pass "$f"
 }
 
@@ -3313,8 +3422,8 @@ scan_pdf() {
 # A CR at the end of the line (a script saved with CRLF) is not part of the last word. A line that is not a
 # shebang, or names no interpreter, is returned as it is.
 _shebang_interpreter_line() {
-    local line="${1:0:1024}" rest w cmd="" skip=false
-    local -a words=()
+    local line="${1:0:1024}" rest w cmd="" skip=false i=0 n opts
+    local -a words=() more=()
     SHEBANG_LINE="$1"
     [[ "$line" == '#!'* ]] || return 0
     line="${line%$'\r'}"
@@ -3323,14 +3432,42 @@ _shebang_interpreter_line() {
     (( ${#words[@]} > 0 )) || return 0
     SHEBANG_LINE="#!${words[0]}"
     if [[ "${words[0]##*/}" == env ]]; then
-        for w in "${words[@]:1}"; do
+        # words[1..] are walked with an index because `-S` hands env a string that env itself splits again: the
+        # interpreter is often written inside the option (`-Spython3 -u`, `--split-string=python3`, `-iSbash`),
+        # and the words of that string replace the option in the list. Each replacement removes at least the two
+        # characters of `-S`, so a line of 1024 characters cannot loop for long.
+        i=1
+        while (( i < ${#words[@]} )); do
+            w="${words[i]}"
+            (( i++ )) || true
             if [[ "$skip" == true ]]; then skip=false; continue; fi
+            more=()
             case "$w" in
-                -u|-C|--unset|--chdir) skip=true ;;   # an option that takes a value
-                -*|*=*)                ;;            # -S, -i, --, NAME=value
+                --split-string=*) IFS=$' \t' read -r -a more <<< "${w#--split-string=}" || true ;;
+                -u|-C|--unset|--chdir) skip=true; continue ;;   # an option that takes a value
+                --unset=*|--chdir=*)   continue ;;
+                --*)                   continue ;;
+                -?*)
+                    # A cluster of short options (-i, -v, -0, -S…). The first of S, u, C ends it: it takes the rest
+                    # of the word as its value, or the next word when nothing follows.
+                    opts="${w#-}"; n=0
+                    while (( n < ${#opts} )); do
+                        case "${opts:n:1}" in
+                            S) IFS=$' \t' read -r -a more <<< "${opts:n+1}" || true; break ;;
+                            u|C) if (( n + 1 == ${#opts} )); then skip=true; fi; break ;;
+                        esac
+                        (( n++ )) || true
+                    done
+                    if (( ${#more[@]} == 0 )); then continue; fi ;;
+                -|*=*)                 continue ;;
                 *)                     cmd="$w"; break ;;
             esac
+            if (( ${#more[@]} > 0 )); then
+                # the split string stands where the option stood
+                words=( "${words[@]:0:i}" "${more[@]}" "${words[@]:i}" )
+            fi
         done
+        cmd="${cmd#[\"\']}"; cmd="${cmd%[\"\']}"
         if [[ -n "$cmd" ]]; then SHEBANG_LINE="#!${words[0]} ${cmd}"; fi
     fi
     return 0
@@ -3578,10 +3715,12 @@ scan_powershell_xml() {
     local f="$1"
     PS_FAILED=false
     _ps_rules "$f"
+    FLAT_FILE=""; FLAT_INCOMPLETE=false
     if grep_flat '<!ENTITY[^>]*[[:space:]]SYSTEM[[:space:]]+["'"'"'](file:|expect:|php:|gopher:|jar:|netdoc:|ftp:|https?:|/|\\\\)' "$f"; then
         record_fail "$f" "CWE-611:xxe_external_entity_references_a_resource"
         PS_FAILED=true
     fi
+    [[ "$FLAT_INCOMPLETE" == true ]] && PS_FAILED=true
     $PS_FAILED || record_pass "$f"
 }
 
@@ -3770,32 +3909,102 @@ classify_file() {
 }
 
 # ── LAYER 5: Per-type scan ────────────────────────────────────────────────────
+# The three files the pipeline itself puts at the root of a scanned directory: the repository's own
+# .transitignore and .transit-allow.json (its author writes both) and the fetcher's .manifest_sha256.txt. They are
+# scanned like any file, but they do not count as "something was examined": a .transitignore that excludes everything
+# except itself (`[!.]*`), or the manifest the fetcher always writes, must not turn "nothing was scanned" into a pass.
+_is_control_file() {
+    local root="${SCAN_DIR%/}"
+    case "$1" in
+        "${root}/.transitignore"|"${root}/.transit-allow.json"|"${root}/.manifest_sha256.txt") return 0 ;;
+    esac
+    return 1
+}
+
+# Does a symlink point out of the scanned directory? The target text is read, not followed: an absolute target does,
+# and so does a relative one that climbs above the root of the scan. $1 is the path of the link, $2 its target text.
+# Both come from the repository: they are only compared, by parameter expansion (a name with a newline is no problem).
+_symlink_escapes() {
+    local link="$1" target="$2" rel dir slashes depth=0 part rest last nonslash='[^/]'
+    case "$target" in /*) return 0 ;; esac
+    rel="${link#"${SCAN_DIR%/}/"}"
+    if [[ "$rel" == */* ]]; then
+        dir="${rel%/*}"; slashes="${dir//$nonslash/}"; depth=$(( ${#slashes} + 1 ))
+    fi
+    rest="$target"; last=false
+    while [[ "$last" == false ]]; do
+        if [[ "$rest" == */* ]]; then part="${rest%%/*}"; rest="${rest#*/}"; else part="$rest"; rest=""; last=true; fi
+        case "$part" in
+            ""|.) ;;
+            ..)   (( depth-- )) || true
+                  if (( depth < 0 )); then return 0; fi ;;
+            *)    (( depth++ )) || true ;;
+        esac
+    done
+    return 1
+}
+
 scan_by_type() {
     info "=== Layer 5: Per-type SAST ==="
 
     # Collect the files to scan first, applying every skip rule, so the progress
     # denominator matches what is actually scanned (a separate `find | wc -l`
     # would count files that the loop then skips).
+    #
+    # The listing is written to a file so that the exit status of find is known. It used to be read through a
+    # process substitution with the status thrown away: a find that could not start (a .transitignore of several
+    # thousand patterns exceeds the argument limit) or could not read a directory listed nothing, and that was
+    # reported as "every file was excluded".
     local -a scan_files=()
-    local f listed=0
+    local f scanned_real=0 list_rc=0 list_tmp
+    list_tmp=$(mktemp "${WORK_DIR}/filelist_XXXXXX")
+    _TMP_LIST="$list_tmp"
+    find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print0 > "$list_tmp" 2>/dev/null || list_rc=$?
     while IFS= read -r -d '' f; do
         [[ -f "$f" ]] || continue
-        (( listed++ )) || true
+        [[ "$f" == "$list_tmp" ]] && continue
         # Diff mode: skip files not in the changed-file set
         if [[ "$DIFF_FILES_ONLY" == true && -z "${DIFF_FILES_SET["$f"]:-}" ]]; then
             continue
         fi
         scan_files+=("$f")
-    done < <(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type f -print0 2>/dev/null)
+        if ! _is_control_file "$f"; then (( scanned_real++ )) || true; fi
+    done < "$list_tmp"
+    rm -f "$list_tmp"; _TMP_LIST=""
 
-    # .transitignore that leaves nothing to scan in a repository that has files. A `*` there used to make
-    # a hostile repository pass with every layer reading "ran". Only the .transitignore patterns count: a
-    # repository that is empty, or whose files all sit under the built-in exclusions, or a diff run with no
-    # changed file, keep their behaviour. The second listing runs only in the case that needs it.
-    local nothing_scanned=false probe=""
-    if (( listed == 0 && ${#EXTRA_EXCLUDE_DIRS[@]} > 0 )); then
-        probe=$(find "$SCAN_DIR" "${FIND_PRUNE_BUILTIN_ARGS[@]}" -type f -print -quit 2>/dev/null) || probe=""
-        if [[ -n "$probe" ]]; then
+    # Symlinks are not files to this scan (find -type f lists none, and nothing follows them), so what they point at
+    # is not examined through them. ai_transit.sh stores them as links in the archive (zip -y) instead of reading
+    # their targets in: a link to a directory used to put that whole tree, and a link to a file outside the
+    # repository that file, into the approved ZIP unscanned. A link that leaves the scanned directory is a FAIL; any
+    # other is a WARN, so that none passes unseen.
+    local link target
+    while IFS= read -r -d '' link && IFS= read -r -d '' target; do
+        if _symlink_escapes "$link" "$target"; then
+            record_fail "$link" "symlink:target_outside_the_scanned_directory"
+        else
+            record_warn "$link" "symlink:not_followed_its_target_is_not_scanned_through_the_link"
+        fi
+    done < <(find "$SCAN_DIR" "${FIND_PRUNE_ARGS[@]}" -type l -printf '%p\0%l\0' 2>/dev/null)
+
+    # Two ways for a run to have examined nothing although the repository has files, both fail-closed:
+    #  - the listing itself failed (engine:file_listing_failed);
+    #  - .transitignore removed every file (engine:nothing_scanned). A `*` there used to make a hostile repository
+    #    pass with every layer reading "ran". Only the .transitignore patterns count: a repository that is empty,
+    #    or whose files all sit under the built-in exclusions, or a diff run with no changed file, keep their
+    #    behaviour. In a diff run the files that count are the changed ones: every changed file excluded is
+    #    "nothing scanned" too. The three control files above do not count as scanned (nor as something removed).
+    #    The second listing runs only in the case that needs it.
+    local nothing_scanned=false probe=false
+    if (( list_rc != 0 )); then
+        warn "the file listing of ${SCAN_DIR} did not complete (find exit ${list_rc}): files may have been missed"
+        record_fail_hard "__global__" "engine:file_listing_failed"
+    elif (( scanned_real == 0 && ${#EXTRA_EXCLUDE_DIRS[@]} > 0 )); then
+        while IFS= read -r -d '' f; do
+            _is_control_file "$f" && continue
+            if [[ "$DIFF_FILES_ONLY" == true && -z "${DIFF_FILES_SET["$f"]:-}" ]]; then continue; fi
+            probe=true; break
+        done < <(find "$SCAN_DIR" "${FIND_PRUNE_BUILTIN_ARGS[@]}" -type f -print0 2>/dev/null)
+        if [[ "$probe" == true ]]; then
             nothing_scanned=true
             warn ".transitignore removed every file from the scan (${#EXTRA_EXCLUDE_DIRS[@]} pattern(s)): nothing was examined"
             record_fail_hard "__global__" "engine:nothing_scanned"
@@ -3821,7 +4030,10 @@ scan_by_type() {
     # Clear the progress line (_clr is a no-op when stderr is not a terminal)
     _clr
     ok "Layer 5: $current files scanned"
-    if [[ "$nothing_scanned" == true ]]; then
+    if (( list_rc != 0 )); then
+        record_layer L4_patterns "skipped:file listing failed (find exit ${list_rc})"
+        record_layer L5_per_language_sast "skipped:file listing failed (find exit ${list_rc})"
+    elif [[ "$nothing_scanned" == true ]]; then
         record_layer L4_patterns "skipped:nothing scanned (every file excluded)"
         record_layer L5_per_language_sast "skipped:nothing scanned (every file excluded)"
     else
@@ -3900,9 +4112,16 @@ scan_scancode() {
     # ── Parse report and feed results into the pipeline ─────────────────────
     # Output is captured in sc_out to avoid polluting stdout (which ai_transit.sh
     # uses to extract the verdict and report path).
-    local sc_out
-    sc_out=$(python3 "$TRANSIT_DIR/tools/scancode.py" "$sc_report" "$SCAN_DIR"
-    ) 2>/dev/null
+    # A report that exists but cannot be read (ScanCode killed while it wrote, a file that is not JSON, JSON of the
+    # wrong shape) makes the reader exit non-zero. As a plain assignment under `set -e` that ended the whole run with
+    # a traceback and no report; it is the one failure of this layer D-006 had not given a state.
+    local sc_out sc_read_rc=0
+    sc_out=$(python3 "$TRANSIT_DIR/tools/scancode.py" "$sc_report" "$SCAN_DIR" 2>/dev/null) || sc_read_rc=$?
+    if (( sc_read_rc != 0 )); then
+        record_warn "__global__" "scancode:report_could_not_be_read"
+        record_layer L6_licence "skipped:scancode report could not be read"
+        return
+    fi
 
     local warn_count=0 fail_count=0
     while IFS='|' read -r level sc_rel msg; do

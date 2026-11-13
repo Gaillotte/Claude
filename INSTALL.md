@@ -1388,6 +1388,8 @@ Place either of these files in the **root of the scanned repository** (not the p
 | `.transitignore` | gitignore-style patterns | Files matching patterns are excluded from all scan layers |
 | `.transit-allow.json` | JSON array of `{rule, path, reason}` | Matching FAIL findings are downgraded to WARN |
 
+A `.transitignore` with at least one pattern is always reported: one WARN `transitignore:exclusions_applied(<n> pattern(s))` in the report. If its patterns exclude every file of a repository that has files, the scan FAILs with `engine:nothing_scanned` (it can be neither downgraded by `--min-severity` nor allowlisted) and layers 4 and 5 are recorded as `skipped:nothing scanned (every file excluded)`. CRLF line endings and a last line without a newline are read. No file is skipped because of its name: the `.manifest_sha256.txt` the fetcher writes at the root of the scanned copy is scanned like any file (it stays out of the ZIP), and a file of that name in a sub-directory is scanned and archived.
+
 **`.transit-allow.json` example:**
 ```json
 [

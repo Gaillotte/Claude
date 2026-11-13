@@ -16,6 +16,7 @@ import argparse
 import difflib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -103,6 +104,26 @@ def _gitleaks_stub(base: Path) -> Path:
     return scan
 
 
+def _stubbed(fixture: str, stubs: dict[str, str], extra: Callable[[Path], None] | None = None) -> Callable[[Path], Path]:
+    """The fixture, plus stub programs in <base>/stubs (put first on PATH by the case's env). A stub is the body of a
+    sh script. Staged data (rule sets, signatures, a YARA rule) goes in the case's pre_work: it lives under
+    WORK_DIR, so its path is normalised to <WORK> in the report."""
+    def build(base: Path) -> Path:
+        dst = _copy_fixture(fixture)(base)
+        for name, body in stubs.items():
+            _write(base / "stubs" / name, "#!/bin/sh\n" + body + "\n")
+            (base / "stubs" / name).chmod(0o755)
+        if extra:
+            extra(dst)
+        return dst
+    return build
+
+
+STUB_PATH = {"PATH": "{base}/stubs:" + os.environ.get("PATH", "")}
+FOUR_RULESETS = {"offline-cache/semgrep-rules/%s.yaml" % n: "rules: []\n"
+                 for n in ("owasp-top-ten", "cwe-top-25", "security-audit", "secrets")}
+SEMGREP_OK = "echo '{\"results\":[]}'"
+
 CASES: list[Case] = [
     Case("clean", _copy_fixture("clean")),
     Case("vulnerable", _copy_fixture("vulnerable")),
@@ -129,6 +150,30 @@ CASES: list[Case] = [
               "GITLEAKS_STUB_REPORT": "{base}/stub_report.json"},
          note="stub gitleaks reporting one leak"),
     Case("bad_scanning_name", _copy_fixture("clean"), scan_name="../escape", note="refused, no report"),
+    # --- bash hardening of 2026-11-13 (docs/engine_divergences.md, decision record) ---
+    Case("transitignore_everything", _fixture_plus("vulnerable", lambda d: _write(d / ".transitignore", "*\n")),
+         note="D-004: every file excluded: FAIL engine:nothing_scanned, layers 4 and 5 skipped"),
+    Case("transitignore_crlf_noeol",
+         _fixture_plus("vulnerable", lambda d: _write(d / ".transitignore", b"src/db.py\r\nREADME.md")),
+         note="D-003: CRLF lines and a last line without a newline are read"),
+    Case("semgrep_partial_stub", _stubbed("clean", {"semgrep": SEMGREP_OK}),
+         env=STUB_PATH, pre_work={k: v for k, v in FOUR_RULESETS.items() if "cwe-top-25" in k or "owasp" in k},
+         note="D-005: two of four rule sets staged: partial, the run completes"),
+    Case("semgrep_crash_stub", _stubbed("clean", {"semgrep": "echo boom >&2; exit 7"}),
+         env=STUB_PATH, pre_work=FOUR_RULESETS, note="D-015: Semgrep exit 7 is not ran"),
+    Case("scancode_failed_stub", _stubbed("clean", {"scancode": "exit 3"}),
+         env={**STUB_PATH, "RUN_SCANCODE": "true"}, note="D-006: ScanCode failing is skipped, with the exit status"),
+    Case("yara_ran_stub", _stubbed("clean", {"yara": "exit 0"}), env=STUB_PATH,
+         pre_work={"yara-rules/x.yar": "rule x {{ condition: false }}\n"}, note="D-008: a YARA run is ran"),
+    Case("clamscan_error_stub", _stubbed("clean", {"clamscan": "exit 2"}), env=STUB_PATH,
+         pre_work={"offline-cache/clamav/main.cvd": "x"}, note="D-015: clamscan exit 2 is a tool error, not malware"),
+    Case("js_ruleset_unstaged_stub",
+         _stubbed("clean", {"semgrep": SEMGREP_OK}, lambda d: _write(d / "src" / "app.js", "console.log(1);\n")),
+         env=STUB_PATH, pre_work=FOUR_RULESETS, note="D-037: JavaScript file, no javascript.yaml: L5 partial"),
+    Case("diff_mode_nul_names",
+         _fixture_plus("vulnerable", lambda d: _write(d / "a:b.py", "import os\nos.system(input())\n")),
+         env={"SINCE_COMMIT": "abc"}, pre_work={".diff_files": "a:b.py\x00"},
+         note="D-042: a NUL-separated .diff_files with a name that holds ':'"),
 ]
 
 
@@ -144,6 +189,8 @@ def _rel_factory(scan: Path, work: Path):
         if isinstance(s, str):
             for w in works:
                 s = s.replace(w, "<WORK>")
+            # the ScanCode result is named after the run's timestamp, and a WARN names it (contract section 10)
+            s = re.sub(r"scancode_[0-9]{8}_[0-9]{6}\.json", "scancode_<TS>.json", s)
             for d in scans:
                 s = s.replace(d + "/", "").replace(d, ".")
             return s
