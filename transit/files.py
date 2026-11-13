@@ -829,7 +829,11 @@ class Exclusions:
     Matching cost (review log R-15): a LITERAL pattern (no character of ``GLOB_METACHARS``) is looked up in a set against the entry's
     path and each of its suffixes after a ``/`` (O(depth) per entry however many literals there are); a glob that begins with ``*``
     needs only the whole path (any suffix match implies it); any other glob is tried on the suffixes whose first character is the
-    glob's first character. The result is identical to testing every pattern against every suffix (the 24 pattern sets of F5)."""
+    glob's first character. The result is identical to testing every pattern against every suffix (the 24 pattern sets of F5).
+
+    One more form, found by a differential fuzz against ``find`` (the design called the script's ``D/*`` forms redundant): a glob that ends
+    in an odd number of backslashes never matches by itself, but the script's ``root/D/*`` turns the last backslash into an escaped slash, so
+    ``D\\`` also excludes every entry directly inside a directory matching ``D`` (``a\\`` excludes ``a/x`` and keeps ``a``)."""
     dir_names: tuple[str, ...]
     patterns: tuple[str, ...]
 
@@ -839,8 +843,15 @@ class Exclusions:
         for pattern in self.patterns:
             raw = _fsb(pattern).partition(b"\0")[0]
             if any(c in pattern for c in GLOB_METACHARS):
-                first = raw[0] if raw and raw[0] not in b"*?[\\" else -1
-                globs.append((raw, first, bool(raw) and raw[0] == 0x2A))
+                forms = [raw]
+                if (len(raw) - len(raw.rstrip(b"\\"))) % 2:
+                    # The script also prunes ``root/D/*`` and ``root/*/D/*``. Those are redundant once the directories that match ``D`` are pruned,
+                    # except when ``D`` ends in a backslash: ``D\`` never matches (a trailing backslash loses), but ``D\/*`` is ``D`` followed
+                    # by an escaped slash, so every CHILD of a directory that matches ``D`` without its backslash is excluded.
+                    forms.append(raw + b"/*")
+                for form in forms:
+                    first = form[0] if form and form[0] not in b"*?[\\" else -1
+                    globs.append((form, first, bool(form) and form[0] == 0x2A))
             else:
                 literals.add(raw)
         object.__setattr__(self, "_dirs", frozenset(self.dir_names))

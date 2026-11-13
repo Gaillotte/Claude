@@ -212,6 +212,9 @@ class GlobMatchTests(unittest.TestCase):
         ("[", "[", True), ("[", "a", False), ("[a", "[a", True), ("[a", "a", False), ("a[", "a[", True), ("[!", "[!", True),
         ("[[:alpha:]]", "q", True), ("[[:alpha:]]", "7", False), ("[[:digit:]a]", "a", True), ("[[:digit:]a]", "5", True),
         ("[![:upper:]]", "a", True), ("[![:upper:]]", "A", False), ("[[:foo:]]", "a", False), ("[[:alpha:]", "a", False),
+        ("[[:z:]]", ":]", True), ("[[:z:]]", "z", False), ("[[:alphz:]]", "[", False), ("[[:alpha:]]x", "ax", True), ("[a[:digit:]]", "5", True),
+        ("[[.a.]-c]", "b", True), ("[[=a=]]", "a", True), ("[[=ab=]]", "a", False), ("[[", "[[", True), ("[[", "[", False), ("[ab", "[ab", True),
+        ("[a-[:alpha:]]", "q", False),
         ("docs", "docs", True), ("docs", "docs/", False), ("docs/", "docs/", True), ("/h.py", "h.py", False), ("!keep", "keep", False),
         ("sub/*", "sub/a/b", True), ("sub/*", "sub", False), ("*/docs", "sub/docs", True), ("*/docs", "docs", False),
         ("weird dir", "weird dir", True), ("[[:space:]]", " ", True), ("[[:punct:]]", ".", True), ("[[:punct:]]", "a", False),
@@ -296,6 +299,17 @@ class ExclusionsTests(unittest.TestCase):
             self.assertTrue(ex.excludes(rel, is_dir=is_dir), rel)
         for rel in ("sub", "docs2", "xdocs", "a/bc", "b", "a", "x.logs", "ab.py", "docs.d"):
             self.assertFalse(ex.excludes(rel, is_dir=False), rel)
+
+    def test_a_trailing_backslash_excludes_the_children_of_the_directory(self):
+        ex = files.Exclusions(dir_names=(), patterns=("a\\", "sub/b\\"))
+        for rel in ("a/x", "z/a/x", "a/x.py", "sub/b/c", "q/sub/b/c", "a/x/y"):
+            self.assertTrue(ex.excludes(rel, is_dir=False), rel)
+            self.assertTrue(ex.excludes(rel, is_dir=True), rel)
+        for rel in ("a", "z/a", "sub/b", "ab/x", "sub", "b/c"):
+            self.assertFalse(ex.excludes(rel, is_dir=False), rel)
+        even = files.Exclusions(dir_names=(), patterns=("a\\\\",))
+        self.assertTrue(even.excludes("a\\", is_dir=False), "an escaped backslash is a literal one")
+        self.assertFalse(even.excludes("a/x", is_dir=False))
 
     def test_forms_that_do_nothing_in_find(self):
         ex = files.Exclusions(dir_names=(), patterns=("docs/", "/h.py", "!keep", "docs//x"))
@@ -462,6 +476,8 @@ F5_SETS = [
     ["["], ["sub/docs/d.py"], ["*/*/b.py"], [".hidden"], ["build"], ["weird*"], ["[[:alpha:]].py"], ["w[a-z]ird dir/*"], ["src/build"],
     ["vendor"], [".manifest_sha256.txt"], ["[a-c]*"], ["*/"], ["sub/a/b/*"], ["target"], ["README.md", "docs", "?.py"], ["docs", "docs", "docs"],
     ["*.py", "!a.py"], ["dir.with.dots"], ["dir.*"], ["*?"], ["\\*"], [".*"], ["[.]git"], ["sub/*/*"], ["*/*/*/*"],
+    # a trailing backslash: the script's `D/*` forms make it an escaped slash, so the children of D are excluded (found by the fuzz in the notes)
+    ["docs\\"], ["?\\"], ["sub\\", "x.log"], ["\\\\"], ["*\\"], ["sub/a\\"], ["a\\\\"], ["[ab]\\"],
 ]
 
 
@@ -487,6 +503,29 @@ class FilesForScanAgainstFindTests(TmpCase):
                 d = self.mk("c%d" % index)
                 make_tree(d, F5_TREE)
                 write_file(d, ".transitignore", content)
+                self.check(d)
+
+    def test_random_trees_and_pattern_sets_against_find(self):
+        """The fuzz that found the trailing-backslash form (the script's ``D/*`` prune forms are not always redundant)."""
+        rnd = random.Random(20261113)
+        names = ["a", "b", "ab", "a.py", "b.log", "docs", "x y", ".h", "[a]", "a*b", "q", "build", "vendor", "node_modules", "\u00e9", "-x", "t.t", "ZZ", "a-b"]
+        symbols = ["a", "b", "*", "?", "[", "]", "!", "^", "-", "\\", ".", "/", "x", "q", "d", "o", "c", "s", "y", " ", "p", "\u00e9"]
+        for case in range(70):
+            d = self.mk("r%d" % case)
+            for _ in range(rnd.randint(3, 25)):
+                rel = "/".join(rnd.choice(names) for _ in range(rnd.randint(1, 4)))
+                try:
+                    write_file(d, rel, b"x")
+                except OSError:
+                    pass
+            patterns = []
+            for _ in range(rnd.randint(1, 5)):
+                if rnd.random() < 0.4:
+                    patterns.append(rnd.choice(names) + (rnd.choice(["", "/*", "/", "*", "\\"]) if rnd.random() < 0.5 else ""))
+                else:
+                    patterns.append("".join(rnd.choice(symbols) for _ in range(rnd.randint(1, 6))))
+            write_file(d, ".transitignore", "".join(p + "\n" for p in patterns))
+            with self.subTest(case=case, patterns=patterns):
                 self.check(d)
 
     def test_no_transitignore_at_all(self):
@@ -618,6 +657,22 @@ class FilesForScanAgainstFindTests(TmpCase):
         want = bash_symlink_escapes(pairs)
         got = [files.symlink_escapes(rel, target) for rel, target in pairs]
         self.assertEqual(want, got)
+
+    def test_symlink_escapes_random_pairs_against_the_script(self):
+        rnd = random.Random(99)
+        parts = ["a", "b", "..", ".", "", "..", "c d", "x"]
+        pairs = []
+        for _ in range(400):
+            rel = "/".join(rnd.choice(["d", "e", "f g", "h"]) for _ in range(rnd.randint(0, 3)) ) or ""
+            rel = (rel + "/" if rel else "") + "link"
+            target = "/".join(rnd.choice(parts) for _ in range(rnd.randint(0, 6)))
+            if rnd.random() < 0.05:
+                target = "/" + target
+            pairs.append((rel, target))
+        want = bash_symlink_escapes(pairs)
+        self.assertEqual(want, [files.symlink_escapes(rel, target) for rel, target in pairs])
+        self.assertIn(True, want)
+        self.assertIn(False, want)
 
     def test_control_files(self):
         self.assertEqual((".transitignore", ".transit-allow.json", ".manifest_sha256.txt"), tuple(files.CONTROL_FILE_NAMES))
@@ -1087,11 +1142,14 @@ class FileViewTests(TmpCase):
         with open(path, "wb") as fh:
             fh.write(b"HEAD")
             fh.truncate(400 * 1024 * 1024)
-        v = self.view(d, "huge.bin")
+        v = self.view(d, "huge.bin", max_file_bytes=1 << 20)
         started = time.monotonic()
-        self.assertEqual(b"HEAD" + b"\0" * 6, v.head(10))
+        self.assertEqual(b"HEAD" + b"\0" * 6, v.head(10), "head() does not go through data(), so the size cap is not in its way")
         self.assertEqual(8192, len(v.head()))
         self.assertLess(time.monotonic() - started, 2.0)
+        with self.assertRaises(files.FileReadError) as cm:
+            v.data()
+        self.assertEqual("too_large", cm.exception.reason)
         write_file(d, "short", b"abc")
         self.assertEqual(b"abc", self.view(d, "short").head(100))
         self.assertEqual(b"", self.view(d, "short").head(0))
@@ -1227,7 +1285,13 @@ class FileViewTests(TmpCase):
             long_ = view.has_long_line()
             flat_len = len(view.flat())
             first = view.first_line()
-            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+            peak = 0
+            with open("/proc/self/status") as status:      # VmHWM belongs to the new image; ru_maxrss also counts the parent's size at fork
+                for line in status:
+                    if line.startswith("VmHWM:"):
+                        peak = int(line.split()[1]) * 1024
+            if not peak:
+                peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
             print(size, peak, long_, flat_len, len(first))
         ''')
         out = subprocess.run([sys.executable, "-I", "-c", child, str(ROOT), path], capture_output=True, timeout=300)
@@ -1399,6 +1463,22 @@ class ReadRepoConfigFileTests(TmpCase):
                 self.assertTrue(note, name)
         finally:
             signal.alarm(0)
+
+    def test_a_symlink_swapped_in_after_the_check_is_not_followed(self):
+        """TOCTOU: lstat said 'regular file', then the name became a link. The open is O_NOFOLLOW, so the link is a refusal."""
+        d = self.mk()
+        write_file(d, "real.json", b"[]")
+        os.symlink("real.json", os.path.join(d, ".transit-allow.json"))
+        real_stat = os.stat
+
+        def lying(path, *args, **kwargs):
+            if path == ".transit-allow.json" and kwargs.get("dir_fd") is not None:
+                return real_stat(os.path.join(d, "real.json"))
+            return real_stat(path, *args, **kwargs)
+        with mock.patch("os.stat", side_effect=lying):
+            data, note = files.read_repo_config_file(d, ".transit-allow.json")
+        self.assertIsNone(data)
+        self.assertTrue(note)
 
     def test_a_symlinked_scan_directory_component_inside_the_repo_is_not_followed(self):
         d = self.mk()
@@ -1747,6 +1827,15 @@ class ComputeHashesTests(TmpCase):
         self.assertEqual(recipe_repo_hash(d), got.repo_hash)
         lines = "".join(d + "/" + r + "\n" for r in sorted_bytes(["b/x", "a.py", "a/z", ".h", "sp ace", "B"]))
         self.assertEqual(hashlib.sha256(lines.encode()).hexdigest(), got.repo_hash)
+
+    def test_repo_hash_sorts_bytes_not_code_points(self):
+        """U+FF01 is EF BC 81 and an escaped 0xFF byte is U+DCFF: by code point the byte sorts first, by bytes it sorts last."""
+        d = self.mk()
+        for name in ("\uff01.py".encode(), b"\xfftail", b"plain", "\u00e9".encode(), b"\xc3\xa9z", "\U0001f600".encode()):
+            write_file(d, name, b"1")
+        got = files.compute_hashes(d)
+        self.assertEqual(recipe_repo_hash(d), got.repo_hash)
+        self.assertEqual(recipe_sha256(d), got.sha256)
 
     def test_it_depends_on_content_not_only_on_names(self):
         d = self.mk()
