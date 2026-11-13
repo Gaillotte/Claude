@@ -12,11 +12,11 @@ from __future__ import annotations
 import ast
 import dataclasses
 import datetime as dt
+import json
 import os
 import shutil
 import subprocess
 import sys
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -57,13 +57,17 @@ def bash_thresholds(values):
     return [int(x) for x in res.stdout.decode().split()]
 
 
-def helper_knob():
-    """``_knob`` of transit/containers/jar.py, compiled from the source without importing the program."""
+def helper_knob(values, default=90.0):
+    """``_knob`` of transit/containers/jar.py applied to each value, in a child interpreter: the function's own source is cut out with
+    ``ast`` and run there, so that no helper code runs in this process and the program is never imported. ``None`` means unset."""
     tree = ast.parse(JAR_HELPER.read_text(encoding="utf-8"))
     fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_knob")
-    ns = {"os": types.SimpleNamespace(environ={})}
-    exec(compile(ast.Module([fn], []), str(JAR_HELPER), "exec"), ns)  # noqa: S102  (test oracle, our own file)
-    return ns["_knob"], ns["os"].environ
+    prog = ("import json, os, sys\n" + ast.get_source_segment(JAR_HELPER.read_text(encoding="utf-8"), fn)
+            + "\nout = []\nfor v in json.load(sys.stdin):\n    os.environ.pop('JAR_X', None)\n    if v is not None:\n"
+              "        os.environ['JAR_X'] = v\n    out.append(repr(_knob('JAR_X', %r)))\nprint(json.dumps(out))\n" % default)
+    res = subprocess.run([sys.executable, "-I", "-c", prog], input=json.dumps(list(values)).encode(), stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, check=True)
+    return [float(x) for x in json.loads(res.stdout)]
 
 
 class Defaults(unittest.TestCase):
@@ -213,7 +217,7 @@ class MinSeverity(unittest.TestCase):
             self.assertEqual(cfg_of({"MIN_SEVERITY": word}).sev_threshold, num)
 
     def test_a_rejected_non_empty_value_gets_a_notice_naming_it(self):
-        for bad in ("bogus", " high", "high ", "hi", "4", "Höch"):
+        for bad in ("bogus", " high", "high ", "hi", "4", "H\u00f6ch"):
             c = cfg_of({"MIN_SEVERITY": bad})
             self.assertEqual(len(c.notices), 1, bad)
             self.assertEqual(c.notices[0].level, "warn")
@@ -229,7 +233,7 @@ class MinSeverity(unittest.TestCase):
     @unittest.skipUnless(BASH, "bash is the oracle")
     def test_against_the_expression_of_scan_pipeline_sh(self):
         values = ["low", "medium", "high", "critical", "LOW", "Medium", "HIGH", "CrItIcAl", "bogus", " high", "high ", "", "hi",
-                  "HİGH", "ＨＩＧＨ", "critıcal", "Kow", "low\n", "4", "highest", "medïum"]
+                  "H\u0130GH", "\uff28\uff29\uff27\uff28", "crit\u0131cal", "\u212aow", "low\n", "4", "highest", "med\u00efum"]
         want = bash_thresholds(values)
         got = [cfg_of({"MIN_SEVERITY": v}).sev_threshold for v in values]
         self.assertEqual(got, want, list(zip(values, got, want)))
@@ -392,11 +396,15 @@ class LimitsFromEnvironment(unittest.TestCase):
         lim = cfg_of({"TRANSIT_MAX_FILE_MB": "1e308", "TRANSIT_LONG_LINE_BYTES": "1e308"}).limits
         self.assertGreaterEqual(lim.max_file_bytes, 1)
         self.assertGreaterEqual(lim.long_line_bytes, 1)
+        self.assertLessEqual(lim.max_file_bytes, 1 << 62)
+        self.assertLessEqual(lim.long_line_bytes, 1 << 62)
+        self.assertIsInstance(lim.max_file_bytes, int)
 
     def test_limits_do_not_leak_into_other_fields(self):
         base = cfg_of()
         c = cfg_of({"TRANSIT_FILE_BUDGET_S": "5"})
-        self.assertEqual(dataclasses.replace(c, limits=base.limits), base)
+        self.assertEqual(dataclasses.replace(c, limits=base.limits, environ=base.environ), base)
+        self.assertNotEqual(c.limits, base.limits)
 
 
 class EnvNumber(unittest.TestCase):
@@ -419,15 +427,17 @@ class EnvNumber(unittest.TestCase):
         self.assertEqual(env_number({}, "A", 0.25), 0.25)
 
     def test_equals_the_helper_programs_knob_on_every_finite_value(self):
-        knob, helper_env = helper_knob()
-        values = ["5", "0.5", " 7 ", "1e2", "0", "-3", "abc", "", "1_0", "+4", "007", ".5", "5.", "0.0", "-0", "1e-9", "٣", "5\n",
-                  "0x10", "1,5", "True", "None", "1e308"]
-        for v in values:
-            helper_env.clear()
-            helper_env["JAR_X"] = v
-            self.assertEqual(env_number({"JAR_X": v}, "JAR_X", 90.0), knob("JAR_X", 90.0), repr(v))
-        helper_env.clear()
-        self.assertEqual(env_number({}, "JAR_X", 90.0), knob("JAR_X", 90.0))
+        values = ["5", "0.5", " 7 ", "1e2", "0", "-3", "abc", "", "1_0", "+4", "007", ".5", "5.", "0.0", "-0", "1e-9", "\u0663", "5\n",
+                  "0x10", "1,5", "True", "None", "1e308", "nan", None]
+        want = helper_knob(values)
+        got = [env_number({} if v is None else {"JAR_X": v}, "JAR_X", 90.0) for v in values]
+        self.assertEqual(got, want, list(zip(values, got, want)))
+
+    def test_the_one_narrowing_of_the_helper_rule_is_infinity(self):
+        # documented in env_number: the helper accepts "inf" (and then fails to turn it into an integer); the engine takes the default
+        self.assertEqual(helper_knob(["inf", "1e999"]), [float("inf"), float("inf")])
+        self.assertEqual(env_number({"JAR_X": "inf"}, "JAR_X", 90.0), 90.0)
+        self.assertEqual(env_number({"JAR_X": "1e999"}, "JAR_X", 90.0), 90.0)
 
     def test_reads_only_the_mapping(self):
         with mock.patch.dict(os.environ, {"TRANSIT_X": "5"}):

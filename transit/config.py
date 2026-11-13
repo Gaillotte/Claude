@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as _dt
+import math
+import types
 from typing import Mapping
 
 ENGINE_NAME = "python"
@@ -66,6 +68,38 @@ KNOWN_FIXES: frozenset[str] = frozenset(
 EXIT_PASS = 0
 EXIT_FAIL = 1
 
+_VERBOSITY_WORDS = ("quiet", "normal", "verbose")
+_MIB = 1048576
+#: ``TRANSIT_*`` byte limits are clamped here, so an absurd value cannot overflow the ``int`` conversion or a later multiplication.
+_MAX_LIMIT_BYTES = 1 << 62
+_ASCII_UPPER_TO_LOWER = {c: c + 32 for c in range(ord("A"), ord("Z") + 1)}
+
+
+def _ascii_lower(text: str) -> str:
+    """bash ``${X,,}`` in the C locale (``scan_pipeline.sh`` runs with ``LC_ALL=C``): only ``A`` to ``Z`` change. ``str.lower`` would
+    also fold characters outside ASCII (the Kelvin sign is a ``K``), so a word could be accepted that bash rejects."""
+    return text.translate(_ASCII_UPPER_TO_LOWER)
+
+
+def _whole_number(value: float) -> int:
+    """A limit given as a float, as an ``int`` of at least 1 and at most ``_MAX_LIMIT_BYTES`` (the comparison comes first: ``int`` of an
+    infinity, which ``1e308 * 1048576`` is, raises ``OverflowError``)."""
+    if value >= _MAX_LIMIT_BYTES:
+        return _MAX_LIMIT_BYTES
+    return max(1, int(value))
+
+
+def _parse_fixes(text: str) -> "frozenset[str]":
+    """``TRANSIT_FIXES``: comma-separated ``KNOWN_FIXES`` ids, white space around an id and empty items ignored. Any other word raises
+    ``ValueError`` naming every one of them (a typo must not silently disable a fix)."""
+    wanted = [item.strip() for item in text.split(",")]
+    wanted = [item for item in wanted if item]
+    unknown = sorted({item for item in wanted if item not in KNOWN_FIXES})
+    if unknown:
+        raise ValueError("unknown TRANSIT_FIXES id %s (known: %s)"
+                         % (", ".join(repr(item) for item in unknown), ", ".join(sorted(KNOWN_FIXES))))
+    return frozenset(wanted)
+
 
 @dataclasses.dataclass(frozen=True)
 class Limits:
@@ -99,6 +133,9 @@ class Limits:
     tool_timeout_s: float = 1800.0
     #: Default timeout for one of the stdlib helper scripts (jar/office also arm their own alarm).
     helper_timeout_s: float = 300.0
+
+
+_DEFAULT_LIMITS = Limits()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -136,8 +173,13 @@ class Config:
     notices: tuple[Notice, ...]
 
     def fix(self, fix_id: str) -> bool:
-        """True if the divergence switch ``fix_id`` (a member of ``KNOWN_FIXES``) is enabled."""
-        raise NotImplementedError
+        """True if the divergence switch ``fix_id`` (a member of ``KNOWN_FIXES``) is enabled.
+
+        An id that is not a member of ``KNOWN_FIXES`` raises ``ValueError``: a misspelt or retired id (``D-004`` is not a switch any
+        more) asked for in code must not read as "off", which is the silent form of the typo ``TRANSIT_FIXES`` already refuses."""
+        if fix_id not in KNOWN_FIXES:
+            raise ValueError("unknown divergence switch %r (known: %s)" % (fix_id, ", ".join(sorted(KNOWN_FIXES))))
+        return fix_id in self.fixes
 
 
 def load_config(environ: Mapping[str, str], *, now: _dt.datetime | None = None) -> Config:
@@ -157,9 +199,81 @@ def load_config(environ: Mapping[str, str], *, now: _dt.datetime | None = None) 
       * ``now`` is only for tests; ``timestamp`` is its local ``%Y%m%d_%H%M%S``.
     Raises ``ValueError`` for an unknown ``TRANSIT_FIXES`` id. Never reads the file system and never writes.
     """
-    raise NotImplementedError
+    env = dict(environ)
+
+    def get(name: str, default: str = "") -> str:
+        """bash ``${NAME:-default}``: unset and empty both mean the default."""
+        value = env.get(name, "")
+        return value if value else default
+
+    notices: list[Notice] = []
+
+    verbosity_given = get("VERBOSITY", "normal")
+    if verbosity_given not in _VERBOSITY_WORDS:
+        notices.append(Notice("warn", "VERBOSITY=%s is not one of quiet, normal, verbose: treated as normal" % verbosity_given))
+    verbosity = "quiet" if verbosity_given == "quiet" else "normal"
+
+    min_severity = get("MIN_SEVERITY", "high")
+    sev_threshold = SEVERITY_THRESHOLDS.get(_ascii_lower(min_severity), 0)
+    if not sev_threshold:
+        sev_threshold = SEVERITY_THRESHOLDS["high"]
+        notices.append(Notice("warn", "MIN_SEVERITY=%s is not one of low, medium, high, critical: treated as high" % min_severity))
+
+    offline = get("OFFLINE", "true")
+    if offline != "true":
+        notices.append(Notice("warn", "OFFLINE=%s ignored: scan_pipeline.sh has no online mode" % offline))
+
+    work_dir = get("WORK_DIR", DEFAULT_WORK_DIR)
+    offline_cache = get("OFFLINE_CACHE", work_dir + "/offline-cache")
+
+    fixes = _parse_fixes(env.get("TRANSIT_FIXES", ""))
+
+    base = _DEFAULT_LIMITS
+    limits = Limits(
+        rule_budget_s=env_number(env, "TRANSIT_RULE_BUDGET_S", base.rule_budget_s),
+        file_budget_s=env_number(env, "TRANSIT_FILE_BUDGET_S", base.file_budget_s),
+        file_budget_s_per_mb=env_number(env, "TRANSIT_FILE_BUDGET_S_PER_MB", base.file_budget_s_per_mb),
+        long_line_bytes=_whole_number(env_number(env, "TRANSIT_LONG_LINE_BYTES", base.long_line_bytes)),
+        max_file_bytes=_whole_number(env_number(env, "TRANSIT_MAX_FILE_MB", base.max_file_bytes / _MIB) * _MIB),
+        tool_timeout_s=env_number(env, "TRANSIT_TOOL_TIMEOUT_S", base.tool_timeout_s),
+        helper_timeout_s=env_number(env, "TRANSIT_HELPER_TIMEOUT_S", base.helper_timeout_s),
+    )
+
+    stamp = (now if now is not None else _dt.datetime.now()).strftime("%Y%m%d_%H%M%S")
+
+    return Config(
+        environ=types.MappingProxyType(env),
+        work_dir=work_dir,
+        verbosity=verbosity,
+        min_severity=min_severity,
+        sev_threshold=sev_threshold,
+        since_commit=get("SINCE_COMMIT"),
+        run_sca=get("RUN_SCA", "false") == "true",
+        run_scancode=get("RUN_SCANCODE", "false") == "true",
+        offline_cache=offline_cache,
+        semgrep_rules_dir=get("SEMGREP_RULES_DIR", offline_cache + "/semgrep-rules"),
+        trivy_cache_dir=get("TRIVY_CACHE_DIR", offline_cache + "/trivy-db"),
+        clamav_db_dir=get("CLAMAV_DB_DIR", offline_cache + "/clamav"),
+        repo_input=get("REPO_INPUT"),
+        tmpdir=get("TMPDIR", "/tmp"),
+        timestamp=stamp,
+        limits=limits,
+        fixes=fixes,
+        notices=tuple(notices),
+    )
 
 
 def env_number(environ: Mapping[str, str], name: str, default: float) -> float:
-    """The ``JAR_*``/``OFFICE_*`` knob rule (contract 2): parse as float; not a number or not above 0 means ``default``."""
-    raise NotImplementedError
+    """The ``JAR_*``/``OFFICE_*`` knob rule (contract 2): parse as float; not a number or not above 0 means ``default``.
+
+    Same rule as ``_knob`` of ``transit/containers/jar.py`` (``float()`` of the value, so surrounding white space, an exponent and an
+    underscore between digits are numbers), with one narrowing: ``nan`` and the infinities are not usable limits (the helper accepts
+    ``inf`` and then fails converting it to an integer), so they mean ``default`` as well. A value that parsed is a ``float``;
+    ``default`` is returned as it was given."""
+    try:
+        value = float(environ.get(name, ""))
+    except (TypeError, ValueError):
+        return default
+    if math.isfinite(value) and value > 0:
+        return value
+    return default

@@ -12,10 +12,16 @@ form everywhere; ``os.fsencode`` gives the original bytes back.
 from __future__ import annotations
 
 import dataclasses
+import os
 from typing import Sequence
 
 #: Contract 1.4.
 SCANNING_NAME_MAX_CHARS = 150
+
+_USAGE = "Usage: %s <directory_to_scan> [directory_for_report] [scanning_name]  [VERBOSITY=quiet|normal|verbose]"
+_NOT_FOUND = "Directory not found: %s"
+_NAME_REFUSED = ("scanning_name must not contain '/', control characters or a leading dot, and is limited to %d characters: %s"
+                 % (SCANNING_NAME_MAX_CHARS, "%s"))
 
 
 class UsageError(Exception):
@@ -41,14 +47,17 @@ class Args:
 def positional_words(argv: Sequence[str]) -> list[str]:
     """Contract 1.1: drop every word that begins with ``--`` (including a lone ``--``), keep the order, keep
     positionals beyond the third (they are ignored later). A word with a single leading dash is a positional."""
-    raise NotImplementedError
+    return [word for word in argv if not word.startswith("--")]
 
 
 def scanning_name_error(name: str) -> "str | None":
     """Contract 1.4. Return the refusal text, or ``None`` if ``name`` is acceptable: it must not contain ``/``, must
     not start with ``.``, must not contain a control character (Unicode category Cc: C0, DEL, C1), and is limited
     to 150 CHARACTERS. The empty string is acceptable (it means "use the timestamp")."""
-    raise NotImplementedError
+    if ("/" in name or name.startswith(".") or len(name) > SCANNING_NAME_MAX_CHARS
+            or any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in name)):
+        return _NAME_REFUSED % name
+    return None
 
 
 def parse_args(argv: Sequence[str], *, prog: str = "scan_pipeline.py") -> Args:
@@ -57,4 +66,25 @@ def parse_args(argv: Sequence[str], *, prog: str = "scan_pipeline.py") -> Args:
     directory counts, a file or the empty string does not); (3) positional 2 non-empty and not a directory;
     (4) positional 3 refused by ``scanning_name_error``. Raises ``UsageError`` for the first one that fails.
     Never creates anything."""
-    raise NotImplementedError
+    words = positional_words(argv)
+    if not words:
+        raise UsageError(_USAGE % prog)
+
+    scan_dir = words[0]
+    if not os.path.isdir(scan_dir):
+        raise UsageError(_NOT_FOUND % scan_dir)
+    # A trailing slash must not change the paths in findings or the keys an allowlist entry is matched on (contract 1.3). The test above
+    # saw the string as given; only then is it spelled one way. A lone "/" is kept.
+    while scan_dir != "/" and scan_dir.endswith("/"):
+        scan_dir = scan_dir[:-1]
+
+    report_dir = words[1] if len(words) > 1 else ""
+    if report_dir and not os.path.isdir(report_dir):
+        raise UsageError(_NOT_FOUND % report_dir)
+
+    name = words[2] if len(words) > 2 else ""
+    refusal = scanning_name_error(name)
+    if refusal is not None:
+        raise UsageError(refusal)
+
+    return Args(scan_dir=scan_dir, report_dir=report_dir or None, scanning_name=name or None)
