@@ -1235,7 +1235,18 @@ else:
     assert rules.evaluate(ms["line"], t, policy) is False
     assert rules.evaluate(ms["excl"], t, policy) is False
     assert next(iter(every.spans(t, policy))) == (0, 2)
-print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
+def peak_bytes():
+    # VmHWM belongs to this process's own address space (it restarts at exec); ru_maxrss also carries the parent's peak
+    # across fork+exec on Linux, so a parent that already grew (the whole test directory in one process) inflated it.
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+print(peak_bytes())
 """
 
 
