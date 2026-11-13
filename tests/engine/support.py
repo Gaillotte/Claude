@@ -471,7 +471,8 @@ def make_context(test: "unittest.TestCase | None" = None, rel: str = "a.txt", da
                  deadline: "float | None" = None, sniffed: bool = False, depth: int = 0, verbosity: str = "normal") -> Harness:
     """A real ``ScanContext`` for the file ``rel`` (written with ``data``; ``files`` adds others) of a fresh ``TempRepo``.
 
-    ``verdict``: None (default) is a REAL ``Verdict`` (with ``allowlist``, ``threshold``, ``min_severity`` and a real ``Console`` over buffers);
+    ``verdict``: None (default) is a REAL ``Verdict`` (with ``allowlist``, ``threshold``, ``min_severity`` and a real ``Console`` over buffers;
+    ``first_writer`` and ``dot_matches_directory`` follow ``cfg.fix("D-012")`` and ``cfg.fix("D-011")`` as they do in ``pipeline``);
     ``"fake"`` a ``FakeVerdict``; any other object is used as it is. ``locator`` / ``wrappers`` default to ``FakeLocator()`` (no tool is
     installed) and ``FakeWrappers()``; ``registry`` to an empty one. ``deadline`` is a ``time.monotonic()`` value (default: an hour from now).
     With ``test`` the temporary directories are removed by ``test.addCleanup``; without it the caller calls ``Harness.close``."""
@@ -481,7 +482,9 @@ def make_context(test: "unittest.TestCase | None" = None, rel: str = "a.txt", da
     buffers = ConsoleBuffers(verbosity)
     allow = allowlist if allowlist is not None else Allowlist({})
     if verdict is None:
-        verdict_obj: object = Verdict(repo.path, allow, threshold=threshold, min_severity=min_severity, console=buffers.console)
+        # the two switches a ``Verdict`` takes are what ``pipeline`` passes: ``make_config(TRANSIT_FIXES="D-012")`` gives the worst-of status
+        verdict_obj: object = Verdict(repo.path, allow, threshold=threshold, min_severity=min_severity, console=buffers.console,
+                                      first_writer=not cfg.fix("D-012"), dot_matches_directory=cfg.fix("D-011"))
     elif verdict == "fake":
         verdict_obj = FakeVerdict()
     else:

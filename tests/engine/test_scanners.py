@@ -49,6 +49,10 @@ ALPHA = Matcher("test_scanners/alpha", Match("alpha"))
 BETA = Matcher("test_scanners/beta", Match("beta"))
 ALPHA_NOT_BETA = AllOf((ALPHA.match, Not(BETA.match)))
 FLAT = Matcher("test_scanners/flat", Match("alpha beta", mode="flat"))
+FLAT_RULES = RuleSet("test_scanners_flat", (
+    RuleSpec(id="test_scanners_flat/01-fail", outcome="fail", message="CWE-611:xxe_external_entity_references_a_resource",
+             cond=Match(r"<!ENTITY[[:space:]]+x[[:space:]]+SYSTEM", mode="flat"), source="t"),
+))
 
 
 def spec(scanner_id: str, fn, *, ported: bool = True, family: "str | None" = None) -> ScannerSpec:
@@ -90,6 +94,7 @@ class SupportTests(unittest.TestCase):
         with support.StubTools({"bandit": {"stdout": "it's out", "stderr": "err", "exit_code": 3}}, record_env=("DO_NOT_TRACK",)) as stubs:
             env = stubs.environ({"DO_NOT_TRACK": "1"})
             self.assertEqual(env["PATH"], stubs.dir)
+            self.assertEqual(stubs.environ({"PATH": "/usr/bin:/bin"})["PATH"], stubs.dir)      # the host's PATH is replaced, never extended
             proc = subprocess.run([os.path.join(stubs.dir, "bandit"), "-q", "a b", "", "x\ny"], capture_output=True, env=env, check=False)
             self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (3, b"it's out", b"err"))
             self.assertEqual(stubs.calls("bandit"), [["-q", "a b", "", "x\ny"]])
@@ -172,6 +177,19 @@ class SupportTests(unittest.TestCase):
     def test_parse_file_message(self) -> None:
         self.assertEqual(support.parse_file_message("[WARN] a | [FAIL] b | "), [("WARN", "a"), ("FAIL", "b")])
         self.assertEqual(support.parse_file_message(""), [])
+
+    def test_the_verdict_switches_follow_the_config_like_in_the_pipeline(self) -> None:
+        plain = support.make_context(self, "a.py", b"")
+        plain.ctx.record_pass()
+        plain.ctx.record_warn("w")
+        self.assertEqual(plain.status(), "PASS")                       # first writer (the frozen default copies bash)
+        worst = support.make_context(self, "a.py", b"", environ={"TRANSIT_FIXES": "D-012"})
+        worst.ctx.record_pass()
+        worst.ctx.record_warn("w")
+        self.assertEqual(worst.status(), "WARN")                       # D-012: the worst event decides
+        dotted = support.make_context(self, "a.py", b"", environ={"TRANSIT_FIXES": "D-011"},
+                                      allowlist=Allowlist({("detect-secrets", "."): "whole directory"}))
+        self.assertEqual(dotted.ctx.record_fail("detect-secrets:1_high_entropy_string(s)", file=dotted.repo.path), Outcome.ALLOWED)
 
     def test_default_policy_is_the_hardened_one(self) -> None:
         policy = support.default_policy()
@@ -493,6 +511,15 @@ class RunRulesTests(unittest.TestCase):
                                         ("FAIL", "engine:regex_timeout:test_scanners/03-fail")])
         self.assertEqual(h.verdict.verdict, "FAIL")
 
+    def test_the_engine_fails_of_run_rules_ask_not_to_be_downgraded(self) -> None:
+        h = support.make_context(self, "a.py", b"os.system(x)\n", verdict="fake")
+        run = RuleRun(hits=(RULES.rules[0],), skipped=("test_scanners/02-warn",), timed_out=("test_scanners/03-fail",))
+        with mock.patch.object(rules, "run_ruleset", return_value=run):
+            h.ctx.run_rules(RULES)
+        self.assertEqual([entry[2:] for entry in h.verdict.of("fail")],
+                         [("CWE-78:OS_command_injection_risk", None, True), ("engine:regex_timeout:test_scanners/03-fail", None, False),
+                          ("engine:scan_incomplete:test_scanners:time_budget", None, False)])
+
     def test_skipped_rules_from_the_rule_machinery_give_one_fail(self) -> None:
         h = support.make_context(self, "a.py", b"os.system(x)\n")
         run = RuleRun(hits=(RULES.rules[0],), skipped=("test_scanners/02-warn", "test_scanners/03-fail", "test_scanners/04-low"), timed_out=())
@@ -559,6 +586,130 @@ class SearchAndSpansTests(unittest.TestCase):
             h.ctx.spans(FLAT)                                        # not at the first next(): the call itself
 
 
+class SearchIncompleteTests(unittest.TestCase):
+    """bash ``grep_flat``: a search that cannot run to the end (grep exit 2 or more: out of memory, an I/O error) is neither a match nor a clean
+    file. It is the non-downgradable FAIL ``engine:search_incomplete`` on the file, once per file, and the caller is told so that it records no
+    PASS beside it (``FLAT_INCOMPLETE`` makes ``scan_xml`` and ``scan_powershell_xml`` set ``failed=true``). In the Python engine the search
+    that cannot finish is the one that runs out of memory (``MemoryError`` from the folded view of a huge file, or from the linear matcher)."""
+
+    DOC = b"<!ENTITY x SYSTEM 'file:///etc/passwd'>\n"
+
+    def test_a_memory_error_in_a_rule_search_is_the_fail_and_the_caller_is_told(self) -> None:
+        h = support.make_context(self, "a.xml", self.DOC)
+        with mock.patch.object(rx, "flat_view", side_effect=MemoryError):
+            out = h.ctx.run_rules(FLAT_RULES)
+        self.assertEqual(h.messages(), [("FAIL", "engine:search_incomplete")])
+        self.assertTrue(out.fired)                                   # bash failed=true: finish() must not record a PASS beside the FAIL
+        self.assertTrue(out.incomplete)
+        self.assertEqual(out.outcomes, ())
+        h.ctx.finish(out.fired)
+        self.assertEqual(h.snapshot().counters.pass_, 0)
+        self.assertEqual((h.status(), h.verdict.verdict), ("FAIL", "FAIL"))
+        record = h.snapshot().findings[0]
+        self.assertEqual((record.tool, record.rule_id, record.file), ("engine", "search_incomplete", "a.xml"))
+        self.assertEqual(h.snapshot().coverage[L5], "partial:a search could not be completed")
+
+    def test_the_search_that_finishes_is_unchanged(self) -> None:
+        h = support.make_context(self, "a.xml", self.DOC)
+        out = h.ctx.run_rules(FLAT_RULES)
+        self.assertEqual(h.messages(), [("FAIL", "CWE-611:xxe_external_entity_references_a_resource")])
+        self.assertEqual((out.fired, out.incomplete), (True, False))
+        self.assertEqual(h.snapshot().coverage, {})
+
+    def test_it_asks_not_to_be_downgraded(self) -> None:
+        h = support.make_context(self, "a.xml", self.DOC, verdict="fake")
+        with mock.patch.object(rules, "run_ruleset", side_effect=MemoryError):
+            h.ctx.run_rules(RULES)
+        self.assertEqual(h.verdict.of("fail"), [("fail", h.ctx.path, "engine:search_incomplete", None, False)])
+        self.assertEqual(h.verdict.of("incomplete"), [("incomplete", L5, "a search could not be completed")])
+
+    def test_it_cannot_be_allowlisted_or_lowered(self) -> None:
+        allow = Allowlist({("engine", "a.xml"): "x", ("search_incomplete", "a.xml"): "x", ("CWE-611", "a.xml"): "x"})
+        h = support.make_context(self, "a.xml", self.DOC, allowlist=allow, threshold=4)
+        with mock.patch.object(rules, "run_ruleset", side_effect=MemoryError):
+            h.ctx.run_rules(RULES)
+        self.assertEqual(h.messages(), [("FAIL", "engine:search_incomplete")])
+
+    def test_it_is_recorded_once_per_file_however_many_searches_fail(self) -> None:
+        h = support.make_context(self, "a.xml", self.DOC, registry=support.make_registry({"python": passing}))
+        with mock.patch.object(rules, "run_ruleset", side_effect=MemoryError), mock.patch.object(rules, "evaluate", side_effect=MemoryError):
+            h.ctx.run_rules(RULES)
+            h.ctx.run_rules(RULES)
+            self.assertFalse(h.ctx.search(ALPHA.match))
+            self.assertEqual(list(h.ctx.spans(ALPHA)), [])
+            child = h.ctx.delegate("python")                          # a delegated scanner is the same file, in the same chain
+        self.assertTrue(child)
+        self.assertEqual([m for m in h.messages() if m[1] == "engine:search_incomplete"], [("FAIL", "engine:search_incomplete")])
+        self.assertEqual(h.snapshot().counters.fail, 1)
+
+    def test_a_delegate_does_not_record_it_again(self) -> None:
+        def inner(ctx):
+            with mock.patch.object(rules, "run_ruleset", side_effect=MemoryError):
+                ctx.run_rules(RULES)
+            ctx.record_pass()
+            return True
+        reg = support.make_registry({"unknown": lambda ctx: (ctx.delegate("python"), True)[1], "python": inner})
+        h = support.make_context(self, "x", b"x", registry=reg)
+        with mock.patch.object(rules, "run_ruleset", side_effect=MemoryError):
+            h.ctx.run_rules(RULES)
+        invoke(reg, "unknown", h.ctx)
+        self.assertEqual(h.snapshot().counters.fail, 1)
+
+    def test_two_different_files_each_get_their_own(self) -> None:
+        h = support.make_context(self, "a.xml", self.DOC)
+        other = h.new_context("b.xml", data=self.DOC)
+        with mock.patch.object(rules, "run_ruleset", side_effect=MemoryError):
+            h.ctx.run_rules(RULES)
+            other.run_rules(RULES)
+        self.assertEqual(h.snapshot().counters.fail, 2)
+        self.assertEqual(h.messages(other.path), [("FAIL", "engine:search_incomplete")])
+
+    def test_search_reads_it_as_no_match_like_bash(self) -> None:
+        h = support.make_context(self, "a.txt", b"alpha\n")
+        with mock.patch.object(rules, "evaluate", side_effect=MemoryError):
+            self.assertFalse(h.ctx.search(ALPHA.match))
+        self.assertEqual(h.messages(), [("FAIL", "engine:search_incomplete")])
+
+    def test_spans_end_quietly_and_keep_what_they_had_yielded(self) -> None:
+        h = support.make_context(self, "a.txt", b"alpha 1\nalpha 2\n")
+
+        def walk(target, policy):
+            yield (0, 7)
+            raise MemoryError
+
+        with mock.patch.object(Matcher, "spans", side_effect=walk):
+            self.assertEqual(list(h.ctx.spans(ALPHA)), [(0, 7)])
+        self.assertEqual(h.messages(), [("FAIL", "engine:search_incomplete")])
+
+    def test_only_a_memory_error_is_a_search_that_could_not_finish(self) -> None:
+        for exc in (ValueError("x"), RuntimeError("x"), OSError(5, "io"), rx.RegexTimeout()):
+            h = support.make_context(self, "a.py", b"x")
+            with mock.patch.object(rules, "run_ruleset", side_effect=exc):
+                if isinstance(exc, rx.RegexTimeout):
+                    with self.assertRaises(rx.RegexTimeout):          # unchanged: invoke turns it into engine:regex_timeout
+                        h.ctx.run_rules(RULES)
+                else:
+                    with self.assertRaises(type(exc)):
+                        h.ctx.run_rules(RULES)
+            self.assertEqual(h.messages(), [], repr(exc))
+
+    def test_a_memory_error_raised_by_the_scanner_itself_stays_a_scanner_error(self) -> None:
+        h = support.make_context(self, "a.py", b"x", registry=support.make_registry({"python": lambda ctx: (_ for _ in ()).throw(MemoryError())}))
+        invoke(h.registry, "python", h.ctx)
+        self.assertEqual(h.messages(), [("FAIL", "engine:scanner_error:python:MemoryError")])
+
+    def test_through_invoke_a_failed_search_is_one_fail_and_the_scanner_is_handled(self) -> None:
+        def scan(ctx):
+            with mock.patch.object(rules, "run_ruleset", side_effect=MemoryError):
+                out = ctx.run_rules(RULES)
+            ctx.finish(out.fired)
+            return True
+        h = support.make_context(self, "a.xml", self.DOC, registry=support.make_registry({"xml": scan}))
+        self.assertTrue(invoke(h.registry, "xml", h.ctx))
+        self.assertEqual(h.messages(), [("FAIL", "engine:search_incomplete")])      # an event was recorded, so not no_outcome either
+        self.assertEqual(h.snapshot().counters.pass_, 0)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 class FileToolTests(unittest.TestCase):
     def ctx(self, *, found=("bandit", "shellcheck"), wrapper=None, verdict=None, rel="a.py"):
@@ -581,6 +732,21 @@ class FileToolTests(unittest.TestCase):
         self.assertEqual(locator.asked, ["bandit"])
         self.assertEqual(h.messages(), [])                           # the scanner writes its own `<tool> missing`
         self.assertEqual(h.snapshot().coverage, {})
+
+    def test_a_tool_that_is_not_installed_is_missing_even_when_a_wrapper_exists(self) -> None:
+        wrapper = support.StubWrapper("bandit", ToolOutcome(layer_state=None))
+        h, _ = self.ctx(found=(), wrapper=wrapper)
+        self.assertEqual(h.ctx.file_tool("bandit"), FileToolRun("missing", ()))
+        self.assertEqual(wrapper.requests, [])                       # the wrapper only runs when the tool exists
+        self.assertEqual(h.snapshot().coverage, {})
+
+    def test_the_wrapper_is_found_by_its_key_not_by_the_executable(self) -> None:
+        wrapper = support.StubWrapper("semgrep-js", ToolOutcome(layer_state=None, records=(Record("fail", "", "semgrep:js:2_findings"),)))
+        h, locator = self.ctx(found=("semgrep",), wrapper=wrapper)
+        run = h.ctx.file_tool("semgrep-js")
+        self.assertEqual((run.status, len(run.records)), ("ok", 1))
+        self.assertEqual(locator.asked, ["semgrep"])                 # ... while the executable searched for on PATH is semgrep
+        self.assertEqual(wrapper.requests[0].info.name, "semgrep")
 
     def test_the_executable_asked_for_is_the_one_of_file_tools(self) -> None:
         h, locator = self.ctx(found=())
@@ -889,6 +1055,42 @@ class InvokeTests(unittest.TestCase):
     def test_a_sniffed_scanner_that_takes_the_file_returns_true(self) -> None:
         h, result = self.run_one(passing, sniffed=True, scanner_id="rtf")
         self.assertIs(result, True)
+
+    def test_an_event_recorded_before_the_scanner_does_not_count_as_its_outcome(self) -> None:
+        # the universal layer has already recorded for this file: a scanner that records nothing is still a no_outcome
+        h = support.make_context(self, "a.py", b"x", registry=support.make_registry({"python": lambda ctx: True}))
+        h.ctx.record_warn("CWE-327:weak_crypto_algorithm")
+        self.assertTrue(invoke(h.registry, "python", h.ctx))
+        self.assertEqual(h.messages(), [("WARN", "CWE-327:weak_crypto_algorithm"), ("FAIL", "engine:scanner_error:python:no_outcome")])
+        # ... and one that records after that is fine
+        h2 = support.make_context(self, "a.py", b"x", registry=support.make_registry({"python": passing}))
+        h2.ctx.record_warn("CWE-327:weak_crypto_algorithm")
+        invoke(h2.registry, "python", h2.ctx)
+        self.assertEqual(h2.messages(), [("WARN", "CWE-327:weak_crypto_algorithm")])
+        self.assertEqual(h2.snapshot().counters.pass_, 1)
+
+    def test_a_scanner_id_is_made_safe_before_it_is_put_in_a_message(self) -> None:
+        h = support.make_context(self, "a.py", b"x", registry=support.make_registry({}))
+        invoke(h.registry, "bad\x1b[31m id<b>\nx", h.ctx)
+        (_, text), = h.messages()
+        self.assertTrue(text.startswith("engine:scanner_not_ported:bad"))
+        self.assertTrue(all(c.isalnum() or c in "_:.-" for c in text), text)
+        self.assertEqual(guard("a b\x1b", lambda ctx: 1 / 0, h.ctx, requires_outcome=False), True)
+        self.assertTrue(all(c.isalnum() or c in "_:.-" for _, text in h.messages()[1:] for c in text), h.messages())
+
+    def test_every_engine_fail_asks_not_to_be_downgraded(self) -> None:
+        # the real Verdict already exempts the engine: prefix; the flag says it too, for any sink that does not know the prefix
+        def explode(ctx):
+            raise ValueError()
+        for scanner, expect in ((explode, "engine:scanner_error:python:ValueError"),
+                                (lambda ctx: (_ for _ in ()).throw(ScanBudgetExceeded()), "engine:scan_incomplete:python:time_budget"),
+                                (lambda ctx: (_ for _ in ()).throw(FileReadError("io")), "engine:file_unreadable:io"),
+                                (lambda ctx: (_ for _ in ()).throw(rx.RegexTimeout()), "engine:regex_timeout:python"),
+                                (lambda ctx: True, "engine:scanner_error:python:no_outcome"),
+                                (lambda ctx: False, "engine:scanner_error:python:returned_not_mine")):
+            h = support.make_context(self, "a.py", b"x", registry=support.make_registry({"python": scanner}), verdict="fake")
+            invoke(h.registry, "python", h.ctx)
+            self.assertEqual([entry[2:] for entry in h.verdict.of("fail")], [(expect, None, False)], expect)
 
     def test_a_scanner_that_returns_none_is_judged_by_the_events_it_recorded(self) -> None:
         h, result = self.run_one(lambda ctx: ctx.record_pass())

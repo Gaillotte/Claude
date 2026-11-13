@@ -94,8 +94,8 @@ _SHEBANG_GLOB_CHARS = frozenset("?[\\")
 
 def lower_ext(path: str) -> str:
     """``${f##*.}`` lower-cased, with the dot: the text after the last ``.`` of the FULL path (``"." + whole path`` when
-    there is no dot, which routes nowhere). ``str.lower`` (matches bash in a UTF-8 locale)."""
-    # The hardened bash engine runs in the C locale, so only A-Z are lowered (``_ASCII_LOWER``); ``FileView.ext`` does the same.
+    there is no dot, which routes nowhere). Only A-Z are lowered: the hardened bash engine runs in the C locale (``LC_ALL=C``)."""
+    # ``str.lower`` would also fold the Kelvin sign and other characters outside ASCII (``_ASCII_LOWER``); ``FileView.ext`` does the same.
     return "." + path.rpartition(".")[2].translate(_ASCII_LOWER)
 
 
@@ -288,7 +288,7 @@ def classify_file(view: FileView, run: RunScanner) -> None:
         if flat_office_head(view):
             run("ooxml", True)
         return
-    if scanner_id == "docs":
+    if ext in RTF_SNIFFED_EXTS:
         # Word opens an RTF whatever it is called; the docs scanner reads what the office scanner does not take
         if rtf_head(view) and run("rtf", True):
             return

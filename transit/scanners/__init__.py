@@ -72,6 +72,9 @@ ScannerFn = Callable[["ScanContext"], bool]
 _MAX_DELEGATION_DEPTH = 3
 #: The coverage reason of a file whose rules were not all evaluated before its deadline (``partial:per-file time budget reached``).
 _BUDGET_NOTE = "per-file time budget reached"
+#: A search that could not run to the end (bash ``grep_flat``, grep exit 2 or more; here a ``MemoryError``): the FAIL on the file and the L5 note.
+_SEARCH_FAIL = "engine:search_incomplete"
+_SEARCH_NOTE = "a search could not be completed"
 _PER_FILE_LAYER = "L5_per_language_sast"
 #: The words a message of the engine may be built from: an engine-generated word, never repository text (a class name, a reason word, a label).
 _CLASS_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
@@ -208,6 +211,9 @@ class ScanContext:
         self._deadline = deadline
         self._sniffed = sniffed
         self._depth = depth
+        #: What happened to this FILE in this chain of contexts (the context and the scanners it delegates to): shared with every delegate, so
+        #: that "once per file" holds across them. Engine words only, never repository text.
+        self._chain: "set[str]" = set()
 
     # -- identity ---------------------------------------------------------------------------------------------
     @property
@@ -276,9 +282,15 @@ class ScanContext:
         non-downgradable FAIL ``engine:scan_incomplete:<ruleset name>:time_budget`` (once per call) and a ``partial`` note: a file
         whose rules were not all evaluated must not read as clean, and a hostile file must not be able to buy a WARN by burning the
         budget (review log R-02). A rule that timed out with no linear matcher becomes the non-downgradable FAIL
-        ``engine:regex_timeout:<rule id>``."""
+        ``engine:regex_timeout:<rule id>``. A search that cannot be completed (a ``MemoryError`` while the file is searched; bash ``grep_flat``
+        with a grep that exits 2 or more) is the non-downgradable FAIL ``engine:search_incomplete``, once per file, with a ``partial`` note;
+        the hits of that table are not known, and ``fired`` is True (bash ``failed=true``) so that ``finish`` records no PASS beside it."""
         target = self._view.target(data)
-        run = _rules.run_ruleset(ruleset, target, self._policy, deadline=self._deadline)
+        try:
+            run = _rules.run_ruleset(ruleset, target, self._policy, deadline=self._deadline)
+        except MemoryError:
+            self._search_failed()
+            return RuleOutcome(fired=True, outcomes=(), incomplete=True)
         fired = False
         outcomes: "list[tuple[str, Outcome]]" = []
         for rule in run.hits:                              # table order, which is the bash order
@@ -297,9 +309,15 @@ class ScanContext:
     def search(self, cond: Cond, *, data: "bytes | None" = None) -> bool:
         """``rules.evaluate`` with the run's policy, for scanners whose logic is not one table row. ``cond`` must be built at module level
         from ``Match`` objects registered by a ``RuleSet`` or a ``Matcher`` (``ValueError`` otherwise: an unregistered pattern would be
-        invisible to the fuzz gate). Raises ``ScanBudgetExceeded`` when the file deadline has passed."""
+        invisible to the fuzz gate). Raises ``ScanBudgetExceeded`` when the file deadline has passed. A search that cannot be completed
+        (``MemoryError``) is the FAIL ``engine:search_incomplete`` (see ``run_rules``) and reads as "no match" to the caller, like bash."""
         self.check_deadline()
-        return _rules.evaluate(cond, self._view.target(data), self._policy)
+        target = self._view.target(data)
+        try:
+            return _rules.evaluate(cond, target, self._policy)
+        except MemoryError:
+            self._search_failed()
+            return False
 
     def spans(self, matcher: Matcher, *, data: "bytes | None" = None) -> Iterator[tuple[int, int]]:
         """``matcher.spans`` with the run's policy over this file (or over ``data``, a derived view): the ``(start, end)`` offsets of the
@@ -311,9 +329,12 @@ class ScanContext:
         return self._checked(walk)
 
     def _checked(self, walk: "Iterator[tuple[int, int]]") -> "Iterator[tuple[int, int]]":
-        for item in walk:
-            self.check_deadline()
-            yield item
+        try:
+            for item in walk:
+                self.check_deadline()
+                yield item
+        except MemoryError:                                # the walk cannot go on: what was yielded stands, the rest is an unfinished search
+            self._search_failed()
 
     def target(self, data: "bytes | None" = None) -> Target:
         """``FileView.target`` (for ``credentials`` and other helpers that take a ``Target``)."""
@@ -379,6 +400,7 @@ class ScanContext:
         child = ScanContext(view=self._view, verdict=self._verdict, cfg=self._cfg, console=self._console, tools=self._tools,
                             wrappers=self._wrappers, registry=self._registry, policy=self._policy, temp=self._temp, scan_dir=self._scan_dir,
                             deadline=self._deadline, sniffed=sniffed, depth=self._depth + 1)
+        child._chain = self._chain                         # the same file: what was recorded once is not recorded again
         return invoke(self._registry, scanner_id, child)
 
     # -- used by invoke and guard only -------------------------------------------------------------------------------
@@ -388,6 +410,14 @@ class ScanContext:
     def _engine_fail(self, message: str) -> None:
         """An ``engine:`` FAIL for this file: never allowlisted, never below the threshold."""
         self.record_fail(message, downgradable=False)
+
+    def _search_failed(self) -> None:
+        """A search that could not run to the end: the FAIL ``engine:search_incomplete`` on this file (once per file; bash ``grep_flat`` checks
+        ``FINDINGS`` for it) and the L5 note. Neither a match nor a clean file, and never downgradable."""
+        if _SEARCH_FAIL not in self._chain:
+            self._chain.add(_SEARCH_FAIL)
+            self._engine_fail(_SEARCH_FAIL)
+        self.note_incomplete(_SEARCH_NOTE)
 
     def _show(self, where: str, exc: BaseException) -> None:
         """The traceback goes to stderr only (sanitised by the console). Best effort: the FAIL is already recorded."""

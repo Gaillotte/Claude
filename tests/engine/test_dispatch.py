@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 import build_pdf_filetypes  # noqa: E402
 from tests.engine import support  # noqa: E402
 from transit import dispatch  # noqa: E402
+from transit.files import FileReadError  # noqa: E402
 from transit.scanners import KNOWN_SCANNERS  # noqa: E402
 
 BASH = shutil.which("bash")
@@ -113,6 +114,17 @@ class RouteTableTests(unittest.TestCase):
             bases = {"|".join(p) for p, i in dispatch.BASENAME_ROUTES if KNOWN_SCANNERS[i] == key}
             self.assertEqual(exts, set(fam.get("ext", [])), "extensions of the family %s" % key)
             self.assertEqual(bases, set(fam.get("base", [])), "basename arms of the family %s" % key)
+
+    def test_the_rtf_sniffed_extensions_are_exactly_the_docs_routes(self) -> None:
+        self.assertEqual(dispatch.RTF_SNIFFED_EXTS, {e for e, i in dispatch.EXT_ROUTES.items() if i == "docs"})
+        self.assertEqual(dispatch.RTF_SNIFFED_EXTS, frozenset({".md", ".txt", ".rst"}))
+
+    def test_the_rtf_sniffed_table_is_what_classify_file_reads(self) -> None:
+        # the constant is the sniffing arm of bash (`.md|.txt|.rst)`): an extension that is not in it is not probed for an RTF header
+        with mock.patch.object(dispatch, "RTF_SNIFFED_EXTS", frozenset({".md"})):
+            self.assertEqual(classify(self, "n.md", RTF), [("rtf", True)])
+            self.assertEqual(classify(self, "n.txt", RTF), [("docs", False)])
+            self.assertEqual(classify(self, "n.rst", RTF), [("docs", False)])
 
     def test_the_shebang_table_matches_the_deck(self) -> None:
         # build_pdf_filetypes lists the shebang routes of scan_unknown by scanner function; the ids map onto the same families
@@ -387,6 +399,19 @@ class ShebangTests(unittest.TestCase):
                 subject = "".join(rng.choice("abcx") for _ in range(rng.randint(0, 9)))
                 self.assertEqual(dispatch._star_glob(pattern.encode(), subject.encode()), fnmatch.fnmatchcase(subject, pattern), (pattern, subject))
 
+    def test_the_star_glob_equals_fnmatchcase_on_every_short_subject(self) -> None:
+        # exhaustive, not sampled: a prefix and a suffix that overlap (``ab*ba`` against ``aba``) is a case a random draw rarely makes
+        import itertools
+        patterns = ["ab*ba", "a*a", "*a*", "a*b*a", "ab*", "*ab", "*ab*ba*", "a**a", "b*b*b", "*", "ab", "#!*bash", "#!*env bash"]
+        for pattern in patterns:
+            for length in range(0, 7):
+                for letters in itertools.product("abx", repeat=length):
+                    subject = "".join(letters)
+                    self.assertEqual(dispatch._star_glob(pattern.encode(), subject.encode()), fnmatch.fnmatchcase(subject, pattern), (pattern, subject))
+        for subject in ("#!/bin/bash", "#!bash", "#!env bash", "#!/usr/bin/env bash", "#!envbash", "#!/bin/bashx"):
+            for pattern in ("#!*bash", "#!*env bash"):
+                self.assertEqual(dispatch._star_glob(pattern.encode(), subject.encode()), fnmatch.fnmatchcase(subject, pattern), (pattern, subject))
+
     def test_a_pattern_with_other_wildcards_still_routes_through_fnmatch(self) -> None:
         with mock.patch.object(dispatch, "SHEBANG_ROUTES", (("#!/bin/?ash", "shell"), ("#!/usr/bin/[np]*", "js"))):
             self.assertEqual(dispatch.shebang_scanner(b"#!/bin/bash"), "shell")
@@ -442,6 +467,90 @@ class ShebangTests(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+#: The scanner function of ``scan_pipeline.sh`` each id of ``KNOWN_SCANNERS`` stands for (design 7.3); ``scan_office`` serves four ids and the
+#: two inline arms (``json``, ``docs``) are not functions.
+BASH_FUNCTION = {
+    "python": "scan_python", "setuppy": "scan_setup_py", "js": "scan_javascript", "java": "scan_java", "php": "scan_php", "ruby": "scan_ruby",
+    "go": "scan_go", "c": "scan_c_cpp", "rust": "scan_rust", "kotlin": "scan_kotlin", "csharp": "scan_csharp", "shell": "scan_shell",
+    "powershell.text": "scan_powershell", "powershell.xml": "scan_powershell_xml", "batch": "scan_bat", "makefile": "scan_makefile",
+    "cmake": "scan_cmake", "gradle": "scan_gradle", "manifest.package_json": "scan_package_json", "manifest.requirements": "scan_requirements",
+    "xml": "scan_xml", "yaml": "scan_yaml", "terraform": "scan_terraform", "docker": "scan_docker", "html": "scan_html", "pdf": "scan_pdf",
+    "sql": "scan_sql", "binary": "scan_binary", "archive": "scan_archive", "jar": "scan_jar", "unknown": "scan_unknown",
+    "ooxml": "scan_office", "legacy_office": "scan_office", "odf": "scan_office", "rtf": "scan_office", "json": "inline", "docs": "inline",
+}
+
+
+def _bash_calls(paths: "list[str]", office_rc: int) -> "list[list[str]]":
+    """What the REAL ``classify_file`` (and ``_rtf_head``, ``_flat_office_head``) of scan_pipeline.sh calls for each path, in the C locale, with
+    every scanner replaced by a stub that prints its name. ``scan_office`` prints ``scan_office:sniffed`` or ``scan_office:`` and answers
+    ``office_rc`` when it was asked to sniff; the two inline rules (``grep_check``) never fire, so ``record_pass`` prints ``inline``."""
+    stubs = [
+        "scan_universal_patterns() { :; }", "grep_check() { return 1; }", "record_pass() { printf 'inline\\n'; }", "record_fail() { printf 'fail\\n'; }",
+        'scan_office() { printf "scan_office:%s\\n" "${2:-}"; if [[ "${2:-}" == sniffed ]]; then return ' + str(office_rc) + '; fi; return 0; }',
+    ]
+    for function in sorted(set(BASH_FUNCTION.values()) - {"scan_office", "inline"}):
+        stubs.append("%s() { printf '%s\\n'; }" % (function, function))
+    script = "\n".join([bash_function("_rtf_head"), bash_function("_flat_office_head"), bash_function("classify_file")] + stubs + [
+        'while IFS= read -r -d "" f; do printf "#\\n"; classify_file "$f"; done'])
+    stdin = b"".join(os.fsencode(path) + b"\0" for path in paths)
+    chunks = run_bash(script, stdin).decode("utf-8", "surrogateescape").split("#\n")[1:]
+    return [chunk.split("\n")[:-1] for chunk in chunks]
+
+
+def _python_calls(repo: support.TempRepo, rel: str, office_rc: int) -> "list[str]":
+    calls: "list[str]" = []
+
+    def run(scanner_id: str, sniffed: bool) -> bool:
+        function = BASH_FUNCTION[scanner_id]
+        calls.append("scan_office:sniffed" if (function == "scan_office" and sniffed) else "scan_office:" if function == "scan_office" else function)
+        return office_rc == 0 if sniffed else True
+
+    dispatch.classify_file(repo.view(rel), run)
+    return calls
+
+
+class ClassifyAgainstBashTests(unittest.TestCase):
+    """``classify_file`` against the real bash ``classify_file``: the same scanner calls, in the same order, for every routed extension in two
+    letter cases, every basename arm, hostile names and the three kinds of content that change the route (plain, RTF, Flat OPC)."""
+
+    @staticmethod
+    def _cases() -> "list[tuple[str, bytes]]":
+        names = []
+        for ext in sorted(dispatch.EXT_ROUTES):
+            names += ["file" + ext, "FILE" + ext.upper(), "sub.dir/Mixed" + ext.capitalize()]
+        for patterns, _ in dispatch.BASENAME_ROUTES:
+            for pattern in patterns:
+                names += [pattern.replace("*", ""), pattern.replace("*", "-x.y"), "deep/" + pattern.replace("*", "1")]
+        names += ["Setup.py", "dockerfile", "MAKEFILE", "CMakeLists.cmake", "CMakeLists.txt.bak", "my.package.json", "package.json.orig",
+                  "requirements.md", "main.kts", "foo.main.kts", "x.", ".hidden", "LICENSE", "a.sh/README", "sub.py/data", "Makefile.gradle",
+                  "Dockerfile.gradle", "makefile.gradle.kts", "x.\u212at", "x.\u0130", "a b.py", "q\"uote's.sh", "semi;x.py", "-n.py", "*.txt",
+                  "\udcff.PY", "setup.py\n", "Makefile\n\n", "a.py\n", "new\nline.js", "dollar$(x).md", "unknown.weird", "entrypoint", "tar.GZ"]
+        contents = [b"plain text\n", RTF, FLAT_OPC, b"\0\0" + RTF, b" \n" + RTF, WORDML, EXCEL2003, b""]
+        return [(name, data) for name in names for data in contents]
+
+    def test_every_case_equals_bash(self) -> None:
+        if not BASH:
+            self.skipTest("bash is not installed")
+        cases = self._cases()
+        self.assertGreater(len(cases), 1000)
+        repo = support.TempRepo()
+        self.addCleanup(repo.cleanup)
+        rels = []
+        for index, (name, data) in enumerate(cases):
+            rel = "c%04d/%s" % (index, name)
+            repo.write(rel, data)
+            rels.append(rel)
+        for office_rc in (0, 1):
+            expected = _bash_calls([repo.path + "/" + rel for rel in rels], office_rc)
+            self.assertEqual(len(expected), len(cases))
+            bad = []
+            for (name, data), rel, want in zip(cases, rels, expected):
+                got = _python_calls(repo, rel, office_rc)
+                if got != want:
+                    bad.append((name, data[:12], got, want))
+            self.assertEqual(bad[:5], [], "%d of %d differ (scan_office answers %d)" % (len(bad), len(cases), office_rc))
+
+
 class ClassifyFileTests(unittest.TestCase):
     def test_every_extension_routes_to_its_scanner_in_any_case(self) -> None:
         for ext, scanner_id in sorted(dispatch.EXT_ROUTES.items()):
@@ -559,6 +668,25 @@ class ClassifyFileTests(unittest.TestCase):
     def test_the_shebang_of_an_unknown_file_is_not_dispatch_business(self) -> None:
         # classify_file sends it to ``unknown``; scanners.unknown reads the shebang (it calls dispatch.shebang_scanner)
         self.assertEqual(classify(self, "entrypoint", b"#!/usr/bin/env python3\nimport os\n"), [("unknown", False)])
+
+    def test_a_probe_that_cannot_read_the_file_raises_and_is_never_read_as_clean(self) -> None:
+        # the head of the file is what decides, so a file that cannot be read has no route: the caller (layers) records the FAIL
+        for rel in ("n.txt", "n.xml", "plain_name"):
+            repo = support.TempRepo({rel: b"x"})
+            self.addCleanup(repo.cleanup)
+            view = repo.view(rel)
+            os.unlink(os.path.join(repo.path, rel))
+            calls: "list[tuple[str, bool]]" = []
+            with self.assertRaises(FileReadError):
+                dispatch.classify_file(view, lambda i, s: calls.append((i, s)) or True)
+            self.assertIn(calls, ([], [("xml", False)]), rel)          # nothing was routed as a clean file (the xml scanner may have been asked first)
+        repo = support.TempRepo({"a.py": b"x"})
+        self.addCleanup(repo.cleanup)
+        view = repo.view("a.py")
+        os.unlink(os.path.join(repo.path, "a.py"))
+        calls = []
+        dispatch.classify_file(view, lambda i, s: calls.append((i, s)) or True)         # no probe for a routed extension: its scanner reads (and is guarded)
+        self.assertEqual(calls, [("python", False)])
 
     def test_the_run_callback_is_the_only_way_out(self) -> None:
         repo = support.TempRepo({"a.py": b"x"})
