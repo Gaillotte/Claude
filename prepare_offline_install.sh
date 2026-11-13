@@ -111,7 +111,7 @@ done
 
 # ── 4. The pipeline itself ────────────────────────────────────────────────────
 info "[4/5] Pipeline scripts"
-for f in ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh \
+for f in ai_transit.sh fetch_repo.sh scan_pipeline.sh scan_pipeline.py docker-run.sh \
          prepare_offline_cache.sh prepare_offline_install.sh \
          generate_excel_report.py selfcheck.py \
          Dockerfile INSTALL.md OFFLINE_RUNBOOK.md CLAUDE.md; do
