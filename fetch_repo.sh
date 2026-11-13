@@ -131,7 +131,6 @@ else
 fi
 
 # ── Diff mode: list files changed since SINCE_COMMIT ─────────────────────────
-DIFF_FILES_LIST=""
 if [[ -n "${SINCE_COMMIT:-}" ]]; then
     info "Diff mode: computing changed files since ${SINCE_COMMIT}"
     # Temporarily keep .git for the diff, then remove it
@@ -139,14 +138,16 @@ if [[ -n "${SINCE_COMMIT:-}" ]]; then
         # For remote clone we used --depth 1; need to fetch the reference commit too
         git -C "$DEST" fetch --depth=2 origin "${SINCE_COMMIT}" 2>/dev/null || true
     fi
-    DIFF_FILES_LIST=$(git -C "$DEST" diff --name-only "${SINCE_COMMIT}" HEAD 2>/dev/null \
-        | sed "s|^|${DEST}/|" | tr '\n' ':' || true)
-    if [[ -n "$DIFF_FILES_LIST" ]]; then
-        # Count non-empty entries: the list has a trailing ':' delimiter, so a
-        # plain `tr | wc -l` would report one extra.
-        info "Diff mode: $(echo "$DIFF_FILES_LIST" | tr ':' '\n' | grep -c .) changed file(s)"
-        echo "$DIFF_FILES_LIST" > "${WORK_DIR}/.diff_files"
+    # The names are written exactly as git -z prints them: relative to the repository root, each ended by a
+    # NUL byte, never quoted. With the newline-to-colon list this replaced, a name containing ':' was split in
+    # two and git's quoting of a non-ASCII or special name ("\303\251.py") matched no file, so such a changed
+    # file was never scanned. scan_pipeline.sh joins the names to the scan directory.
+    DIFF_TMP="${WORK_DIR}/.diff_files.$$"
+    if git -C "$DEST" diff -z --name-only "${SINCE_COMMIT}" HEAD > "$DIFF_TMP" 2>/dev/null && [[ -s "$DIFF_TMP" ]]; then
+        mv -f "$DIFF_TMP" "${WORK_DIR}/.diff_files"
+        info "Diff mode: $(grep -zc '' "${WORK_DIR}/.diff_files" || true) changed file(s)"
     else
+        rm -f "$DIFF_TMP"
         warn "Diff mode: commit ${SINCE_COMMIT} not reachable or no files changed — falling back to full scan"
     fi
 fi
