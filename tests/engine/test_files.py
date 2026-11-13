@@ -253,14 +253,21 @@ class GlobMatchTests(unittest.TestCase):
                 self.assertIs(want, expected, "the table itself disagrees with glibc")
 
     def test_small_exhaustive_against_glibc(self):
+        """Every pattern of up to three symbols against every text of up to two (329,056 pairs), in batches so the test process stays small:
+        the memory tests of other modules read the peak resident size, which a child process inherits from its parent."""
         psym = [b"a", b"b", b"[", b"]", b"!", b"^", b"-", b"\\", b":", b"*", b"?", b"z", b"=", b".", b"\xc3"]
         tsym = [b"a", b"b", b"[", b"]", b"-", b"!", b"/", b":", b"\xc3"]
         pats = [b"".join(c) for n in range(0, 4) for c in itertools.product(psym, repeat=n)]
         texts = [b"".join(c) for n in range(0, 3) for c in itertools.product(tsym, repeat=n)]
-        pairs = [(p, t) for p in pats for t in texts]
-        want = fnmatch_oracle(pairs)
-        bad = [(p, t, w) for (p, t), w in zip(pairs, want) if files.glob_match(s(p), s(t)) is not w]
-        self.assertEqual([], bad[:10], "%d of %d pairs differ from glibc fnmatch" % (len(bad), len(pairs)))
+        checked = 0
+        bad = []
+        for start in range(0, len(pats), 100):
+            batch = [(p, t) for p in pats[start:start + 100] for t in texts]
+            want = fnmatch_oracle(batch)
+            bad += [(p, t, w) for (p, t), w in zip(batch, want) if files.glob_match(s(p), s(t)) is not w]
+            checked += len(batch)
+        self.assertEqual([], bad[:10], "%d of %d pairs differ from glibc fnmatch" % (len(bad), checked))
+        self.assertGreater(checked, 300000)
 
     def test_random_longer_against_glibc(self):
         rnd = random.Random(20261113)
