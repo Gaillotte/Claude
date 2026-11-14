@@ -3446,6 +3446,316 @@ PY
     assert_not_contains "$(k7m env_S_nothing)"  "[FAIL]" "F7: env -S with nothing after it breaks nothing"
     assert_not_contains "$(k7m env_Sbash_benign)" "[FAIL]" "F7: a harmless script with -Sbash is not failed by being routed"
     rm -f "$K7_ABS" "${ROOT_DIR}/${K7_REL}"
+
+    # ── F8 to F11: both engines ──────────────────────────────────────────────────────────────────────
+    # The Python engine copies the shell (docs/python_port_thin_plan.md), so every scenario of F8 to F11 is scanned under
+    # TRANSIT_ENGINE=bash and under TRANSIT_ENGINE=python, and every assertion is made for both; the engine is named in each.
+    k_status() { k_py "$KREP" "d['file_results'].get(a, {}).get('status', 'ABSENT')" "$1"; }   # k_status <file_results key>
+    k_global() { k_msgs "$KREP" __global__; }
+    k_tail()   { printf '%s\n' "$KOUT" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g'; }
+    k_layers() { k_py "$KREP" "' '.join(k + '=' + d['coverage'].get(k, 'ABSENT') for k in ('L4_patterns', 'L5_per_language_sast'))"; }
+
+    # ── F8: the pipeline's own control files do not count as 'something was examined' ──────────────────
+    # .transitignore, .transit-allow.json and the fetcher's .manifest_sha256.txt, at the root, are scanned like any file but
+    # are not "a file that was examined": `[!.]*` removed every file except .transitignore, which then counted, and the run
+    # passed with layers 4 and 5 reading "ran". In a diff run only the changed files count (the listing used to count every file
+    # before the diff filter). A repository that has nothing but control files has nothing the pattern removed.
+    K8="${SCRATCH}/k8"; rm -rf "$K8"; mkdir -p "$K8"
+    K8_NS="L4_patterns=skipped:nothing scanned (every file excluded) L5_per_language_sast=skipped:nothing scanned (every file excluded)"
+    K8_MANIFEST='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./x'
+    k_hostile "$K8/ti_only" cfg.py;  printf '[!.]*\n' > "$K8/ti_only/.transitignore"
+    k_hostile "$K8/three" cfg.py;    printf '[!.]*\n' > "$K8/three/.transitignore"
+    printf '[]\n' > "$K8/three/.transit-allow.json"; printf '%s\n' "$K8_MANIFEST" > "$K8/three/.manifest_sha256.txt"
+    mkdir -p "$K8/ctl_clean" "$K8/ctl_dirty" "$K8/nested/sub"
+    printf 'zzz\n' > "$K8/ctl_clean/.transitignore";  printf '%s\n' "$K8_MANIFEST" > "$K8/ctl_clean/.manifest_sha256.txt"
+    printf 'zzz\n# password = "hunter2hunter2"\n' > "$K8/ctl_dirty/.transitignore"
+    k_hostile "$K8/nested" cfg.py;   printf 'cfg.py\n' > "$K8/nested/.transitignore"; printf '%s\n' "$K8_MANIFEST" > "$K8/nested/sub/.manifest_sha256.txt"
+    k_hostile "$K8/diff_all" a.py;   k_hostile "$K8/diff_all" b.py;   printf 'a.py\n' > "$K8/diff_all/.transitignore"
+    k_hostile "$K8/diff_other" a.py; k_hostile "$K8/diff_other" b.py; printf 'b.py\n' > "$K8/diff_other/.transitignore"
+    k_hostile "$K8/diff_ctl" b.py;   printf 'zzz\n' > "$K8/diff_ctl/.transitignore"
+    K8DW="${SCRATCH}/k8_dwork"; rm -rf "$K8DW"; mkdir -p "$K8DW"
+    k8_diff() {   # k8_diff <name> <dir> <the one changed file>: a diff run (SINCE_COMMIT, a NUL-separated .diff_files); sets KOUT, KEC, KREP
+        printf '%s\0' "$3" > "$K8DW/.diff_files"
+        KENV=(TRANSIT_ENGINE="$K_ENG" SINCE_COMMIT=abc); KWD="$K8DW"; k_scan "$2" "$1_${K_ENG}"; KENV=(); KWD=""
+    }
+    for K_ENG in bash python; do
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K8/ti_only" "k8_ti_only_${K_ENG}"; KENV=()
+        assert_eq "FAIL 1" "$(k_verdict) $KEC" "F8 [${K_ENG}]: a .transitignore of [!.]* that leaves only .transitignore itself is nothing scanned: FAIL, exit 1"
+        assert_contains "$(k_global)" "[FAIL] engine:nothing_scanned" "F8 [${K_ENG}]: …with the FAIL engine:nothing_scanned on __global__"
+        assert_eq "$K8_NS" "$(k_layers)" "F8 [${K_ENG}]: …and layers 4 and 5 do not read as ran"
+        assert_eq "PASS" "$(k_status "${K8}/ti_only/.transitignore")" "F8 [${K_ENG}]: ….transitignore is still scanned like any file (it has its own entry)"
+        assert_eq "ABSENT" "$(k_status "${K8}/ti_only/cfg.py")" "F8 [${K_ENG}]: …and the file the pattern removed is not scanned (control)"
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K8/three" "k8_three_${K_ENG}"; KENV=()
+        assert_eq "FAIL 1" "$(k_verdict) $KEC" "F8 [${K_ENG}]: .transitignore, .transit-allow.json and .manifest_sha256.txt together are still nothing scanned"
+        assert_contains "$(k_global)" "[FAIL] engine:nothing_scanned" "F8 [${K_ENG}]: …the FAIL is engine:nothing_scanned"
+        assert_eq "PASS PASS PASS" "$(k_status "${K8}/three/.transitignore") $(k_status "${K8}/three/.transit-allow.json") $(k_status "${K8}/three/.manifest_sha256.txt")" \
+            "F8 [${K_ENG}]: …each of the three is scanned and has its own entry"
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K8/ctl_clean" "k8_ctl_clean_${K_ENG}"; KENV=()
+        assert_eq "PASS ran ran" "$(k_verdict) $(k_cov L4_patterns) $(k_cov L5_per_language_sast)" \
+            "F8 [${K_ENG}]: a repository of only control files with a pattern is not nothing scanned (the pattern removed nothing)"
+        assert_not_contains "$(k_global)" "engine:nothing_scanned" "F8 [${K_ENG}]: …no engine:nothing_scanned"
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K8/ctl_dirty" "k8_ctl_dirty_${K_ENG}"; KENV=()
+        assert_contains "$(k_msgs "$KREP" "${K8}/ctl_dirty/.transitignore")" "CWE-798:hardcoded_credential" \
+            "F8 [${K_ENG}]: …and a credential written into .transitignore is found: a control file is scanned"
+        assert_not_contains "$(k_global)" "engine:nothing_scanned" "F8 [${K_ENG}]: …and that run is no nothing-scanned either"
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K8/nested" "k8_nested_${K_ENG}"; KENV=()
+        assert_eq "PASS ran PASS" "$(k_verdict) $(k_cov L4_patterns) $(k_status "${K8}/nested/sub/.manifest_sha256.txt")" \
+            "F8 [${K_ENG}]: a .manifest_sha256.txt in a sub-directory is something examined: only the one at the root is exempt"
+        k8_diff k8_diff_all "$K8/diff_all" a.py
+        assert_eq "FAIL 1" "$(k_verdict) $KEC" "F8 [${K_ENG}]: diff run, the only changed file removed by .transitignore (an unchanged file survives): nothing scanned"
+        assert_contains "$(k_global)" "[FAIL] engine:nothing_scanned" "F8 [${K_ENG}]: …engine:nothing_scanned"
+        assert_eq "$K8_NS" "$(k_layers)" "F8 [${K_ENG}]: …layers 4 and 5 skipped"
+        assert_eq "ABSENT" "$(k_status "${K8}/diff_all/b.py")" "F8 [${K_ENG}]: …the unchanged file was not scanned (diff mode)"
+        k8_diff k8_diff_other "$K8/diff_other" a.py
+        assert_eq "FAIL" "$(k_status "${K8}/diff_other/a.py")" "F8 [${K_ENG}]: diff run, the changed file is not excluded: it is scanned and fails on its content"
+        assert_not_contains "$(k_global)" "engine:nothing_scanned" "F8 [${K_ENG}]: …and it is not nothing scanned"
+        k8_diff k8_diff_ctl "$K8/diff_ctl" .transitignore
+        assert_eq "PASS ran ABSENT" "$(k_verdict) $(k_cov L4_patterns) $(k_status "${K8}/diff_ctl/b.py")" \
+            "F8 [${K_ENG}]: diff run, the only changed file is .transitignore: nothing the pattern removed counts, the unchanged hostile file is not scanned"
+    done
+
+    # ── F9: symbolic links are reported, never followed, and never archived as their targets ─────────────
+    # find -type f lists no link and nothing follows one, so a link used to leave no trace; zip without -y read the target in, so a
+    # link to /etc/passwd, or to a directory outside the repository, put that file or that tree into the approved archive unscanned.
+    # A link whose target text is absolute, or climbs above the root of the scan, is a FAIL; any other link is a WARN.
+    K9="${SCRATCH}/k9_repo"; K9O="${SCRATCH}/k9_outside"; rm -rf "$K9" "$K9O"
+    mkdir -p "$K9/sub" "$K9/node_modules/pkg" "$K9O/hostile_dir"
+    printf 'print(1)\n' > "$K9/ok.py"; k_hostile "$K9/sub" hostile.py; k_hostile "$K9O" outside.py; k_hostile "$K9O/hostile_dir" h.py
+    K9_NL=$'nl\nlink'
+    k9_target() { local x; x=$(readlink -- "${K9}/$1"); printf '%s' "${x/#"$K9O"/<outside>}"; }   # the target text, without the scratch path
+    K9_FAIL=(abs_link abs_dir up_link up_dir sub/deep_up down_then_up root_up "$K9_NL")
+    K9_WARN=(rel_link dir_link dangling sub/ok_up inner dotted trailing sub/to_root sub/self)
+    ln -s /etc/passwd "$K9/abs_link";                 ln -s "${K9O}/hostile_dir" "$K9/abs_dir"      # absolute targets
+    ln -s ../k9_outside/outside.py "$K9/up_link";     ln -s ../k9_outside/hostile_dir "$K9/up_dir"  # relative, above the root
+    ln -s ../../x "$K9/sub/deep_up";                  ln -s sub/../../x "$K9/down_then_up"          # one level too far, also after going down
+    ln -s .. "$K9/root_up";                           ln -s /etc/passwd "$K9/$K9_NL"                # the parent of the root; a newline in the name
+    ln -s ok.py "$K9/rel_link";                       ln -s sub "$K9/dir_link"                      # relative, inside
+    ln -s nowhere.txt "$K9/dangling";                 ln -s ../ok.py "$K9/sub/ok_up"
+    ln -s sub/../ok.py "$K9/inner";                   ln -s ./sub/./ok_up "$K9/dotted"
+    ln -s sub/ "$K9/trailing";                        ln -s .. "$K9/sub/to_root"                    # sub/.. is the root itself
+    ln -s . "$K9/sub/self"
+    ln -s /etc/passwd "$K9/node_modules/pkg/lnk"                                                    # below a built-in exclusion
+    K9W="${SCRATCH}/k9_warn"; rm -rf "$K9W"; mkdir -p "$K9W/sub"; printf 'print(1)\n' > "$K9W/ok.py"; printf 'print(2)\n' > "$K9W/sub/inner.py"
+    ln -s ok.py "$K9W/rel_link"; ln -s sub "$K9W/dir_link"; ln -s nowhere.txt "$K9W/dangling"; ln -s ../ok.py "$K9W/sub/ok_up"
+    K9Z="${SCRATCH}/k9_zip"; rm -rf "$K9Z"; mkdir -p "$K9Z/sub"
+    printf 'KMARK_FILE_%s\n' "CONTENT" > "$K9Z/real.txt"; printf 'KMARK_DIR_%s\n' "CONTENT" > "$K9Z/sub/inner.txt"
+    ln -s real.txt "$K9Z/file_link"; ln -s sub "$K9Z/dir_link"
+    K9E="${SCRATCH}/k9_escape"; rm -rf "$K9E"; mkdir -p "$K9E"; printf 'print(1)\n' > "$K9E/ok.py"; ln -s /etc/passwd "$K9E/passwd_link"
+    for K_ENG in bash python; do
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K9" "k9_${K_ENG}"; KENV=()
+        assert_eq "FAIL 1" "$(k_verdict) $KEC" "F9 [${K_ENG}]: a repository with links that leave the scanned directory fails"
+        for _l in "${K9_FAIL[@]}"; do
+            _lbl=${_l//$'\n'/<LF>}
+            assert_eq "[FAIL] symlink:target_outside_the_scanned_directory" "$(k_msgs "$KREP" "${K9}/${_l}")" \
+                "F9 [${K_ENG}]: the link '${_lbl}' (-> $(k9_target "${_l}")) is a FAIL, and only that"
+        done
+        for _l in "${K9_WARN[@]}"; do
+            assert_eq "[WARN] symlink:not_followed_its_target_is_not_scanned_through_the_link" "$(k_msgs "$KREP" "${K9}/${_l}")" \
+                "F9 [${K_ENG}]: the link '${_l}' (-> $(k9_target "${_l}")) stays inside: a WARN, and only that"
+        done
+        assert_eq "ABSENT" "$(k_status "${K9}/node_modules/pkg/lnk")" "F9 [${K_ENG}]: a link below a pruned directory (node_modules) stays silent"
+        assert_eq "0" "$(k_py "$KREP" "sum(1 for k in d['file_results'] if any(s in k for s in ('/dir_link/', '/abs_dir/', '/up_dir/', '/trailing/')))")" \
+            "F9 [${K_ENG}]: nothing is followed: no file is reported through a link to a directory"
+        assert_eq "0" "$(k_py "$KREP" "sum(1 for k in d['file_results'] if k.startswith(a))" "$K9O")" \
+            "F9 [${K_ENG}]: …and nothing outside the scanned directory is scanned"
+        assert_eq "FAIL" "$(k_status "${K9}/sub/hostile.py")" "F9 [${K_ENG}]: …while the real file below sub is scanned as before"
+        assert_eq "${#K9_FAIL[@]}" "$(k_py "$KREP" "sum(1 for f in d['findings'] if f['rule_id'] == 'target_outside_the_scanned_directory')")" \
+            "F9 [${K_ENG}]: each escaping link is one structured finding record"
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K9W" "k9w_${K_ENG}"; KENV=()
+        assert_eq "PASS 0" "$(k_verdict) $KEC" "F9 [${K_ENG}]: a repository whose links all stay inside passes (the links are WARN only)"
+        assert_eq "4" "$(k_py "$KREP" "sum(1 for k, v in d['file_results'].items() if 'symlink:not_followed' in v['message'])")" \
+            "F9 [${K_ENG}]: …and all four are reported"
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K9E" "k9e_${K_ENG}"; KENV=()
+        assert_eq "FAIL 1" "$(k_verdict) $KEC" "F9 [${K_ENG}]: a repository whose only fault is one link to /etc/passwd fails"
+        assert_eq "[FAIL] symlink:target_outside_the_scanned_directory" "$(k_msgs "$KREP" "${K9E}/passwd_link")" "F9 [${K_ENG}]: …and the link is the finding"
+        TRANSIT_ENGINE="$K_ENG" run_pipeline "$K9Z" --quiet
+        K9ZIP=$(ls "${RUN_WORK}"/out/*.zip 2>/dev/null | sed -n '1p')
+        assert_eq "0" "$RUN_EXIT" "F9 [${K_ENG}]: ai_transit.sh approves the repository whose links stay inside (a file link and a directory link)"
+        assert_eq "ll" "$([[ -n "$K9ZIP" ]] && unzip -Z "$K9ZIP" file_link dir_link 2>/dev/null | cut -c1 | tr -d '\n')" \
+            "F9 [${K_ENG}]: …the archive holds both as links (zip -y)"
+        assert_eq "1 1" "$([[ -n "$K9ZIP" ]] && echo "$(unzip -p "$K9ZIP" | grep -c KMARK_FILE) $(unzip -p "$K9ZIP" | grep -c KMARK_DIR)")" \
+            "F9 [${K_ENG}]: …and the content of each target is in it once, as the real file, not again through the link"
+        assert_eq "0" "$([[ -n "$K9ZIP" ]] && unzip -Z1 "$K9ZIP" | grep -c '^dir_link/')" "F9 [${K_ENG}]: …no entry below the directory link"
+        TRANSIT_ENGINE="$K_ENG" run_pipeline "$K9E" --quiet
+        assert_eq "1 0" "$RUN_EXIT $(ls "${RUN_WORK}"/out/*.zip 2>/dev/null | wc -l | tr -d ' ')" \
+            "F9 [${K_ENG}]: ai_transit.sh rejects a link to /etc/passwd and builds no archive that would carry the file"
+    done
+
+    # ── F10: a file listing that failed is a hard FAIL, not 'every file excluded' ───────────────────────
+    # The listing was read through a process substitution with the status thrown away: a find that cannot start (a .transitignore
+    # too long for the argument limit) or cannot read a directory listed nothing, and that read "every file excluded" (with a
+    # .transitignore) or a PASS with layers 4 and 5 "ran" (without). It is now engine:file_listing_failed on __global__, which
+    # --min-severity and the allowlist do not lower, and layers 4 and 5 say why they did not run.
+    K10="${SCRATCH}/k10"; rm -rf "$K10"; mkdir -p "$K10/ti" "$K10/plain" "$K10/allow" "$K10/big"
+    for _d in ti plain allow big; do printf 'print(1)\n' > "$K10/$_d/ok.py"; done
+    printf 'zzz\n' > "$K10/ti/.transitignore"; printf 'zzz\n' > "$K10/allow/.transitignore"
+    printf '[{"rule":"engine","path":"__global__","reason":"x"},{"rule":"file_listing_failed","path":"__global__","reason":"x"}]\n' > "$K10/allow/.transit-allow.json"
+    # one pattern longer than the kernel's limit for a single argument (32 pages): the -path argument made of it cannot be passed to find
+    python3 -I -c "import sys; sys.stdout.write('p' * (33 * int(sys.argv[1])) + '\n')" "$(getconf PAGESIZE 2>/dev/null || echo 4096)" > "$K10/big/.transitignore"
+    # a find that exits 3 and prints nothing for the listing of layer 5 (and is the real find for every other call), and one that
+    # prints the real listing and then exits 1, as find does when it cannot read a directory
+    K10S1=$(k_stubdir k10_none);    k_wrap "$K10S1" find 'case "$*" in *" -type f -print0") [ "$1" = . ] || exit 3 ;; esac'
+    K10S2=$(k_stubdir k10_partial); k_wrap "$K10S2" find 'case "$*" in *" -type f -print0") if [ "$1" != . ]; then "$REAL" "$@"; exit 1; fi ;; esac'
+    K10_L="L4_patterns=skipped:file listing failed (find exit 3) L5_per_language_sast=skipped:file listing failed (find exit 3)"
+    for K_ENG in bash python; do
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K10/ti" "k10_ctl_${K_ENG}"; KENV=()
+        assert_eq "PASS ran ran" "$(k_verdict) $(k_cov L4_patterns) $(k_cov L5_per_language_sast)" "F10 [${K_ENG}]: control, the real find: a clean repository with a .transitignore passes, layers 4 and 5 ran"
+        KENV=(TRANSIT_ENGINE="$K_ENG" PATH="${K10S1}:${PATH}"); k_scan "$K10/ti" "k10_none_${K_ENG}"; KENV=()
+        assert_eq "FAIL 1" "$(k_verdict) $KEC" "F10 [${K_ENG}]: a find that exits 3 with no output fails the scan (the same repository as the control)"
+        assert_contains "$(k_global)" "[FAIL] engine:file_listing_failed" "F10 [${K_ENG}]: …with the FAIL engine:file_listing_failed on __global__"
+        assert_not_contains "$(k_global)" "engine:nothing_scanned" "F10 [${K_ENG}]: …and it is not reported as 'every file excluded' although a .transitignore is present"
+        assert_eq "$K10_L" "$(k_layers)" "F10 [${K_ENG}]: …layers 4 and 5 say the listing failed, with find's exit status"
+        assert_contains "$(k_py "$KREP" "d['coverage_gaps']")" "L4_patterns" "F10 [${K_ENG}]: …and it is a coverage gap"
+        assert_eq "1 engine:file_listing_failed __global__" \
+            "$(k_py "$KREP" "' '.join(str(x) for x in (len(d['findings']), d['findings'][0]['message'], d['findings'][0]['file']))")" \
+            "F10 [${K_ENG}]: …one structured finding record"
+        assert_contains "$KOUT" "(find exit 3)" "F10 [${K_ENG}]: …the console names the exit status"
+        KENV=(TRANSIT_ENGINE="$K_ENG" PATH="${K10S1}:${PATH}"); k_scan "$K10/plain" "k10_plain_${K_ENG}"; KENV=()
+        assert_eq "FAIL" "$(k_verdict)" "F10 [${K_ENG}]: …and without a .transitignore too (it used to be a PASS, layers 4 and 5 'ran', with nothing examined)"
+        KENV=(TRANSIT_ENGINE="$K_ENG" PATH="${K10S2}:${PATH}"); k_scan "$K10/plain" "k10_partial_${K_ENG}"; KENV=()
+        assert_eq "FAIL" "$(k_verdict)" "F10 [${K_ENG}]: a find that prints the listing and then exits 1 fails the scan although every file was seen"
+        assert_eq "L4_patterns=skipped:file listing failed (find exit 1) L5_per_language_sast=skipped:file listing failed (find exit 1)" "$(k_layers)" \
+            "F10 [${K_ENG}]: …layers 4 and 5 are not ran (find exit 1)"
+        KENV=(TRANSIT_ENGINE="$K_ENG" PATH="${K10S1}:${PATH}" MIN_SEVERITY=critical); k_scan "$K10/allow" "k10_allow_${K_ENG}"; KENV=()
+        assert_contains "$(k_global)" "[FAIL] engine:file_listing_failed" "F10 [${K_ENG}]: neither --min-severity critical nor an allowlist entry for it lowers engine:file_listing_failed"
+        assert_eq "FAIL" "$(k_verdict)" "F10 [${K_ENG}]: …the verdict stays FAIL"
+        KENV=(TRANSIT_ENGINE="$K_ENG"); k_scan "$K10/big" "k10_big_${K_ENG}"; KENV=()
+        assert_eq "FAIL" "$(k_verdict)" "F10 [${K_ENG}]: a .transitignore too long for the argument limit (one pattern over 32 pages) fails the scan"
+        assert_contains "$(k_global)" "[FAIL] engine:file_listing_failed" "F10 [${K_ENG}]: …as engine:file_listing_failed"
+        assert_not_contains "$(k_global)" "engine:nothing_scanned" "F10 [${K_ENG}]: …not as 'every file excluded'"
+        assert_contains "$(k_cov L4_patterns)" "skipped:file listing failed (find exit " "F10 [${K_ENG}]: …layer 4 says the listing failed"
+    done
+
+    # ── F11: a ScanCode report that cannot be read ───────────────────────────────────────────────────
+    # RUN_SCANCODE=true, a scancode that exits 0 and writes a file the reader cannot use (garbage, an empty file, a truncated one,
+    # JSON of the wrong shape). The reader exits non-zero; as a plain assignment under set -e that ended the whole run with no
+    # report. It is now the WARN scancode:report_could_not_be_read and L6_licence 'skipped:scancode report could not be read'.
+    k11_stub() {   # k11_stub <name> <sh that writes the report to $out>: a scancode that finds its --json-pp argument and runs the body
+        local s; s=$(k_stubdir "k11_$1"); k_stub "$s" scancode "while [ \$# -gt 0 ]; do case \"\$1\" in --json-pp) out=\"\$2\" ;; esac; shift; done; $2"; printf '%s' "$s"
+    }
+    K11_GARBAGE=$(k11_stub garbage "echo 'this is not json' > \"\$out\"")
+    K11_EMPTY=$(k11_stub empty ": > \"\$out\"")
+    K11_TRUNC=$(k11_stub truncated "printf '{\"files\": [{\"path\": \"README.md\", \"license_det' > \"\$out\"")
+    K11_LIST=$(k11_stub list "echo '[]' > \"\$out\"")
+    K11_SHAPE=$(k11_stub shape "echo '{\"files\":\"x\"}' > \"\$out\"")
+    K11_OK=$(k11_stub ok "echo '{\"files\":[]}' > \"\$out\"")
+    K11_GPL=$(k11_stub gpl "echo '{\"files\":[{\"path\":\"README.md\",\"license_detections\":[{\"matches\":[{\"spdx_license_expression\":\"GPL-3.0-only\",\"score\":100}]}]}]}' > \"\$out\"")
+    K11_VULN=$(k11_stub vuln "echo '{\"files\":[{\"path\":\"README.md\",\"packages\":[{\"name\":\"p\",\"version\":\"1\",\"vulnerabilities\":[{\"vulnerability_id\":\"CVE-1\",\"max_severity\":\"high\"}]}]}]}' > \"\$out\"")
+    for K_ENG in bash python; do
+        for _c in "garbage|a file that is not JSON|$K11_GARBAGE" "empty|an empty file|$K11_EMPTY" "truncated|a truncated JSON document|$K11_TRUNC" \
+                  "list|JSON of the wrong shape (a list)|$K11_LIST" "shape|JSON of the wrong shape (files is a string)|$K11_SHAPE"; do
+            _n="${_c%%|*}"; _rest="${_c#*|}"; _what="${_rest%%|*}"; _stub="${_rest#*|}"
+            KENV=(TRANSIT_ENGINE="$K_ENG" PATH="${_stub}:${PATH}" RUN_SCANCODE=true); k_scan "$K_CLEAN" "k11_${_n}_${K_ENG}"; KENV=()
+            assert_eq "PASS 0" "$(k_verdict) $KEC" "F11 [${K_ENG}]: ScanCode exits 0 and writes ${_what}: the run completes with a report and its verdict"
+            assert_eq "skipped:scancode report could not be read" "$(k_cov L6_licence)" "F11 [${K_ENG}]: …L6_licence says so (${_n})"
+            assert_contains "$(k_global)" "[WARN] scancode:report_could_not_be_read" "F11 [${K_ENG}]: …with the WARN scancode:report_could_not_be_read (${_n})"
+            if [[ "$_n" == garbage ]]; then
+                assert_eq "PASS" "$(k_tail)" "F11 [${K_ENG}]: …the last line of the output is the verdict"
+                assert_not_contains "$KOUT" "ScanCode report:" "F11 [${K_ENG}]: …and the console does not claim the report was used"
+                assert_contains "$(k_py "$KREP" "d['coverage_gaps']")" "L6_licence" "F11 [${K_ENG}]: …it is a coverage gap"
+                assert_eq "False" "$(k_py "$KREP" "d['coverage_complete']")" "F11 [${K_ENG}]: …and coverage is not complete"
+            fi
+        done
+        KENV=(TRANSIT_ENGINE="$K_ENG" PATH="${K11_OK}:${PATH}" RUN_SCANCODE=true); k_scan "$K_CLEAN" "k11_ok_${K_ENG}"; KENV=()
+        assert_eq "PASS ran" "$(k_verdict) $(k_cov L6_licence)" "F11 [${K_ENG}]: control, a readable empty report: ran"
+        assert_not_contains "$(k_global)" "report_could_not_be_read" "F11 [${K_ENG}]: …no WARN"
+        KENV=(TRANSIT_ENGINE="$K_ENG" PATH="${K11_GPL}:${PATH}" RUN_SCANCODE=true); k_scan "$K_CLEAN" "k11_gpl_${K_ENG}"; KENV=()
+        assert_eq "PASS ran" "$(k_verdict) $(k_cov L6_licence)" "F11 [${K_ENG}]: a readable report with a GPL licence is still read: ran…"
+        assert_contains "$(k_msgs "$KREP" "${K_CLEAN}/README.md")" "[WARN] licence:GPL-3.0-only" "F11 [${K_ENG}]: …and the licence is a WARN on the file"
+        KENV=(TRANSIT_ENGINE="$K_ENG" PATH="${K11_VULN}:${PATH}" RUN_SCANCODE=true); k_scan "$K_CLEAN" "k11_vuln_${K_ENG}"; KENV=()
+        assert_eq "FAIL ran" "$(k_verdict) $(k_cov L6_licence)" "F11 [${K_ENG}]: a readable report with a HIGH vulnerability still fails the scan"
+        assert_contains "$(k_msgs "$KREP" "${K_CLEAN}/README.md")" "[FAIL] scancode_vuln:CVE-1[HIGH]" "F11 [${K_ENG}]: …on the file"
+    done
+
+    # ── F12: the fetcher does not write through a link in the repository, and a file name cannot corrupt the manifest ─
+    # `find | sort | while read -r f; do sha256sum "$f"; done > "$MANIFEST"` wrote through a .manifest_sha256.txt that the repository
+    # ships as a symlink (into any file the user can write, or creating one), and a name with a newline, a leading blank or a
+    # backslash broke the loop. The list is now written to a file of ours outside the copy and moved over the name.
+    K12="${SCRATCH}/k12"; rm -rf "$K12"; mkdir -p "$K12/victims"
+    k12_fetch() {   # k12_fetch <repo> <work dir>: runs fetch_repo.sh on a local directory; sets K12_EC and K12_DEST
+        rm -rf "$2"; mkdir -p "$2"
+        (cd "$ROOT_DIR" && WORK_DIR="$2" bash ./fetch_repo.sh "$1" >/dev/null 2>&1); K12_EC=$?
+        K12_DEST=$(cat "$2/.fetch_result" 2>/dev/null || true)
+    }
+    mkdir -p "$K12/link" "$K12/dangling" "$K12/names/sub"
+    printf 'print(1)\n' > "$K12/link/ok.py"; printf 'VICTIM_ORIGINAL\n' > "$K12/victims/victim.txt"
+    ln -s "${K12}/victims/victim.txt" "$K12/link/.manifest_sha256.txt"
+    k12_fetch "$K12/link" "$K12/link_work"
+    assert_eq "0" "$K12_EC" "F12: fetch_repo.sh copies a local repository whose .manifest_sha256.txt is a symlink"
+    assert_eq "VICTIM_ORIGINAL" "$(cat "$K12/victims/victim.txt")" "F12: …the file the link pointed at is unchanged (the manifest was not written through the link)"
+    assert_eq "regular" "$([[ -f "$K12_DEST/.manifest_sha256.txt" && ! -L "$K12_DEST/.manifest_sha256.txt" ]] && echo regular || echo other)" \
+        "F12: …the manifest in the copy is a regular file, not the link"
+    assert_eq "1" "$(grep -c 'ok\.py$' "$K12_DEST/.manifest_sha256.txt" 2>/dev/null || true)" "F12: …and it lists the repository's file"
+    printf 'print(1)\n' > "$K12/dangling/ok.py"; ln -s "${K12}/victims/created_by_the_manifest.txt" "$K12/dangling/.manifest_sha256.txt"
+    k12_fetch "$K12/dangling" "$K12/dangling_work"
+    assert_eq "absent" "$([[ -e "$K12/victims/created_by_the_manifest.txt" || -L "$K12/victims/created_by_the_manifest.txt" ]] && echo present || echo absent)" \
+        "F12: a dangling link at the manifest's name does not make the fetcher create the file it points to"
+    K12_NAMES=($'with\nnewline.txt' ' lead.txt' 'back\slash.txt' '-dash.txt' 'sub/ok.py')
+    for _n in "${K12_NAMES[@]}"; do printf 'x\n' > "$K12/names/$_n"; done
+    k12_fetch "$K12/names" "$K12/names_work"
+    assert_eq "0" "$K12_EC" "F12: fetch_repo.sh copes with file names holding a newline, a leading blank, a backslash and a leading dash"
+    K12_M="$K12_DEST/.manifest_sha256.txt"
+    assert_eq "${#K12_NAMES[@]}" "$(wc -l < "$K12_M" 2>/dev/null | tr -d ' ')" "F12: …the manifest has one line for each of the ${#K12_NAMES[@]} files"
+    assert_eq "0" "$(sha256sum -c --quiet "$K12_M" >/dev/null 2>&1; echo $?)" "F12: …and sha256sum -c accepts every line (the hashes belong to the named files)"
+    assert_eq "1" "$(grep -cF 'with\nnewline.txt' "$K12_M" 2>/dev/null || true)" "F12: …the name with a newline is one line, escaped as sha256sum escapes it"
+    assert_eq "0" "$(grep -c 'manifest_sha256' "$K12_M" 2>/dev/null || true)" "F12: …and the manifest does not list itself"
+
+    # ── F13: a fetch that is killed leaves no temporary list, and the next run removes a stale one ───────
+    # .diff_files.<pid> (git's list of changed files) and .manifest.<pid> (the manifest before it is moved into place) are removed by
+    # an EXIT trap of fetch_repo.sh; ai_transit.sh removes what an earlier run that was killed (SIGKILL runs no trap) left behind.
+    # A stub of the tool the fetcher is waiting for sleeps, records that the temporary file exists (so the test cannot pass because
+    # the file was never there), and the fetcher gets SIGTERM.
+    k13_kill() {   # k13_kill <stub dir> <direct|group> <argv…>: run in the background, wait until the stub runs, SIGTERM it (or its process group); sets K13_SEEN, K13_EC
+        local s="$1" mode="$2" pid i; shift 2
+        rm -f "$s/pid" "$s/seen"
+        if [[ "$mode" == group ]]; then (cd "$ROOT_DIR" && exec setsid "$@") >/dev/null 2>&1 &
+        else (cd "$ROOT_DIR" && exec "$@") >/dev/null 2>&1 &
+        fi
+        pid=$!
+        for i in $(seq 1 100); do [[ -s "$s/pid" ]] && break; sleep 0.1; done
+        K13_SEEN=$(cat "$s/seen" 2>/dev/null || true)
+        if [[ "$mode" == group ]]; then kill -TERM -- "-$pid" 2>/dev/null || true; else kill -TERM "$pid" 2>/dev/null || true; fi
+        for i in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done   # it ends at once; the stub is stopped only after that
+        if [[ -s "$s/pid" ]]; then kill "$(cat "$s/pid")" 2>/dev/null || true; fi
+        { wait "$pid"; } 2>/dev/null; K13_EC=$?
+        return 0
+    }
+    k13_left() { ls -A "$1" 2>/dev/null | grep -cE '^\.(diff_files|manifest)\.' || true; }   # k13_left <work dir>: temporary lists still there
+    K13P="${SCRATCH}/k13_plain"; rm -rf "$K13P"; mkdir -p "$K13P"; printf 'print(1)\n' > "$K13P/ok.py"
+    K13M=$(k_stubdir k13_sha); k_wrap "$K13M" sha256sum "ls \"\$WORK_DIR\"/.manifest.* > '${K13M}/seen' 2>/dev/null; echo \$\$ > '${K13M}/pid'; exec sleep 30"
+    K13W1="${SCRATCH}/k13_w1"; rm -rf "$K13W1"; mkdir -p "$K13W1"
+    k13_kill "$K13M" direct env WORK_DIR="$K13W1" PATH="${K13M}:${PATH}" bash ./fetch_repo.sh "$K13P"
+    assert_contains "$K13_SEEN" "/.manifest." "F13: while the manifest is computed, the temporary list exists (.manifest.<pid>): the test is not vacuous"
+    assert_eq "143" "$K13_EC" "F13: …the fetcher ended by SIGTERM there exits 143"
+    assert_eq "0" "$(k13_left "$K13W1")" "F13: …and leaves no .manifest.<pid>"
+    if ! command -v git &>/dev/null; then
+        skip_test "F13: a fetch killed during git diff leaves no .diff_files.<pid>" "git not installed"
+    else
+        K13G="${SCRATCH}/k13_git"; rm -rf "$K13G"; mkdir -p "$K13G"
+        git init -q "$K13G"; git -C "$K13G" config user.email t@example.com; git -C "$K13G" config user.name t
+        printf 'print(1)\n' > "$K13G/ok.py"; git -C "$K13G" add -A && git -C "$K13G" commit -qm base; K13B=$(git -C "$K13G" rev-parse HEAD)
+        printf 'print(2)\n' > "$K13G/two.py"; git -C "$K13G" add -A && git -C "$K13G" commit -qm change
+        K13S=$(k_stubdir k13_git); k_wrap "$K13S" git "case \" \$* \" in *\" diff \"*) ls \"\$WORK_DIR\"/.diff_files.* > '${K13S}/seen' 2>/dev/null; echo \$\$ > '${K13S}/pid'; exec sleep 30 ;; esac"
+        K13W2="${SCRATCH}/k13_w2"; rm -rf "$K13W2"; mkdir -p "$K13W2"
+        k13_kill "$K13S" direct env WORK_DIR="$K13W2" SINCE_COMMIT="$K13B" PATH="${K13S}:${PATH}" bash ./fetch_repo.sh "$K13G"
+        assert_contains "$K13_SEEN" "/.diff_files." "F13: while git diff runs, the temporary list exists (.diff_files.<pid>): the test is not vacuous"
+        assert_eq "143" "$K13_EC" "F13: …the fetcher ended by SIGTERM there exits 143"
+        assert_eq "0" "$(k13_left "$K13W2")" "F13: …and leaves no .diff_files.<pid>"
+        if ! command -v setsid &>/dev/null; then
+            skip_test "F13: ai_transit.sh killed during git diff leaves no temporary list" "setsid not installed"
+        else
+            K13W3="${SCRATCH}/k13_w3"; rm -rf "$K13W3"; mkdir -p "$K13W3"
+            k13_kill "$K13S" group env WORK_DIR="$K13W3" OUTPUT_DIR="${K13W3}/out" PATH="${K13S}:${PATH}" bash ./ai_transit.sh --quiet --since "$K13B" "$K13G"
+            assert_contains "$K13_SEEN" "/.diff_files." "F13: ai_transit.sh --since: while git diff runs, the temporary list exists"
+            assert_eq "0" "$(k13_left "$K13W3")" "F13: …ai_transit.sh and the fetcher it started, ended by SIGTERM together, leave no temporary list"
+        fi
+    fi
+    K13X="${SCRATCH}/k13_stale"; rm -rf "$K13X"; mkdir -p "$K13X"
+    : > "$K13X/.diff_files.4242"; : > "$K13X/.manifest.4242"; : > "$K13X/.manifest_keep"
+    (cd "$ROOT_DIR" && WORK_DIR="$K13X" OUTPUT_DIR="${K13X}/out" timeout 300 ./ai_transit.sh --quiet --no-zip --no-excel "$K_CLEAN" >/dev/null 2>&1); K13X_EC=$?
+    assert_eq "0" "$K13X_EC" "F13: ai_transit.sh runs on a work directory that holds the leftovers of a killed fetch"
+    assert_eq "0" "$(k13_left "$K13X")" "F13: …it removed the stale .diff_files.<pid> and .manifest.<pid> before it fetched"
+    assert_eq "yes" "$([[ -e "$K13X/.manifest_keep" ]] && echo yes || echo no)" "F13: …and left alone a file that only looks similar (.manifest_keep)"
     # K-END
 fi
 
