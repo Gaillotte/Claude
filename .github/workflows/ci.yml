@@ -248,6 +248,8 @@ jobs:
       - name: Smoke test — clean fixture scans to PASS
         run: |
           mkdir -p out
+          # The mount hides the image's own `chmod 777 /output`: the non-root `transit` user must be able to write here.
+          chmod 777 out
           docker run --rm \
             -v "$PWD/tests/fixtures/clean:/mnt/localrepo:ro" \
             -v "$PWD/out:/output" \
@@ -273,6 +275,7 @@ jobs:
       - name: Smoke test — Python engine, clean fixture scans to PASS
         run: |
           mkdir -p out_py
+          chmod 777 out_py
           docker run --rm -e TRANSIT_ENGINE=python \
             -v "$PWD/tests/fixtures/clean:/mnt/localrepo:ro" \
             -v "$PWD/out_py:/output" \

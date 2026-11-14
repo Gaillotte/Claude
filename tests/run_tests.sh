@@ -105,8 +105,9 @@ assert_file_exists() {
 # Sets: RUN_EXIT, RUN_OUT, RUN_WORK, RUN_JSON
 run_pipeline() {
     local fixture="$1"; shift
-    RUN_WORK="${SCRATCH}/work_$$_${RANDOM}"
-    mkdir -p "$RUN_WORK"
+    # A directory of its own, by construction: a name built from $RANDOM repeats across the hundred or so runs of a suite,
+    # and a repeated name hands the next run the archive and reports of an earlier one.
+    RUN_WORK=$(mktemp -d "${SCRATCH}/work_XXXXXX")
     RUN_OUT=$(cd "$ROOT_DIR" && WORK_DIR="$RUN_WORK" OUTPUT_DIR="${RUN_WORK}/out" \
         timeout 300 ./ai_transit.sh "$@" "$fixture" 2>&1)
     RUN_EXIT=$?
@@ -3580,6 +3581,10 @@ PY
             "F9 [${K_ENG}]: …and the content of each target is in it once, as the real file, not again through the link"
         assert_eq "0" "$([[ -n "$K9ZIP" ]] && unzip -Z1 "$K9ZIP" | grep -c '^dir_link/')" "F9 [${K_ENG}]: …no entry below the directory link"
         TRANSIT_ENGINE="$K_ENG" run_pipeline "$K9E" --quiet
+        if [[ -n "$(ls "${RUN_WORK}"/out/*.zip 2>/dev/null)" ]]; then   # evidence if this ever fails (it flaked once on a CI runner)
+            { echo "F9 diagnostic [${K_ENG}]: exit ${RUN_EXIT}, archive(s) in ${RUN_WORK}/out:"; ls -la "${RUN_WORK}/out"; \
+              echo "last output lines:"; printf '%s\n' "$RUN_OUT" | tail -12; } >&2
+        fi
         assert_eq "1 0" "$RUN_EXIT $(ls "${RUN_WORK}"/out/*.zip 2>/dev/null | wc -l | tr -d ' ')" \
             "F9 [${K_ENG}]: ai_transit.sh rejects a link to /etc/passwd and builds no archive that would carry the file"
     done

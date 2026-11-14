@@ -125,7 +125,11 @@ COPY transit ./transit
 RUN chmod +x *.sh
 
 # ── Work directories ───────────────────────────────────────────────────────────
-RUN mkdir -p /opt/ai-transit/{fetch,quarantine,approved,reports,logs,yara-rules} \
+# Spelled out: RUN uses /bin/sh (dash on Ubuntu), which does no brace expansion, so
+# `mkdir -p /opt/ai-transit/{fetch,quarantine}` made one directory with a literal
+# brace name and the chmod after it found nothing.
+RUN mkdir -p /opt/ai-transit/fetch /opt/ai-transit/quarantine /opt/ai-transit/approved \
+        /opt/ai-transit/reports /opt/ai-transit/logs /opt/ai-transit/yara-rules \
     && chmod 700 /opt/ai-transit/quarantine \
     && mkdir -p /output
 
