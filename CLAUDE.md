@@ -1553,7 +1553,7 @@ hostile repository placed under such ancestors. `.transitignore` entries (files 
 ## CI
 
 `.github/workflows/ci.yml` — `lint` (shellcheck, errors fatal) · `test` (suite, no
-tools) · `test-with-tools` (scanners installed, advisory) · `pins` (verify pinned tool
+tools) · `engine-conformance` (the Python engine against all 26 golden reports, the schema and `family_diff.py`, on Python 3.10 to 3.13; required) · `test-with-tools` (scanners installed, advisory) · `pins` (verify pinned tool
 versions resolve and match their SHA-256) · `docker` (build image, assert non-root,
 smoke-test both fixtures).
 

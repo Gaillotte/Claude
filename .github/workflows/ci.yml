@@ -79,21 +79,31 @@ jobs:
         run: ./tests/run_tests.sh -v
 
   # ── Python engine (docs/python_port_thin_plan.md) ──────────────────────────────────────────
-  # The Python engine against the golden reports of the bash engine (tests/conformance/golden). Advisory until
-  # scan_pipeline.py is written (phase P1 of the plan; it refuses to run until then). Drop continue-on-error then.
+  # The Python engine must give the bash engine's reports: all 26 golden reports (tests/conformance/golden), the schema
+  # and invariants of the Python reports, and equal per-file status and rule ids on the whole rules corpus. Python 3.10
+  # is the floor of the engine and 3.13 the newest checked. Required: a difference here is a regression.
   engine-conformance:
-    name: Python engine conformance
+    name: Python engine conformance (${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
-      - name: Clean fixture reproduces its golden report
-        run: python3 -I tests/conformance/conformance.py check --engine python --case clean
+      - name: All golden reports are reproduced
+        run: python3 -I tests/conformance/conformance.py check --engine python
+
+      - name: Python reports conform to the schema
+        run: python3 -I tests/conformance/check_schema.py --engine python
+
+      - name: Per-file status and rule ids equal to bash on the rules corpus
+        run: python3 -I tests/conformance/family_diff.py
 
   # ── Supply chain: do the pinned versions actually resolve? ──────────────────
   # These pins could not be verified from the development sandbox (its proxy
