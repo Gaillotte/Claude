@@ -3165,7 +3165,8 @@ in the image, are pinned to exact versions; trivy and hadolint are pinned with a
 dependencies of those packages, the `apt` packages (`shellcheck` in CI, everything in the image), the base image
 tags, the `ubuntu-latest` runner and the patch release of Python. A red run is therefore usually this repository,
 but not always. `checkov` brings in `bc-detect-secrets`, a fork that installs the same `detect_secrets` package as
-`detect-secrets`, so which of the two the image runs is decided by install order, not by the `detect-secrets==1.5.0` pin.
+`detect-secrets`. In the image both are installed and the `detect-secrets` command reports 1.5.52 (the fork, measured by the
+CI docker job on 2026-11-14), so the `detect-secrets==1.5.0` pin does not decide which one the pipeline runs.
 
 The `docker` job is the only place the multi-stage build, the pinned tool
 versions and the non-root user are actually exercised — none of that can be

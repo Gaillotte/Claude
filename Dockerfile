@@ -59,8 +59,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Their dependencies still float: for a full lock, `pip freeze` that image into a constraints file.
 # To move a tool: change its version here, rebuild, and let the smoke tests and the Python-engine checks run.
 # Known overlap: checkov 3.4.5 requires bc-detect-secrets (a fork) which installs the same `detect_secrets` package and
-# `detect-secrets` command as Yelp's detect-secrets. pip sees two distributions and reports no conflict; which files
-# survive depends on install order. The CI docker job prints the result; isolating checkov in its own venv would settle it.
+# `detect-secrets` command as Yelp's detect-secrets. pip sees two distributions and reports no conflict. Measured in the
+# CI docker job on 2026-11-14: both are installed (bc-detect-secrets 1.5.52, detect-secrets 1.5.0) and
+# `detect-secrets --version` prints 1.5.52, so the command the pipeline runs is the fork and the 1.5.0 pin below does
+# not decide it. Isolating checkov in its own venv would make the pin mean something. The CI step prints this each run.
 RUN pip3 install --no-cache-dir \
     openpyxl==3.1.5 \
     reportlab==5.1.0 \
