@@ -436,6 +436,14 @@ class RunProcessTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 20)
         self.assertGreaterEqual(result.elapsed_s, 0.4)
 
+    def test_a_timeout_that_is_not_a_positive_number_is_an_immediate_timeout_never_an_unbounded_wait(self) -> None:
+        for bad in (0, 0.0, -1, -1e9, float("nan"), None, "ten"):
+            with self.subTest(timeout=bad):
+                started = time.monotonic()
+                result = self.run_py("import time; time.sleep(60)", timeout_s=bad)
+                self.assertEqual(result.status, "timeout")
+                self.assertLess(time.monotonic() - started, 20)
+
     def test_the_whole_process_group_dies_with_the_child(self) -> None:
         d = tmpdir(self)
         pidfile = os.path.join(d, "grandchild.pid")

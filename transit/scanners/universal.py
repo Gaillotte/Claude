@@ -20,23 +20,73 @@ UTF-8 is still examined (E8); only the credential-format rules skip it.
 
 Each row of ``RULES`` is one ``RuleSpec`` (id ``universal/NN-slug``); the patterns are those of tests/conformance/patterns.json whose id
 starts with ``scan_universal_patterns:``.
-"""
+
+Implementation notes (WP-08).
+  * ``RULES`` has ten rows (steps 1, 4, 5 and 6: 1 + 1 + 3 + 5). The other grep calls of the bash function are the two ``Matcher``s of step 2 and
+    the 20 of ``credentials`` (the alternation, 18 providers, the JWT).
+  * The bash order puts steps 2 and 3 between row 1 and the other nine, and ``ScanContext.run_rules`` evaluates and records a whole table at once,
+    so ``scan`` applies the rows itself, one ``ctx.search`` and one ``record_*`` each, in two slices; the messages of a file keep bash's order.
+  * Rows are ``binary="text"`` (``grep -a``) while bash's ``grep_check`` has no ``-a``. On a file with a NUL byte that finds a match which
+    spans the NUL (``password = "ab<NUL>cdef"``) where bash, which turns the NUL into a line end, does not; never the other way round.
+    The key test is ``grep -aE`` in bash too, so it is equal."""
 from __future__ import annotations
 
-from transit.rules import Matcher, RuleSet
+from transit.rules import Match, Matcher, RuleSet, RuleSpec
 from transit.scanners import ScanContext
-
-#: The table of steps 1, 4, 5 and 6. Steps 2 and 3 are code. Built at import by the implementation (compiles through rx).
-RULES: "RuleSet | None" = None
-
-#: Step 2's two patterns as registered ``Matcher``s (ids ``universal/key-header`` and ``universal/key-body``), so the hostile-line test and
-#: the fuzz gate cover them like any table row. ``None`` in the stub; built at import by the implementation.
-KEY_HEADER: "Matcher | None" = None
-KEY_WITH_BODY: "Matcher | None" = None
+from transit.scanners.credentials import check_known_credentials
 
 #: Step 2. Header pattern and header-then-body pattern, as bash passes them to ``grep -E -A5`` and the second ``grep -E``.
 PRIVATE_KEY_HEADER = "-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----"
 PRIVATE_KEY_WITH_BODY = "-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}"
+
+#: Step 2's two patterns as registered ``Matcher``s (ids ``universal/key-header`` and ``universal/key-body``), so the hostile-line test and
+#: the fuzz gate cover them like any table row. Both read the file as text (bash ``grep -aE``): a NUL byte changes nothing.
+KEY_HEADER: "Matcher | None" = Matcher("universal/key-header", Match(PRIVATE_KEY_HEADER))
+KEY_WITH_BODY: "Matcher | None" = Matcher("universal/key-body", Match(PRIVATE_KEY_WITH_BODY))
+
+_SOURCE = "scan_universal_patterns"
+
+#: The table of steps 1, 4, 5 and 6, in bash order (the order of the grep calls of ``scan_universal_patterns``). Steps 2 and 3 are code.
+#: The ten rows are ``grep_check`` (``Match``) and ``grep_check_i`` (``Match(ci=True)``) calls: ``binary="text"``, so a NUL byte or invalid
+#: UTF-8 changes nothing (E8; bash's ``grep_check`` has no ``-a``, see the module notes on the one consequence).
+RULES: "RuleSet | None" = RuleSet("universal", (
+    # 1. CWE-798 / CWE-259. The value class is [:space:], not \s: inside a bracket expression \s is the characters \ and s.
+    RuleSpec(id="universal/01-hardcoded-credential", outcome="fail", message="CWE-798:hardcoded_credential", source=_SOURCE,
+             cond=Match(r"""(password|passwd|pwd|secret|api_key|apikey|auth_token|access_token)\s*[=:]\s*["'][^${"'[:space:]]{4,}""")),
+    # 4. Reported, not blocked: a certificate is the public half of the pair.
+    RuleSpec(id="universal/02-public-certificate", outcome="warn", message="crypto:public_certificate_embedded", source=_SOURCE,
+             cond=Match("-----BEGIN CERTIFICATE-----")),
+    # 5. CWE-22. A literal "../" is a relative path, not an attack: only these three contexts are findings.
+    RuleSpec(id="universal/03-path-traversal-encoded", outcome="fail", message="CWE-22:path_traversal_encoded", source=_SOURCE,
+             cond=Match(r"(%2e%2e|%252e%252e|\.\.%2f|\.\.%5c|%2f\.\.|%5c\.\.)", ci=True)),
+    RuleSpec(id="universal/04-path-traversal-sensitive-path", outcome="fail", message="CWE-22:path_traversal_to_sensitive_path", source=_SOURCE,
+             cond=Match(r"""\.\.[/\\][^[:space:]"'`]*((etc/)?(passwd|shadow)|\.ssh/|\.aws/|id_rsa|system32|proc/self)""", ci=True)),
+    RuleSpec(id="universal/05-path-traversal-composed", outcome="fail", message="CWE-22:path_traversal_composed_with_input", source=_SOURCE,
+             cond=Match(r"""(["'`]\.\.[/\\]["'`][[:space:]]*[+.][[:space:]]*|[+.][[:space:]]*["'`]/?\.\.[/\\]|f["'][^"']*(\{[^}]*\}[^"']*\.\.[/\\]|\.\.[/\\][^"']*\{[^}]*\})|`[^`]*(\$\{[^}]*\}[^`]*\.\.[/\\]|\.\.[/\\][^`]*\$\{))""",
+                        ci=True)),
+    # 6. WARN rules.
+    RuleSpec(id="universal/06-ssrf", outcome="warn", message="CWE-918:potential_SSRF_unvalidated_URL", source=_SOURCE,
+             cond=Match(r"(requests\.get|urllib\.request|fetch|axios|http\.get)\s*\([^)]*\b(url|host|endpoint|target)\b")),
+    RuleSpec(id="universal/07-weak-crypto", outcome="warn", message="CWE-327:weak_crypto_algorithm", source=_SOURCE,
+             cond=Match(r"\b(md5|sha1|des|rc4|blowfish)\b")),
+    RuleSpec(id="universal/08-weak-prng", outcome="warn", message="CWE-338:weak_PRNG_for_security", source=_SOURCE,
+             cond=Match(r"\b(Math\.random|random\.random|rand\(\)|mt_rand)\b")),
+    RuleSpec(id="universal/09-debug-or-backdoor-comment", outcome="warn", message="OWASP-A02:debug_or_backdoor_comment", source=_SOURCE,
+             cond=Match(r"(TODO.*remove|FIXME.*auth|backdoor|test.*password|debug.*token|hardcoded.*key)")),
+    RuleSpec(id="universal/10-logging-suppressed", outcome="warn", message="OWASP-A09:logging_suppressed", source=_SOURCE,
+             cond=Match(r"(logging\.disable|log_level.*NOTSET|setLevel.*CRITICAL.*security|disableStdoutLogger)")),
+))
+
+#: Bash records step 1, then 2 and 3, then 4 to 6: the order of the messages of one file in the report. ``RULES`` is one table, so it is run
+#: in these two slices (a ``RuleSet`` is evaluated as a whole by ``ScanContext.run_rules``; here each row is one ``ctx.search``).
+_FIRST_ROWS = RULES.rules[:1]
+_LATER_ROWS = RULES.rules[1:]
+
+_KEY_MESSAGE = "CWE-321:hardcoded_private_key"
+#: ``grep -A5``: five lines after each header line.
+_CONTEXT_LINES = 5
+#: ``tr '\r\n\t' '   '``.
+_FOLD = bytes.maketrans(b"\r\n\t", b"   ")
 
 
 def private_key_present(ctx: ScanContext, data: "bytes | None" = None) -> bool:
@@ -56,9 +106,37 @@ def private_key_present(ctx: ScanContext, data: "bytes | None" = None) -> bool:
     header line that itself contains 60 base64 characters before its ``PRIVATE KEY``) is a bash match and is not one here. Every real
     key (header, then a body line within five lines) is found, and nothing is found here that bash would not find. Cost: at most six
     times the bytes of the header lines."""
-    raise NotImplementedError
+    raw = ctx.view.data() if data is None else data
+    size = len(raw)
+    for start, end in ctx.spans(KEY_HEADER, data=data):
+        ctx.check_deadline()
+        stop = end                                       # the LF that ends the header line (or the end of the data)
+        for _ in range(_CONTEXT_LINES):
+            if stop >= size:
+                break
+            following = raw.find(b"\n", stop + 1)
+            stop = size if following < 0 else following
+        if ctx.search(KEY_WITH_BODY.match, data=raw[start:stop].translate(_FOLD)):
+            return True
+    return False
 
 
 def scan(ctx: ScanContext) -> bool:
     """Run steps 1 to 6 on ``ctx``'s file. Returns True. Records FAIL/WARN only; the clean file records nothing."""
-    raise NotImplementedError
+    for spec in _FIRST_ROWS:                             # 1. CWE-798 hardcoded_credential
+        _apply(ctx, spec)
+    if private_key_present(ctx):                         # 2. CWE-321 hardcoded_private_key
+        ctx.record_fail(_KEY_MESSAGE)
+    check_known_credentials(ctx)                         # 3. the 18 provider formats, then the JWT warning
+    for spec in _LATER_ROWS:                             # 4. certificate, 5. CWE-22 (three rules), 6. the WARN rules
+        _apply(ctx, spec)
+    return True                                          # never record_pass: a file's PASS belongs to its type scanner
+
+
+def _apply(ctx: ScanContext, spec: RuleSpec) -> None:
+    """One row of ``RULES``: bash ``if grep_check ...; then record_fail|record_warn; fi``."""
+    if ctx.search(spec.cond):
+        if spec.outcome == "fail":
+            ctx.record_fail(spec.message, severity=spec.severity)
+        else:
+            ctx.record_warn(spec.message)
