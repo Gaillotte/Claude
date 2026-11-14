@@ -2848,10 +2848,13 @@ EOF
     j15_run j15_ds_garbage
     assert_eq "skipped:detect-secrets output could not be read" "$(j15_cov L1_secrets_entropy)" "D-015: detect-secrets printing garbage is not ran"
     assert_contains "$(j_msgs "$JREP" __global__)" "detect-secrets:output_could_not_be_read" "D-015: …with a WARN"
-    assert_eq "0" "$(j_py "$JREP" "d['summary']['pass'] - $(j_py "${JR}/report_scan_j15_sg_ok.json" "d['summary']['pass']")")" \
-        "D-015: …and no PASS is counted for the layer that did not read"
+    J15_DS_GARBAGE_PASS=$(j_py "$JREP" "d['summary']['pass']")
     J15S=$(j_stubdir ds_ok); j_stub "$J15S" detect-secrets "echo '{\"version\":\"1.5\",\"results\":{}}'"
     j15_run j15_ds_ok
+    # The baseline is a run where the same stub could be read: one PASS more, whether or not the host has the real tool
+    # (the stub shadows it). A baseline with no detect-secrets at all held only on a host that lacked it.
+    assert_eq "1" "$(j_py "$JREP" "d['summary']['pass'] - $J15_DS_GARBAGE_PASS")" \
+        "D-015: …and no PASS is counted for the layer that did not read"
     assert_eq "ran" "$(j15_cov L1_secrets_entropy)" "D-015: a readable result with no secrets is ran"
     J15S=$(j_stubdir ds_hits); j_stub "$J15S" detect-secrets "echo '{\"results\":{\"a.py\":[{\"type\":\"x\"},{\"type\":\"y\"}]}}'"
     j15_run j15_ds_hits

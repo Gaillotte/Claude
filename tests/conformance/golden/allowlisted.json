@@ -61,7 +61,7 @@
   "findings_by_file": {},
   "scan_name": "conf",
   "source": {
-   "sha256": "cfca5399aecac0f6d7aae1436a01a066ff75b294947d2dfaa1d501adf2e690e3"
+   "sha256": "a37839b2e664d4e316014d2fe39fecb2318ce93ad08a9e5222fde09a0b69fbf6"
   },
   "standards": [
    "OWASP-Top10-2021",
