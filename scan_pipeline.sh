@@ -3,6 +3,12 @@
 # Covers: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding · SCA/CVE and Licence (layers 3 and 6, off by default)
 set -euo pipefail
 
+case "${TRANSIT_ENGINE:-bash}" in
+    bash) ;;
+    python) exec python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scan_pipeline.py" "$@" ;;
+    *) echo "[ERROR] TRANSIT_ENGINE must be 'bash' or 'python' (got: ${TRANSIT_ENGINE})" >&2; exit 1 ;;
+esac
+
 # Require bash 4+ for associative arrays
 [[ ${BASH_VERSINFO[0]} -ge 4 ]] || { echo "[ERROR] bash 4+ required (on macOS: brew install bash)" >&2; exit 1; }
 
