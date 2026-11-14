@@ -3690,6 +3690,12 @@ PY
     k12_fetch "$K12/dangling" "$K12/dangling_work"
     assert_eq "absent" "$([[ -e "$K12/victims/created_by_the_manifest.txt" || -L "$K12/victims/created_by_the_manifest.txt" ]] && echo present || echo absent)" \
         "F12: a dangling link at the manifest's name does not make the fetcher create the file it points to"
+    mkdir -p "$K12/dirlink" "$K12/victims/dir"; printf 'print(1)\n' > "$K12/dirlink/ok.py"; ln -s "${K12}/victims/dir" "$K12/dirlink/.manifest_sha256.txt"
+    k12_fetch "$K12/dirlink" "$K12/dirlink_work"
+    assert_eq "0 regular" "$K12_EC $([[ -f "$K12_DEST/.manifest_sha256.txt" && ! -L "$K12_DEST/.manifest_sha256.txt" ]] && echo regular || echo other)" \
+        "F12: a link to a directory at the manifest's name is replaced by the manifest, the fetch completes"
+    assert_eq "empty" "$([[ -z "$(ls -A "$K12/victims/dir")" ]] && echo empty || echo "holds: $(ls -A "$K12/victims/dir")")" \
+        "F12: …and the directory it pointed at received nothing (mv into a link to a directory would have put the manifest there)"
     K12_NAMES=($'with\nnewline.txt' ' lead.txt' 'back\slash.txt' '-dash.txt' 'sub/ok.py')
     for _n in "${K12_NAMES[@]}"; do printf 'x\n' > "$K12/names/$_n"; done
     k12_fetch "$K12/names" "$K12/names_work"
@@ -3705,16 +3711,18 @@ PY
     # an EXIT trap of fetch_repo.sh; ai_transit.sh removes what an earlier run that was killed (SIGKILL runs no trap) left behind.
     # A stub of the tool the fetcher is waiting for sleeps, records that the temporary file exists (so the test cannot pass because
     # the file was never there), and the fetcher gets SIGTERM.
-    k13_kill() {   # k13_kill <stub dir> <direct|group> <argv…>: run in the background, wait until the stub runs, SIGTERM it (or its process group); sets K13_SEEN, K13_EC
+    k13_kill() {   # k13_kill <stub dir> <direct|group> <argv…>: run in the background, wait until the stub runs, SIGTERM it; sets K13_SEEN, K13_EC
+        # direct: the process itself gets SIGTERM. group: it runs under `timeout`, which forwards SIGTERM it receives to the command
+        # and to its whole process group (what an operator's `timeout 300 ./ai_transit.sh` does), so the fetcher and the stub die with it.
         local s="$1" mode="$2" pid i; shift 2
         rm -f "$s/pid" "$s/seen"
-        if [[ "$mode" == group ]]; then (cd "$ROOT_DIR" && exec setsid "$@") >/dev/null 2>&1 &
+        if [[ "$mode" == group ]]; then (cd "$ROOT_DIR" && exec timeout 120 "$@") >/dev/null 2>&1 &
         else (cd "$ROOT_DIR" && exec "$@") >/dev/null 2>&1 &
         fi
         pid=$!
         for i in $(seq 1 100); do [[ -s "$s/pid" ]] && break; sleep 0.1; done
         K13_SEEN=$(cat "$s/seen" 2>/dev/null || true)
-        if [[ "$mode" == group ]]; then kill -TERM -- "-$pid" 2>/dev/null || true; else kill -TERM "$pid" 2>/dev/null || true; fi
+        kill -TERM "$pid" 2>/dev/null || true
         for i in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done   # it ends at once; the stub is stopped only after that
         if [[ -s "$s/pid" ]]; then kill "$(cat "$s/pid")" 2>/dev/null || true; fi
         { wait "$pid"; } 2>/dev/null; K13_EC=$?
@@ -3722,7 +3730,7 @@ PY
     }
     k13_left() { ls -A "$1" 2>/dev/null | grep -cE '^\.(diff_files|manifest)\.' || true; }   # k13_left <work dir>: temporary lists still there
     K13P="${SCRATCH}/k13_plain"; rm -rf "$K13P"; mkdir -p "$K13P"; printf 'print(1)\n' > "$K13P/ok.py"
-    K13M=$(k_stubdir k13_sha); k_wrap "$K13M" sha256sum "ls \"\$WORK_DIR\"/.manifest.* > '${K13M}/seen' 2>/dev/null; echo \$\$ > '${K13M}/pid'; exec sleep 30"
+    K13M=$(k_stubdir k13_sha); k_wrap "$K13M" sha256sum "ls \"\$WORK_DIR\"/.manifest.* > '${K13M}/seen' 2>/dev/null; echo \$\$ > '${K13M}/pid'; exec sleep 37"
     K13W1="${SCRATCH}/k13_w1"; rm -rf "$K13W1"; mkdir -p "$K13W1"
     k13_kill "$K13M" direct env WORK_DIR="$K13W1" PATH="${K13M}:${PATH}" bash ./fetch_repo.sh "$K13P"
     assert_contains "$K13_SEEN" "/.manifest." "F13: while the manifest is computed, the temporary list exists (.manifest.<pid>): the test is not vacuous"
@@ -3735,20 +3743,16 @@ PY
         git init -q "$K13G"; git -C "$K13G" config user.email t@example.com; git -C "$K13G" config user.name t
         printf 'print(1)\n' > "$K13G/ok.py"; git -C "$K13G" add -A && git -C "$K13G" commit -qm base; K13B=$(git -C "$K13G" rev-parse HEAD)
         printf 'print(2)\n' > "$K13G/two.py"; git -C "$K13G" add -A && git -C "$K13G" commit -qm change
-        K13S=$(k_stubdir k13_git); k_wrap "$K13S" git "case \" \$* \" in *\" diff \"*) ls \"\$WORK_DIR\"/.diff_files.* > '${K13S}/seen' 2>/dev/null; echo \$\$ > '${K13S}/pid'; exec sleep 30 ;; esac"
+        K13S=$(k_stubdir k13_git); k_wrap "$K13S" git "case \" \$* \" in *\" diff \"*) ls \"\$WORK_DIR\"/.diff_files.* > '${K13S}/seen' 2>/dev/null; echo \$\$ > '${K13S}/pid'; exec sleep 37 ;; esac"
         K13W2="${SCRATCH}/k13_w2"; rm -rf "$K13W2"; mkdir -p "$K13W2"
         k13_kill "$K13S" direct env WORK_DIR="$K13W2" SINCE_COMMIT="$K13B" PATH="${K13S}:${PATH}" bash ./fetch_repo.sh "$K13G"
         assert_contains "$K13_SEEN" "/.diff_files." "F13: while git diff runs, the temporary list exists (.diff_files.<pid>): the test is not vacuous"
         assert_eq "143" "$K13_EC" "F13: …the fetcher ended by SIGTERM there exits 143"
         assert_eq "0" "$(k13_left "$K13W2")" "F13: …and leaves no .diff_files.<pid>"
-        if ! command -v setsid &>/dev/null; then
-            skip_test "F13: ai_transit.sh killed during git diff leaves no temporary list" "setsid not installed"
-        else
-            K13W3="${SCRATCH}/k13_w3"; rm -rf "$K13W3"; mkdir -p "$K13W3"
-            k13_kill "$K13S" group env WORK_DIR="$K13W3" OUTPUT_DIR="${K13W3}/out" PATH="${K13S}:${PATH}" bash ./ai_transit.sh --quiet --since "$K13B" "$K13G"
-            assert_contains "$K13_SEEN" "/.diff_files." "F13: ai_transit.sh --since: while git diff runs, the temporary list exists"
-            assert_eq "0" "$(k13_left "$K13W3")" "F13: …ai_transit.sh and the fetcher it started, ended by SIGTERM together, leave no temporary list"
-        fi
+        K13W3="${SCRATCH}/k13_w3"; rm -rf "$K13W3"; mkdir -p "$K13W3"
+        k13_kill "$K13S" group env WORK_DIR="$K13W3" OUTPUT_DIR="${K13W3}/out" PATH="${K13S}:${PATH}" bash ./ai_transit.sh --quiet --since "$K13B" "$K13G"
+        assert_contains "$K13_SEEN" "/.diff_files." "F13: ai_transit.sh --since: while git diff runs, the temporary list exists"
+        assert_eq "0" "$(k13_left "$K13W3")" "F13: …ai_transit.sh and the fetcher it started, ended by SIGTERM together (under timeout), leave no temporary list"
     fi
     K13X="${SCRATCH}/k13_stale"; rm -rf "$K13X"; mkdir -p "$K13X"
     : > "$K13X/.diff_files.4242"; : > "$K13X/.manifest.4242"; : > "$K13X/.manifest_keep"
