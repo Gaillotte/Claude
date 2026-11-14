@@ -194,6 +194,36 @@ def tools_present() -> list[str]:
     return [t for t in TOOLS if shutil.which(t)]
 
 
+def hidden_tools(golden_tools: list[str]) -> list[str]:
+    """Scanners this host has and the golden file was recorded without. A replay must not see them: ShellCheck on a CI
+    runner turns `[WARN] shellcheck missing` into a PASS and 12 cases differ for a reason that is not the engine's."""
+    return [t for t in TOOLS if t not in golden_tools and shutil.which(t)]
+
+
+def mask_path(env: dict, hide: list[str], base: Path) -> None:
+    """Take the programs in `hide` off env['PATH']. Every directory outside `base` is replaced by one directory of
+    symbolic links to what they hold, minus those names; the case's own directories (its stubs) stay where they were."""
+    if not hide:
+        return
+    keep, outside = [], []
+    for d in env.get("PATH", "").split(":"):
+        if d:
+            (keep if Path(d).is_relative_to(base) else outside).append(d)
+    links = base / "hostbin"
+    links.mkdir()
+    for d in outside:
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for name in names:
+            full = os.path.join(d, name)
+            if name in hide or (links / name).is_symlink() or os.path.isdir(full) or not os.access(full, os.X_OK):
+                continue
+            os.symlink(full, links / name)
+    env["PATH"] = ":".join(keep + [str(links)])
+
+
 def _rel_factory(scan: Path, work: Path):
     scans = {str(scan), os.path.realpath(scan)}
     works = {str(work), os.path.realpath(work)}
@@ -305,7 +335,7 @@ def engine_env(engine: str, extra: dict, work: Path) -> dict:
     return env
 
 
-def run_case(engine: str, case: Case, keep: bool = False) -> dict:
+def run_case(engine: str, case: Case, keep: bool = False, hide: list[str] | None = None) -> dict:
     base = Path(tempfile.mkdtemp(prefix="conf_"))
     try:
         scan = case.build(base)
@@ -316,6 +346,7 @@ def run_case(engine: str, case: Case, keep: bool = False) -> dict:
         for rel_path, content in case.pre_work.items():
             _write(work / rel_path, content.format(**fmt))
         env = engine_env(engine, {k: v.format(**fmt) for k, v in case.env.items()}, work)
+        mask_path(env, hide or [], base)
         cmd = ENGINES[engine] + [str(scan) + case.dir_suffix, str(reports), case.scan_name]
         proc = subprocess.run(cmd, env=env, capture_output=True, timeout=900)
         stdout = proc.stdout.decode("utf-8", "replace").strip().splitlines()
@@ -370,9 +401,10 @@ def cmd_check(args) -> int:
             bad += 1
             continue
         golden = json.loads(gf.read_text(encoding="utf-8"))
-        if golden["meta"]["tools_present"] != tools_present() and not args.quiet:
-            print("note: golden captured with tools %s, now %s" % (golden["meta"]["tools_present"], tools_present()))
-        res = run_case(args.engine, case)
+        hide = hidden_tools(golden["meta"]["tools_present"])
+        if hide and not args.quiet:
+            print("note: golden captured with tools %s; %s hidden from this replay" % (golden["meta"]["tools_present"], hide))
+        res = run_case(args.engine, case, hide=hide)
         want = {k: golden[k] for k in ("exit", "last_line", "report")}
         if res == want:
             print("ok   %s" % case.name)
@@ -647,7 +679,7 @@ class RunCaseTests(unittest.TestCase):
         out = []
         try:
             for result, code in ((dict(want), 0), (dict(want, stale_accepted_divergences=["D-999"]), 1)):
-                globals()["run_case"] = lambda engine, case, keep=False, _r=result: _r
+                globals()["run_case"] = lambda engine, case, keep=False, hide=None, _r=result: _r
                 buf = _Capture()
                 with buf:
                     self.assertEqual(cmd_check(args), code)
@@ -672,6 +704,47 @@ class _Capture:
         sys.stdout = self._old
         self.text = self._buf.getvalue()
         return False
+
+
+class MaskPathTests(unittest.TestCase):
+    """A replay sees the tools its golden file was recorded with, whatever the host has installed."""
+
+    def setUp(self):
+        self.base = Path(tempfile.mkdtemp(prefix="mask_"))
+        self.addCleanup(shutil.rmtree, self.base, True)
+        self.outer = Path(tempfile.mkdtemp(prefix="mask_host_"))   # the host's directory is outside the case's base
+        self.addCleanup(shutil.rmtree, self.outer, True)
+        self.host = self.outer
+        for name in ("shellcheck", "grep", "bandit"):
+            f = self.host / name
+            f.write_text("#!/bin/sh\n")
+            f.chmod(0o755)
+        (self.host / "notes.txt").write_text("not a program")
+        (self.base / "stubs").mkdir()
+        self.work = self.base / "work"
+
+    def masked(self, hide):
+        env = {"PATH": "%s/stubs:%s" % (self.base, self.host)}
+        mask_path(env, hide, self.base)
+        return env["PATH"].split(":")
+
+    def test_a_hidden_program_is_gone_and_the_others_stay(self):
+        path = self.masked(["shellcheck", "bandit"])
+        self.assertEqual(path[0], "%s/stubs" % self.base)
+        self.assertEqual(sorted(os.listdir(path[-1])), ["grep"])
+        self.assertIsNone(shutil.which("shellcheck", path=":".join(path)))
+        self.assertIsNotNone(shutil.which("grep", path=":".join(path)))
+
+    def test_nothing_to_hide_leaves_the_path_alone(self):
+        env = {"PATH": "/usr/bin:/bin"}
+        mask_path(env, [], self.base)
+        self.assertEqual(env["PATH"], "/usr/bin:/bin")
+
+    def test_only_tools_the_golden_file_lacks_are_hidden(self):
+        present = [t for t in TOOLS if shutil.which(t)]
+        self.assertEqual(hidden_tools(present), [])
+        if present:
+            self.assertEqual(hidden_tools(present[1:]), [present[0]])
 
 
 class ContractTests(unittest.TestCase):
