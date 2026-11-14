@@ -78,6 +78,15 @@ jobs:
       - name: Run test suite
         run: ./tests/run_tests.sh -v
 
+      # Both engines on the same cases with the real scanners on the PATH (Bandit, ShellCheck, detect-secrets, Semgrep):
+      # the goldens were recorded without tools, so this is the check that the Python engine reads real tool output the
+      # way the shell does.
+      - name: Python engine equals bash engine with the real scanners (live differential)
+        run: python3 -I tests/conformance/conformance.py diff
+
+      - name: Per-file differential with the real scanners
+        run: python3 -I tests/conformance/family_diff.py
+
   # ── Python engine (docs/python_port_thin_plan.md) ──────────────────────────────────────────
   # The Python engine must give the bash engine's reports: all 26 golden reports (tests/conformance/golden), the schema
   # and invariants of the Python reports, and equal per-file status and rule ids on the whole rules corpus. Python 3.10
@@ -258,3 +267,28 @@ jobs:
           echo "exit code: $code"
           [ "$code" -eq 1 ] \
             || { echo "::error::Vulnerable fixture should exit 1, got ${code}."; exit 1; }
+
+      # The same two smoke tests with the Python engine (TRANSIT_ENGINE=python), inside the image, where the real
+      # gitleaks, detect-secrets, ClamAV, YARA, Semgrep, Bandit, ShellCheck and the others are installed.
+      - name: Smoke test — Python engine, clean fixture scans to PASS
+        run: |
+          mkdir -p out_py
+          docker run --rm -e TRANSIT_ENGINE=python \
+            -v "$PWD/tests/fixtures/clean:/mnt/localrepo:ro" \
+            -v "$PWD/out_py:/output" \
+            ai-transit:ci --quiet /mnt/localrepo
+          ls -la out_py/
+          ls out_py/*.zip >/dev/null 2>&1 \
+            || { echo "::error::No approved archive produced for the clean fixture by the Python engine."; exit 1; }
+
+      - name: Smoke test — Python engine, vulnerable fixture is blocked
+        run: |
+          set +e
+          docker run --rm -e TRANSIT_ENGINE=python \
+            -v "$PWD/tests/fixtures/vulnerable:/mnt/localrepo:ro" \
+            ai-transit:ci --quiet /mnt/localrepo
+          code=$?
+          set -e
+          echo "exit code: $code"
+          [ "$code" -eq 1 ] \
+            || { echo "::error::Vulnerable fixture should exit 1 with the Python engine, got ${code}."; exit 1; }

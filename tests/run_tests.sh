@@ -3777,9 +3777,9 @@ if ! _skipping; then
 import json, sys
 d = json.load(open(sys.argv[1]))
 print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
-    l_stub() {   # l_stub <name> <body on stdin>: a bandit stand-in in its own directory
-        local d="${SCRATCH}/l_st_$1"; rm -rf "$d"; mkdir -p "$d"
-        { printf '#!/bin/sh\n'; cat; } > "$d/bandit"; chmod +x "$d/bandit"; printf '%s' "$d"
+    l_stub() {   # l_stub <name> [tool, default bandit] <body on stdin>: a stand-in for a scanner, in its own directory
+        local d="${SCRATCH}/l_st_$1" t="${2:-bandit}"; rm -rf "$d"; mkdir -p "$d"
+        { printf '#!/bin/sh\n'; cat; } > "$d/$t"; chmod +x "$d/$t"; printf '%s' "$d"
     }
     LB="${SCRATCH}/l_bandit_repo"; rm -rf "$LB"; mkdir -p "$LB"; printf 'print(1)\n' > "$LB/a.py"
     # What real bandit 1.9.4 prints: title-case severity, the test named in the Issue line, no "Test ID" line, and a
@@ -3815,7 +3815,7 @@ printf '>> Issue: x\n   Test ID: B602\n   Severity: HIGH   Confidence: High\n'
 STUB
 )
     L_BIG=$(l_stub big <<'STUB'
-head -c 300000 /dev/zero | tr '\0' 'x'; printf '\n>> Issue: [B602:y] z\n   Severity: High   Confidence: High\n'
+printf '>> Issue: [B602:y] z\n   Severity: High   Confidence: High\n'; head -c 300000 /dev/zero | tr '\0' 'x'; printf '\n'
 STUB
 )
     for LE in bash python; do
@@ -3831,7 +3831,56 @@ STUB
         assert_contains "$(l_py "$LREP" "d['file_results'][sys.argv[3]]['message']" "${LB}/a.py")" "bandit:Severity: HIGH:B602" \
             "bandit [$LE]: the upper-case form with a Test ID line is still read as before"
         l_scan "$LE" "$LB" "l_big_$LE" "$L_BIG"
-        assert_eq "FAIL" "$(l_py "$LREP" "d['verdict']")" "bandit [$LE]: a finding after 300 KB of output is not lost"
+        assert_eq "FAIL" "$(l_py "$LREP" "d['verdict']")" "bandit [$LE]: a finding followed by 300 KB of output is not lost (grep -q exits at the first match)"
+    done
+    # cppcheck (stderr is part of what is read): a large output with the finding late must not be lost to a SIGPIPE under
+    # pipefail (echo | grep -q), and a message that ends right after "error:" must not abort the whole scan under set -e
+    # (the extraction `grep -o | head -1` found no text after the colon and failed the pipeline).
+    LC="${SCRATCH}/l_cpp_repo"; rm -rf "$LC"; mkdir -p "$LC"; printf 'int main(void) { return 0; }\n' > "$LC/a.c"
+    L_CBIG=$(l_stub cpp_big cppcheck <<'STUB'
+{ printf 'a.c:3:5: error: Buffer is accessed out of bounds [bufferAccessOutOfBounds]\n'; head -c 300000 /dev/zero | tr '\0' 'x'; printf '\n'; } >&2
+STUB
+)
+    L_CEMPTY=$(l_stub cpp_empty cppcheck <<'STUB'
+printf 'a.c:1: error:\n' >&2
+STUB
+)
+    L_COK=$(l_stub cpp_ok cppcheck <<'STUB'
+printf 'Checking a.c ...\n' >&2
+STUB
+)
+    L_CREAL=$(l_stub cpp_real cppcheck <<'STUB'
+printf 'a.c:3:5: error: Buffer is accessed out of bounds [bufferAccessOutOfBounds]\n' >&2
+STUB
+)
+    # checkov: the same SIGPIPE shape (`echo "$out" | grep -q FAILED` under pipefail) with the first FAILED line followed by a lot of output
+    LT="${SCRATCH}/l_tf_repo"; rm -rf "$LT"; mkdir -p "$LT"; printf 'variable "x" {}\n' > "$LT/main.tf"
+    L_KBIG=$(l_stub ck_big checkov <<'STUB'
+printf 'Check: CKV_AWS_1: x\n\tFAILED for resource: r\n'; head -c 300000 /dev/zero | tr '\0' 'x'; printf '\n'
+STUB
+)
+    L_KOK=$(l_stub ck_ok checkov <<'STUB'
+printf 'Check: CKV_AWS_1: x\n\tPASSED for resource: r\n'
+STUB
+)
+    for LE in bash python; do
+        l_scan "$LE" "$LT" "l_kbig_$LE" "$L_KBIG"
+        assert_eq "FAIL" "$(l_py "$LREP" "d['verdict']")" "checkov [$LE]: a FAILED check followed by 300 KB of output is not lost"
+        assert_contains "$(l_py "$LREP" "d['file_results'][sys.argv[3]]['message']" "${LT}/main.tf")" "checkov:1_CIS_IaC_findings" "checkov [$LE]: …and is counted"
+        l_scan "$LE" "$LT" "l_kok_$LE" "$L_KOK"
+        assert_eq "PASS" "$(l_py "$LREP" "d['verdict']")" "checkov [$LE]: only passed checks pass"
+    done
+    for LE in bash python; do
+        l_scan "$LE" "$LC" "l_cbig_$LE" "$L_CBIG"
+        assert_eq "FAIL" "$(l_py "$LREP" "d['verdict']")" "cppcheck [$LE]: a finding followed by 300 KB of output is not lost (grep -q exits at the first match)"
+        l_scan "$LE" "$LC" "l_cempty_$LE" "$L_CEMPTY"
+        assert_eq "FAIL" "$(l_py "$LREP" "d['verdict']")" "cppcheck [$LE]: a message that ends right after 'error:' fails the file and the run still writes its report"
+        assert_contains "$(l_py "$LREP" "d['file_results'][sys.argv[3]]['message']" "${LC}/a.c")" "cppcheck:" "cppcheck [$LE]: …recorded as a cppcheck finding"
+        l_scan "$LE" "$LC" "l_cok_$LE" "$L_COK"
+        assert_eq "PASS" "$(l_py "$LREP" "d['verdict']")" "cppcheck [$LE]: output with no error or warning passes"
+        l_scan "$LE" "$LC" "l_creal_$LE" "$L_CREAL"
+        assert_contains "$(l_py "$LREP" "d['file_results'][sys.argv[3]]['message']" "${LC}/a.c")" "cppcheck:error: Buffer is accessed out of bounds" \
+            "cppcheck [$LE]: an ordinary finding keeps its text"
     done
 fi
 

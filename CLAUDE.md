@@ -171,7 +171,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 - `record_fail` checks `SEV_THRESHOLD` → downgrades to WARN if severity below `MIN_SEVERITY`
 - `FILE_STATUS[path]` → `PASS | WARN | FAIL`; `FINDINGS[path]` accumulates FAIL messages
 
-**Bandit** is read the way real bandit prints: `Severity: Medium` or `High` in any case, the test id from the `Issue: [B602:…]` line above it (the older `Test ID` form is still read). The check used to look for upper-case `MEDIUM|HIGH` and a `Test ID` line that bandit never prints, so it never fired with the real tool; the fix newly fails about 4 of 100 real standard-library Python files (calibration, 2026-11-14). Pinned by Layer L for both engines.
+**Bandit** is read the way real bandit prints: `Severity: Medium` or `High` in any case, the test id from the `Issue: [B602:…]` line above it (the older `Test ID` form is still read). The check used to look for upper-case `MEDIUM|HIGH` and a `Test ID` line that bandit never prints, so it never fired with the real tool; the fix newly fails about 4 of 100 real standard-library Python files (calibration, 2026-11-14). Pinned by Layer L for both engines. The cppcheck and checkov results are read through here-strings too, not `echo | grep -q`: under `pipefail` `grep -q` exits at the first match, `echo` dies of SIGPIPE on a large output, and the match read as none (a fail-open); a cppcheck message ending right after `error:` no longer aborts the scan (the extraction ends in `|| true`). Layer L pins both for both engines.
 
 **Diff mode** (`--since COMMIT`): `fetch_repo.sh` writes changed file paths to `.diff_files`; `scan_by_type()` skips files not in that set.
 
@@ -1553,9 +1553,9 @@ hostile repository placed under such ancestors. `.transitignore` entries (files 
 ## CI
 
 `.github/workflows/ci.yml` — `lint` (shellcheck, errors fatal) · `test` (suite, no
-tools) · `engine-conformance` (the Python engine against all 26 golden reports, the schema and `family_diff.py`, on Python 3.10 to 3.13; required) · `test-with-tools` (scanners installed, advisory) · `pins` (verify pinned tool
+tools) · `engine-conformance` (the Python engine against all 26 golden reports, the schema and `family_diff.py`, on Python 3.10 to 3.13; required) · `test-with-tools` (scanners installed, advisory; also runs the live bash-against-Python differential and `family_diff.py` with the real scanners) · `pins` (verify pinned tool
 versions resolve and match their SHA-256) · `docker` (build image, assert non-root,
-smoke-test both fixtures).
+smoke-test both fixtures with the bash engine and with `TRANSIT_ENGINE=python`, real tools in the image).
 
 ## Commit & push convention
 

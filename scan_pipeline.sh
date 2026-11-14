@@ -1420,9 +1420,13 @@ scan_c_cpp() {
     if has_cmd cppcheck; then
         local out
         out=$(cppcheck --enable=all --quiet "$f" 2>&1 || true)
-        if echo "$out" | grep -qE 'error:|warning:'; then
+        # The output is read through here-strings, not `echo | grep`: under pipefail grep -q exits at the first match,
+        # echo dies of SIGPIPE on a large output, and the match read as none (a fail-open). And the extraction ends in
+        # `|| true`: a message that ends right after "error:" has no text for `[^$]+`, grep -o exits 1, and the failed
+        # pipeline in a plain assignment aborted the whole scan under set -e, with no report.
+        if grep -qE 'error:|warning:' <<<"$out"; then
             local first_err
-            first_err=$(echo "$out" | grep -oE '(error|warning):[^$]+' | head -1)
+            first_err=$(grep -oE '(error|warning):[^$]+' <<<"$out" | head -1 || true)
             record_fail "$f" "cppcheck:${first_err}"
             failed=true
         fi
@@ -1902,9 +1906,11 @@ scan_terraform() {
         local -a ck_opts=()
         [[ "$OFFLINE" == "true" ]] && ck_opts+=(--skip-download)
         out=$(checkov -f "$f" --quiet ${ck_opts[@]+"${ck_opts[@]}"} 2>/dev/null || true)
-        if echo "$out" | grep -q 'FAILED'; then
+        # Here-strings, not `echo | grep -q`: under pipefail grep -q exits at the first match, echo dies of SIGPIPE on a
+        # large output, and the failed checks read as none.
+        if grep -q 'FAILED' <<<"$out"; then
             local count
-            count=$(echo "$out" | grep -c 'FAILED' || true)
+            count=$(grep -c 'FAILED' <<<"$out" || true)
             record_fail "$f" "checkov:${count}_CIS_IaC_findings"
             failed=true
         fi
