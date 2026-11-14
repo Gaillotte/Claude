@@ -43,8 +43,9 @@ def _temp_view(prefix, data):
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-    except OSError:
-        pass
+    except OSError:                                  # a view that could not be written is no view: the raw file is searched
+        _drop_temp(path)
+        return ""
     return path
 
 
