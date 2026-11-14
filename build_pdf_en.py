@@ -1776,10 +1776,11 @@ qa_cards = [
         "False-positive guards for correct, safe code",
         "Flags, reports, archive structure, diff mode",
     ], HexColor("#2E7D32")),
-    ("Continuous integration", "5 jobs", [
-        "lint — shellcheck, errors fatal",
+    ("Continuous integration", "6 jobs, all blocking", [
+        "lint — shellcheck, hadolint, Python syntax",
         "test — suite, no tools (fast signal)",
-        "test-with-tools — scanners installed",
+        "test-with-tools — scanners installed + live differential",
+        "engine-conformance — Python engine, 3.10 to 3.13",
         "pins — pinned versions resolve + digest match",
         "docker — build, non-root, smoke tests",
     ], HexColor("#0070A8")),

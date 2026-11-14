@@ -2515,9 +2515,10 @@ t.style = "Table Grid"
 add_table_header(t, ["Job", "Purpose", "Blocking"])
 set_col_widths(t, [4, 10.5, 3])
 ci_rows = [
-    ("lint",            "shellcheck (errors fatal) and Python syntax", "Yes"),
+    ("lint",            "shellcheck (errors fatal), Python syntax, hadolint on the Dockerfile", "Yes"),
     ("test",            "Test suite with no scanning tools", "Yes"),
-    ("test-with-tools", "Suite again with the scanners installed", "No"),
+    ("test-with-tools", "Suite again with the scanners installed (exact versions), then the live bash-against-Python differential", "Yes"),
+    ("engine-conformance", "Python engine against the 26 golden reports, the schema and bash, on Python 3.10 to 3.13", "Yes"),
     ("pins",            "Pinned tool versions resolve, and match their SHA-256 digest", "Yes"),
     ("docker",          "Image builds, runs as non-root, passes smoke tests", "Yes"),
 ]

@@ -1552,10 +1552,17 @@ hostile repository placed under such ancestors. `.transitignore` entries (files 
 
 ## CI
 
-`.github/workflows/ci.yml` — `lint` (shellcheck, errors fatal) · `test` (suite, no
-tools) · `engine-conformance` (the Python engine against all 26 golden reports, the schema and `family_diff.py`, on Python 3.10 to 3.13; required) · `test-with-tools` (scanners installed, advisory; also runs the live bash-against-Python differential and `family_diff.py` with the real scanners) · `pins` (verify pinned tool
-versions resolve and match their SHA-256) · `docker` (build image, assert non-root,
-smoke-test both fixtures with the bash engine and with `TRANSIT_ENGINE=python`, real tools in the image).
+`.github/workflows/ci.yml` — all six jobs block. `lint` (shellcheck, errors fatal · Python syntax · hadolint on the
+Dockerfile, the pinned release with its digest checked) · `test` (suite, no tools) · `engine-conformance` (the Python
+engine against all 26 golden reports, the schema and `family_diff.py`, on Python 3.10 to 3.13) · `test-with-tools`
+(scanners installed at exact versions; the suite, then the live bash-against-Python differential and `family_diff.py`
+with the real scanners) · `pins` (verify pinned tool versions resolve and match their SHA-256) · `docker` (build image,
+assert non-root, smoke-test both fixtures with the bash engine and with `TRANSIT_ENGINE=python`, real tools in the
+image). The workflow also runs weekly (default branch only) and cancels a superseded run of the same ref. Actions are
+pinned to commit SHAs (`.github/dependabot.yml` keeps them current). Dependencies of the pinned packages, `apt`
+packages, base image tags and the runner image still float, so a red run is usually this repository but not always.
+`conformance.py check` hides host scanners the golden files were recorded without (a runner with ShellCheck would
+otherwise change 12 cases); `diff` and `family_diff.py` deliberately use whatever is installed.
 
 ## Commit & push convention
 

@@ -5,8 +5,9 @@ on:
     branches: ['**']
   pull_request:
   workflow_dispatch:
-  # Weekly, so a pin that stops resolving (a release asset removed, a tool release that breaks a rule) shows up without
-  # anyone pushing. GitHub runs scheduled workflows from the default branch only.
+  # Weekly, so a pin that stops resolving (a release asset removed, as happened to trivy 0.58.2) or a floating input that
+  # moved (a dependency of a pinned package, an apt package, the runner image) shows up without anyone pushing. GitHub
+  # runs scheduled workflows from the default branch only, so this is inert until the workflow is on it.
   schedule:
     - cron: '23 5 * * 1'
 
@@ -44,9 +45,12 @@ jobs:
       - name: Hadolint on the Dockerfile (the pinned release, digest checked)
         run: |
           set -euo pipefail
-          v=$(grep -oP 'ARG HADOLINT_VERSION=\K[0-9.]+' Dockerfile)
-          want=$(grep -oP 'ARG HADOLINT_SHA256=\K[0-9a-f]+' Dockerfile)
-          curl -sSL --retry 3 -o /tmp/hadolint "https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-Linux-x86_64"
+          v=$(grep -oP 'ARG HADOLINT_VERSION=\K[0-9.]+' Dockerfile) \
+            || { echo "::error::ARG HADOLINT_VERSION is missing from the Dockerfile"; exit 1; }
+          want=$(grep -oP 'ARG HADOLINT_SHA256=\K[0-9a-f]+' Dockerfile) \
+            || { echo "::error::ARG HADOLINT_SHA256 is missing or empty in the Dockerfile, so the linter cannot be verified"; exit 1; }
+          curl -fsSL --retry 3 -o /tmp/hadolint "https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-Linux-x86_64" \
+            || { echo "::error::hadolint ${v} could not be downloaded"; exit 1; }
           echo "${want}  /tmp/hadolint" | sha256sum -c -
           chmod +x /tmp/hadolint
           /tmp/hadolint Dockerfile
@@ -77,11 +81,13 @@ jobs:
   # ── Test suite with the real scanners present ──────────────────────────────
   # Catches breakage in tool-dependent paths (Layer 2 semgrep parsing, Bandit,
   # ScanCode) that the degraded-mode run cannot reach, and runs the live
-  # bash-against-Python differential. Required: the scanner versions are pinned
-  # below, so a red run means this repository changed, not that a tool moved.
+  # bash-against-Python differential. Required. The scanners are pinned to exact
+  # versions, but their dependencies, the apt shellcheck and the runner image still
+  # float, so a red run is usually this repository and occasionally an upstream move.
   test-with-tools:
     name: Test suite (scanners installed)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
@@ -233,6 +239,7 @@ jobs:
   docker:
     name: Docker build and smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [lint]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -247,6 +254,11 @@ jobs:
           tags: ai-transit:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Which detect-secrets the image runs (checkov installs a fork of the same package)
+        run: |
+          docker run --rm --entrypoint sh ai-transit:ci -c \
+            'pip3 list 2>/dev/null | grep -i "detect-secrets"; detect-secrets --version; command -v detect-secrets' || true
 
       - name: Image runs as a non-root user
         run: |

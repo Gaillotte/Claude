@@ -3143,15 +3143,29 @@ were wrong.
 
 ## 18. Continuous Integration {#ci}
 
-`.github/workflows/ci.yml` runs on every push and pull request.
+`.github/workflows/ci.yml` runs on every push and pull request, on demand (`workflow_dispatch`), and every
+Monday (a scheduled run, so a pin that stops resolving shows up without anyone pushing; GitHub runs scheduled
+workflows from the default branch only). A newer push to the same ref cancels the older run.
 
 | Job | Purpose | Blocking |
 |-----|---------|----------|
-| `lint` | shellcheck (errors fatal, warnings advisory) + Python syntax | Yes |
+| `lint` | shellcheck (errors fatal, warnings advisory), Python syntax, and hadolint on the project's own `Dockerfile` (the release the Dockerfile pins, its SHA-256 checked first) | Yes |
 | `test` | Test suite with no scanning tools — the fast signal | Yes |
-| `test-with-tools` | Suite again with semgrep/bandit/detect-secrets installed; exercises tool-dependent paths the degraded run cannot reach | No |
+| `test-with-tools` | Suite again with semgrep, bandit, detect-secrets and shellcheck installed (exact versions), then the live bash-against-Python differential and the per-file differential with the real scanners | Yes |
+| `engine-conformance` | The Python engine against all 26 golden reports, the report schema and the per-file differential with bash, on Python 3.10, 3.11, 3.12 and 3.13 | Yes |
 | `pins` | Downloads each pinned tool artifact, fails if the version does not exist, and compares against the pinned SHA-256 | Yes |
-| `docker` | Builds the image, asserts it runs as non-root, smoke-tests both fixtures | Yes |
+| `docker` | Builds the image, asserts it runs as non-root, smoke-tests both fixtures with the bash engine and with `TRANSIT_ENGINE=python` | Yes |
+
+"Blocking" means the job fails the workflow. To stop a merge on a red job, list the job names under the branch's
+protection rules (Settings, Branches): that is a repository setting, not something `ci.yml` can set.
+
+**What is pinned.** The four GitHub Actions are referenced by commit SHA with the version in a trailing comment, and
+`.github/dependabot.yml` proposes updates that change both. The scanners CI installs, and the nine Python packages
+in the image, are pinned to exact versions; trivy and hadolint are pinned with a SHA-256. **What is not:** the
+dependencies of those packages, the `apt` packages (`shellcheck` in CI, everything in the image), the base image
+tags, the `ubuntu-latest` runner and the patch release of Python. A red run is therefore usually this repository,
+but not always. `checkov` brings in `bc-detect-secrets`, a fork that installs the same `detect_secrets` package as
+`detect-secrets`, so which of the two the image runs is decided by install order, not by the `detect-secrets==1.5.0` pin.
 
 The `docker` job is the only place the multi-stage build, the pinned tool
 versions and the non-root user are actually exercised — none of that can be

@@ -1814,9 +1814,10 @@ t.style = "Table Grid"
 add_table_header(t, ["Job", "Objet", "Bloquant"])
 set_col_widths(t, [4, 10.5, 3])
 ci_rows = [
-    ("lint",            "shellcheck (erreurs fatales) et syntaxe Python", "Oui"),
+    ("lint",            "shellcheck (erreurs fatales), syntaxe Python, hadolint sur le Dockerfile", "Oui"),
     ("test",            "Suite de tests sans aucun outil de scan", "Oui"),
-    ("test-with-tools", "Suite rejouée avec les scanners installés", "Non"),
+    ("test-with-tools", "Suite rejouée avec les scanners installés (versions exactes), puis la comparaison en direct bash et Python", "Oui"),
+    ("engine-conformance", "Moteur Python contre les 26 rapports de référence, le schéma et bash, sur Python 3.10 à 3.13", "Oui"),
     ("pins",            "Les versions épinglées existent et correspondent à leur empreinte SHA-256", "Oui"),
     ("docker",          "L'image se construit, tourne en non-root, passe les tests de fumée", "Oui"),
 ]
