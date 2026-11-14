@@ -22,6 +22,7 @@ from transit.core import (ALLOW_MAP, DEFAULT_EXCLUDE_DIRS, FILE_MSG, FILE_STATUS
                           _b, _clr, _s, _san, call_scanner, cleanup_tmp, fail, first_line, has_cmd, info, init_offline_env,
                           ok, record_fail, record_fail_hard, record_layer, record_warn, register_tmp, run_helper, run_tool,
                           shebang_scanner, warn)
+from transit.layers import scan_dependencies, scan_global, scan_owasp_cwe, scan_scancode
 
 _FIND_BIG = 2 << 30
 
@@ -132,63 +133,6 @@ def build_prune_args():
         args += ["(", "-path", "%s/%s" % (root, d), "-o", "-path", "%s/*/%s" % (root, d), ")", "-prune", "-o",
                  "-path", "%s/%s/*" % (root, d), "-prune", "-o", "-path", "%s/*/%s/*" % (root, d), "-prune", "-o"]
     return args, builtin
-
-
-# ── Layers 1 to 3 and 6: transit/layers.py, or an explicit "not ported" ─────
-def _unported(layer_fn, header, rows):
-    """What a layer records until transit/layers.py has it: the same WARN and state as the shell when the tool is not
-    installed, and an explicit 'not ported' (never 'not installed', never ran) when it is."""
-    info(header)
-    for tool, present, layer, missing_warn, missing_state in rows:
-        if present:
-            record_warn("__global__", "python engine has not ported %s yet" % layer_fn)
-            record_layer(layer, "skipped:python engine has not ported %s yet" % layer_fn)
-        else:
-            record_warn("__global__", missing_warn)
-            record_layer(layer, missing_state)
-
-
-def _unported_scan_global():
-    yara = has_cmd("yara") and os.path.isdir(G.WORK_DIR + "/yara-rules")
-    _unported("scan_global", "=== Layer 1: Global (AV, secrets, IOC) ===", (
-        ("gitleaks", has_cmd("gitleaks"), "L1_secrets_gitleaks", "gitleaks missing — secret scan skipped",
-         "skipped:gitleaks not installed"),
-        ("detect-secrets", has_cmd("detect-secrets"), "L1_secrets_entropy", "detect-secrets missing",
-         "skipped:detect-secrets not installed"),
-        ("clamscan", has_cmd("clamscan"), "L1_malware", "clamscan missing", "skipped:clamav not installed"),
-        ("yara", yara, "L1_ioc_yara", "yara or rules directory missing", "skipped:yara or rules directory missing")))
-
-
-def _unported_scan_owasp_cwe():
-    _unported("scan_owasp_cwe", "=== Layer 2: OWASP Top 10 2021 + CWE Top 25 (Semgrep) ===", (
-        ("semgrep", has_cmd("semgrep"), "L2_owasp_cwe", "semgrep missing — OWASP/CWE layer skipped (pip install semgrep)",
-         "skipped:semgrep not installed"),))
-
-
-def _unported_scan_dependencies():
-    _unported("scan_dependencies", "=== Layer 3: SCA — Vulnerable dependencies (OWASP A06) ===", (
-        ("trivy", has_cmd("trivy"), "L3_dependency_cve", "trivy missing — dependency CVE scan skipped",
-         "skipped:trivy not installed"),))
-
-
-def _unported_scan_scancode():
-    _unported("scan_scancode", "=== Layer 6: ScanCode — licence, copyright & vulnerability ===", (
-        ("scancode", has_cmd("scancode"), "L6_licence",
-         "scancode missing — licence/copyright layer skipped (pip install scancode-toolkit)", "skipped:scancode not installed"),))
-
-
-def _layer(name, fallback):
-    import importlib
-    try:
-        fn = getattr(importlib.import_module("transit.layers"), name, None)
-    except ModuleNotFoundError as exc:
-        if exc.name != "transit.layers":
-            warn("transit/layers.py could not be imported: %s" % exc)
-        fn = None
-    except Exception as exc:
-        warn("transit/layers.py could not be imported: %s: %s" % (type(exc).__name__, exc))
-        fn = None
-    return fn or fallback
 
 
 # ── Classification ───────────────────────────────────────────────────────────
@@ -532,17 +476,17 @@ def main(argv):
         record_warn("__global__", "transitignore:exclusions_applied(%d pattern(s))" % len(G.EXTRA_EXCLUDE_DIRS))
     info("Standards: OWASP Top 10 2021 · CWE Top 25 · CERT Secure Coding%s" % (" · SCA" if G.RUN_SCA == "true" else ""))
 
-    _layer("scan_global", _unported_scan_global)()                 # Layer 1: AV + secrets + IOC
-    _layer("scan_owasp_cwe", _unported_scan_owasp_cwe)()           # Layer 2: Semgrep OWASP/CWE rulesets
+    scan_global()                                                  # Layer 1: AV + secrets + IOC
+    scan_owasp_cwe()                                               # Layer 2: Semgrep OWASP/CWE rulesets
     if G.RUN_SCA == "true":
-        _layer("scan_dependencies", _unported_scan_dependencies)()  # Layer 3: SCA
+        scan_dependencies()                                        # Layer 3: SCA
     else:
         info("Layer 3 (dependency CVEs) is disabled — set RUN_SCA=true to run it")
         record_layer("L3_dependency_cve", "skipped:disabled (RUN_SCA is not true)")
     # Layer 4: universal patterns run inside classify_file()
     scan_by_type(prune_args, prune_builtin_args)                   # Layer 5: per-language SAST
     if G.RUN_SCANCODE == "true":
-        _layer("scan_scancode", _unported_scan_scancode)()         # Layer 6: ScanCode
+        scan_scancode()                                            # Layer 6: ScanCode
     else:
         info("Layer 6 (ScanCode licences) is disabled — set RUN_SCANCODE=true to run it")
         record_layer("L6_licence", "skipped:disabled (RUN_SCANCODE is not true)")
