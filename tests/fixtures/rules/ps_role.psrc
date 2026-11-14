@@ -1,0 +1,4 @@
+@{
+    VisibleCmdlets = '*'
+    VisibleFunctions = '*'
+}

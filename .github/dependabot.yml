@@ -1,0 +1,10 @@
+# Keeps the commit-SHA pins in .github/workflows/ci.yml current. Each update arrives as a pull request that changes the
+# SHA and the version in the trailing comment, so a bump is reviewed and then run through the whole workflow.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "CI"

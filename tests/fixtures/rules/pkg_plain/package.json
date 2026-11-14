@@ -1,0 +1,8 @@
+{
+  "name": "widget",
+  "version": "1.0.0",
+  "description": "An ordinary package",
+  "repository": { "type": "git", "url": "git://github.com/example/widget.git" },
+  "homepage": "http://example.test/widget",
+  "dependencies": { "react": "^18.2.0" }
+}

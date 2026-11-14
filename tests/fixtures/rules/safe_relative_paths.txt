@@ -1,0 +1,22 @@
+Ordinary relative paths. A literal "../" is a relative path, not an attack,
+and before this was narrowed it failed 254 of 388 real HTML files and 27 of 88
+real Makefiles -- quarantining a repository for containing documentation.
+
+  CFLAGS += -I../include
+  VPATH = ../src
+  <a href="../commands/index.html">Commands</a>
+  <link rel="stylesheet" href="../_static/style.css">
+  from ..models import User
+  require('../package.json')
+  #include "../common/defs.h"
+  cd .. && make
+  sys.path.insert(0, os.path.dirname(__file__) + "/..")
+
+Path arithmetic on a known directory variable is not traversal either. Joining
+a build path with ".." to walk up one level is how every CMake project finds a
+sibling directory; matching it failed 23 of 1116 real CMake files.
+
+  set(DIR "${resolved_dir}/../lib")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/../common.cmake")
+  list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/../cmake")
+  get_filename_component(ABS "${CMAKE_CURRENT_SOURCE_DIR}/../${FILE}" ABSOLUTE)

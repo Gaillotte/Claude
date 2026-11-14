@@ -1,0 +1,15 @@
+Path traversal in the forms that actually indicate a vulnerability.
+
+Encoded, which has no innocent reading:
+  GET /download?f=%2e%2e%2f%2e%2e%2fetc%2fpasswd
+  GET /download?f=..%2f..%2fid_rsa
+
+Reaching a sensitive system path:
+  path = "../../../../etc/passwd"
+  cp = "..\\..\\windows\\system32\\cmd.exe"
+  shutil.copy(src, "../../.ssh/authorized_keys")
+
+Composed with input, which is the vulnerability shape:
+  open(base_dir + "../" + user_file)
+  target = f"{upload_dir}/../{filename}"
+  include($_GET['page'] . '../config.php');

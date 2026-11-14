@@ -1,0 +1,92 @@
+{
+ "exit": 0,
+ "last_line": "PASS",
+ "meta": {
+  "engine": "bash",
+  "locale": "C.UTF-8",
+  "tools_present": [
+   "npm",
+   "file",
+   "strings",
+   "unzip"
+  ]
+ },
+ "report": {
+  "coverage": {
+   "L1_ioc_yara": "skipped:yara or rules directory missing",
+   "L1_malware": "skipped:clamav not installed",
+   "L1_secrets_entropy": "skipped:detect-secrets not installed",
+   "L1_secrets_gitleaks": "skipped:gitleaks not installed",
+   "L2_owasp_cwe": "skipped:semgrep not installed",
+   "L3_dependency_cve": "skipped:disabled (RUN_SCA is not true)",
+   "L4_patterns": "ran",
+   "L5_per_language_sast": "ran",
+   "L6_licence": "skipped:disabled (RUN_SCANCODE is not true)"
+  },
+  "coverage_complete": false,
+  "coverage_gaps": [
+   "L1_ioc_yara",
+   "L1_malware",
+   "L1_secrets_entropy",
+   "L1_secrets_gitleaks",
+   "L2_owasp_cwe",
+   "L3_dependency_cve",
+   "L6_licence"
+  ],
+  "decision": "APPROVED",
+  "file_results": {
+   ".transit-allow.json": {
+    "messages": [],
+    "status": "PASS"
+   },
+   "__global__": {
+    "messages": [
+     "[WARN] clamscan missing",
+     "[WARN] detect-secrets missing",
+     "[WARN] gitleaks missing \u2014 secret scan skipped",
+     "[WARN] semgrep missing \u2014 OWASP/CWE layer skipped (pip install semgrep)",
+     "[WARN] yara or rules directory missing"
+    ],
+    "status": "WARN"
+   },
+   "src/db.py": {
+    "messages": [
+     "[WARN] ALLOWED:CWE-89:SQL_injection_query_built_by_string_interpolation (reason: Known finding, tracked in TICKET-1234; test fixture only)",
+     "[WARN] bandit missing"
+    ],
+    "status": "WARN"
+   }
+  },
+  "findings": [],
+  "findings_by_file": {},
+  "scan_name": "conf",
+  "source": {
+   "sha256": "a37839b2e664d4e316014d2fe39fecb2318ce93ad08a9e5222fde09a0b69fbf6"
+  },
+  "standards": [
+   "OWASP-Top10-2021",
+   "CWE-Top25",
+   "CERT-Secure-Coding",
+   "PDF-Active-Content",
+   "Build-Script-Hardening",
+   "HTML-Active-Content",
+   "XML-Build-Hardening",
+   "Package-Manifest-Integrity",
+   "Gradle-Build-Hardening",
+   "Install-Time-Python",
+   "Known-Credential-Formats",
+   "PowerShell-Hardening",
+   "Windows-Batch-Hardening",
+   "Java-Archive-Hardening",
+   "Office-Document-Hardening"
+  ],
+  "status_background": "#D1E7DD",
+  "status_color": "#198754",
+  "summary": {
+   "fail": 0,
+   "pass": 1,
+   "warn": 7
+  },
+  "verdict": "PASS"
+ }
+}

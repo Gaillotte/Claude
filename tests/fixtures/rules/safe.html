@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Account</title>
+<!-- https, and pinned with Subresource Integrity -->
+<script src="https://cdn.example.test/lib.js"
+        integrity="sha384-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        crossorigin="anonymous"></script>
+</head>
+<body>
+<h1>Sign in</h1>
+
+<!-- Relative action, no credentials in the markup. -->
+<form action="/session" method="post">
+  <label for="u">User</label>
+  <input id="u" name="username" autocomplete="username">
+  <input type="submit" value="Sign in">
+</form>
+
+<!-- A visible iframe with real dimensions is not a drive-by. -->
+<iframe src="https://example.test/embed" width="600" height="400"
+        title="Embedded help"></iframe>
+
+<script>
+  // unescape(encodeURIComponent(x)) is the standard UTF-8 to byte-string
+  // idiom and appears in most bundled JavaScript. It is not an obfuscated
+  // payload, so the rule requires a percent-encoded blob instead.
+  function toBytes(s) { return unescape(encodeURIComponent(s)); }
+
+  // Reading a cookie, and separately making a request, is ordinary. The
+  // exfiltration rule needs both within one statement.
+  function getCookie(name) {
+    var m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return m ? m.pop() : '';
+  }
+  fetch('/api/profile').then(function (r) { return r.json(); });
+</script>
+</body></html>

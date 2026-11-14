@@ -1,0 +1,101 @@
+{
+ "exit": 1,
+ "last_line": "FAIL",
+ "meta": {
+  "engine": "bash",
+  "locale": "C.UTF-8",
+  "tools_present": [
+   "npm",
+   "file",
+   "strings",
+   "unzip"
+  ]
+ },
+ "report": {
+  "coverage": {
+   "L1_ioc_yara": "skipped:yara or rules directory missing",
+   "L1_malware": "skipped:clamav not installed",
+   "L1_secrets_entropy": "skipped:detect-secrets not installed",
+   "L1_secrets_gitleaks": "skipped:gitleaks not installed",
+   "L2_owasp_cwe": "skipped:semgrep not installed",
+   "L3_dependency_cve": "skipped:disabled (RUN_SCA is not true)",
+   "L4_patterns": "skipped:nothing scanned (every file excluded)",
+   "L5_per_language_sast": "skipped:nothing scanned (every file excluded)",
+   "L6_licence": "skipped:disabled (RUN_SCANCODE is not true)"
+  },
+  "coverage_complete": false,
+  "coverage_gaps": [
+   "L1_ioc_yara",
+   "L1_malware",
+   "L1_secrets_entropy",
+   "L1_secrets_gitleaks",
+   "L2_owasp_cwe",
+   "L3_dependency_cve",
+   "L4_patterns",
+   "L5_per_language_sast",
+   "L6_licence"
+  ],
+  "decision": "REJECTED",
+  "file_results": {
+   "__global__": {
+    "messages": [
+     "[FAIL] engine:nothing_scanned",
+     "[WARN] clamscan missing",
+     "[WARN] detect-secrets missing",
+     "[WARN] gitleaks missing \u2014 secret scan skipped",
+     "[WARN] semgrep missing \u2014 OWASP/CWE layer skipped (pip install semgrep)",
+     "[WARN] transitignore:exclusions_applied(1 pattern(s))",
+     "[WARN] yara or rules directory missing"
+    ],
+    "status": "FAIL"
+   }
+  },
+  "findings": [
+   {
+    "category": "security",
+    "file": "__global__",
+    "line": null,
+    "message": "engine:nothing_scanned",
+    "references": [],
+    "rule_id": "nothing_scanned",
+    "rule_name": "engine:nothing_scanned",
+    "severity": "HIGH",
+    "tool": "engine"
+   }
+  ],
+  "findings_by_file": {
+   "__global__": [
+    "engine:nothing_scanned"
+   ]
+  },
+  "scan_name": "conf",
+  "source": {
+   "sha256": "f969e59c181e4fc86ff22a3d3d860c8031f2e2304fc689934846b8b2f216c123"
+  },
+  "standards": [
+   "OWASP-Top10-2021",
+   "CWE-Top25",
+   "CERT-Secure-Coding",
+   "PDF-Active-Content",
+   "Build-Script-Hardening",
+   "HTML-Active-Content",
+   "XML-Build-Hardening",
+   "Package-Manifest-Integrity",
+   "Gradle-Build-Hardening",
+   "Install-Time-Python",
+   "Known-Credential-Formats",
+   "PowerShell-Hardening",
+   "Windows-Batch-Hardening",
+   "Java-Archive-Hardening",
+   "Office-Document-Hardening"
+  ],
+  "status_background": "#F8D7DA",
+  "status_color": "#B02A37",
+  "summary": {
+   "fail": 1,
+   "pass": 0,
+   "warn": 6
+  },
+  "verdict": "FAIL"
+ }
+}

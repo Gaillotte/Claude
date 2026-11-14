@@ -1,0 +1,6 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: demo\n"
+
+msgid "Hello"
+msgstr ""

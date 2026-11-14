@@ -1,0 +1,328 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  # Weekly, so a pin that stops resolving (a release asset removed, as happened to trivy 0.58.2) or a floating input that
+  # moved (a dependency of a pinned package, an apt package, the runner image) shows up without anyone pushing. GitHub
+  # runs scheduled workflows from the default branch only, so this is inert until the workflow is on it.
+  schedule:
+    - cron: '23 5 * * 1'
+
+permissions:
+  contents: read
+
+# A newer push to the same ref makes the older run pointless.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Static analysis ────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: ShellCheck (errors are fatal)
+        run: |
+          shellcheck --severity=error \
+            ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh \
+            tests/run_tests.sh
+
+      - name: ShellCheck (warnings are advisory)
+        continue-on-error: true
+        run: |
+          shellcheck --severity=warning \
+            ai_transit.sh fetch_repo.sh scan_pipeline.sh docker-run.sh
+
+      - name: Hadolint on the Dockerfile (the pinned release, digest checked)
+        run: |
+          set -euo pipefail
+          v=$(grep -oP 'ARG HADOLINT_VERSION=\K[0-9.]+' Dockerfile) \
+            || { echo "::error::ARG HADOLINT_VERSION is missing from the Dockerfile"; exit 1; }
+          want=$(grep -oP 'ARG HADOLINT_SHA256=\K[0-9a-f]+' Dockerfile) \
+            || { echo "::error::ARG HADOLINT_SHA256 is missing or empty in the Dockerfile, so the linter cannot be verified"; exit 1; }
+          curl -fsSL --retry 3 -o /tmp/hadolint "https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-Linux-x86_64" \
+            || { echo "::error::hadolint ${v} could not be downloaded"; exit 1; }
+          echo "${want}  /tmp/hadolint" | sha256sum -c -
+          chmod +x /tmp/hadolint
+          /tmp/hadolint Dockerfile
+
+      - name: Python syntax
+        run: |
+          python3 -m compileall -q selfcheck.py generate_excel_report.py
+
+  # ── Test suite ─────────────────────────────────────────────────────────────
+  # Runs with no scanning tools installed: the pipeline degrades to its
+  # grep-based rules and every assertion still holds. This is the fast signal.
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install report dependencies
+        run: pip install --quiet openpyxl==3.1.5 reportlab==5.1.0
+
+      - name: Run test suite
+        run: ./tests/run_tests.sh
+
+  # ── Test suite with the real scanners present ──────────────────────────────
+  # Catches breakage in tool-dependent paths (Layer 2 semgrep parsing, Bandit,
+  # ScanCode) that the degraded-mode run cannot reach, and runs the live
+  # bash-against-Python differential. Required. The scanners are pinned to exact
+  # versions, but their dependencies, the apt shellcheck and the runner image still
+  # float, so a red run is usually this repository and occasionally an upstream move.
+  test-with-tools:
+    name: Test suite (scanners installed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Install scanners
+        run: |
+          pip install --quiet openpyxl==3.1.5 reportlab==5.1.0 semgrep==1.185.0 bandit==1.9.4 detect-secrets==1.5.0
+          sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run test suite
+        run: ./tests/run_tests.sh -v
+
+      # Both engines on the same cases with the real scanners on the PATH (Bandit, ShellCheck, detect-secrets, Semgrep):
+      # the goldens were recorded without tools, so this is the check that the Python engine reads real tool output the
+      # way the shell does.
+      - name: Python engine equals bash engine with the real scanners (live differential)
+        run: python3 -I tests/conformance/conformance.py diff
+
+      - name: Per-file differential with the real scanners
+        run: python3 -I tests/conformance/family_diff.py
+
+  # ── Python engine (docs/python_port_thin_plan.md) ──────────────────────────────────────────
+  # The Python engine must give the bash engine's reports: all 26 golden reports (tests/conformance/golden), the schema
+  # and invariants of the Python reports, and equal per-file status and rule ids on the whole rules corpus. Python 3.10
+  # is the floor of the engine and 3.13 the newest checked. Required: a difference here is a regression.
+  engine-conformance:
+    name: Python engine conformance (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: All golden reports are reproduced
+        run: python3 -I tests/conformance/conformance.py check --engine python
+
+      - name: Python reports conform to the schema
+        run: python3 -I tests/conformance/check_schema.py --engine python
+
+      - name: Per-file status and rule ids equal to bash on the rules corpus
+        run: python3 -I tests/conformance/family_diff.py
+
+  # ── Supply chain: do the pinned versions actually resolve? ──────────────────
+  # These pins could not be verified from the development sandbox (its proxy
+  # blocks github.com), so CI is the first place they are genuinely checked.
+  pins:
+    name: Verify pinned tool versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Resolve pinned versions from the Dockerfile
+        id: pins
+        run: |
+          set -euo pipefail
+          trivy=$(grep -oP 'ARG TRIVY_VERSION=\K[0-9.]+'   Dockerfile)
+          hado=$(grep -oP 'ARG HADOLINT_VERSION=\K[0-9.]+' Dockerfile)
+          gl=$(grep -oP 'ARG GITLEAKS_VERSION=\K[0-9.]+' Dockerfile || echo "")
+          echo "trivy=$trivy"     >> "$GITHUB_OUTPUT"
+          echo "hadolint=$hado"   >> "$GITHUB_OUTPUT"
+          echo "gitleaks=$gl"     >> "$GITHUB_OUTPUT"
+          echo "Pinned: trivy=$trivy hadolint=$hado gitleaks=${gl:-unset}"
+
+      - name: Resolve pinned digests from the Dockerfile
+        id: digests
+        run: |
+          set -euo pipefail
+          th=$(grep -oP 'ARG TRIVY_SHA256=\K[0-9a-f]*'    Dockerfile || echo "")
+          hh=$(grep -oP 'ARG HADOLINT_SHA256=\K[0-9a-f]*' Dockerfile || echo "")
+          echo "trivy_sha=$th"    >> "$GITHUB_OUTPUT"
+          echo "hadolint_sha=$hh" >> "$GITHUB_OUTPUT"
+
+      # Downloads the artifact, proves it exists, and prints its real digest.
+      # If the Dockerfile pins a digest, it must match; if it pins none, the
+      # digest is surfaced in the log so it can be pasted into the Dockerfile.
+      - name: trivy artifact exists and matches its pinned digest
+        run: |
+          v='${{ steps.pins.outputs.trivy }}'
+          want='${{ steps.digests.outputs.trivy_sha }}'
+          url="https://github.com/aquasecurity/trivy/releases/download/v${v}/trivy_${v}_Linux-64bit.tar.gz"
+          echo "GET $url"
+          code=$(curl -sSL -o /tmp/trivy.tgz -w '%{http_code}' --retry 3 "$url")
+          echo "HTTP $code  size=$(stat -c%s /tmp/trivy.tgz 2>/dev/null || echo 0)"
+          if [ "$code" != "200" ]; then
+            echo "::error::Pinned trivy version ${v} has no downloadable artifact (HTTP ${code})."
+            echo "::error::Update ARG TRIVY_VERSION in the Dockerfile to a released version."
+            exit 1
+          fi
+          got=$(sha256sum /tmp/trivy.tgz | cut -d' ' -f1)
+          echo "actual sha256: ${got}"
+          if [ -z "$want" ]; then
+            echo "::warning::ARG TRIVY_SHA256 is empty — trivy is installed without integrity verification."
+            echo "::warning::Paste this into the Dockerfile: ARG TRIVY_SHA256=${got}"
+          elif [ "$want" != "$got" ]; then
+            echo "::error::trivy digest mismatch. Pinned ${want}, got ${got}."
+            exit 1
+          else
+            echo "trivy digest matches the pin."
+          fi
+
+      - name: hadolint artifact exists and matches its pinned digest
+        run: |
+          v='${{ steps.pins.outputs.hadolint }}'
+          want='${{ steps.digests.outputs.hadolint_sha }}'
+          url="https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-Linux-x86_64"
+          code=$(curl -sSL -o /tmp/hadolint -w '%{http_code}' --retry 3 "$url")
+          echo "HTTP $code  size=$(stat -c%s /tmp/hadolint 2>/dev/null || echo 0)"
+          if [ "$code" != "200" ]; then
+            echo "::error::Pinned hadolint version ${v} has no downloadable artifact (HTTP ${code})."
+            exit 1
+          fi
+          got=$(sha256sum /tmp/hadolint | cut -d' ' -f1)
+          echo "actual sha256: ${got}"
+          if [ -z "$want" ]; then
+            echo "::warning::ARG HADOLINT_SHA256 is empty. Suggested: ARG HADOLINT_SHA256=${got}"
+          elif [ "$want" != "$got" ]; then
+            echo "::error::hadolint digest mismatch. Pinned ${want}, got ${got}."
+            exit 1
+          else
+            echo "hadolint digest matches the pin."
+          fi
+
+      - name: gitleaks module resolves
+        continue-on-error: true
+        run: |
+          v='${{ steps.pins.outputs.gitleaks }}'
+          if [ -z "$v" ]; then echo "No gitleaks pin found — skipping."; exit 0; fi
+          echo "Querying the Go module proxy for gitleaks v${v} …"
+          code=$(curl -sSL -o /tmp/gl.info -w '%{http_code}' \
+            "https://proxy.golang.org/github.com/zricethezav/gitleaks/v8/@v/v${v}.info" || true)
+          echo "HTTP $code"; cat /tmp/gl.info 2>/dev/null || true
+          if [ "$code" != "200" ]; then
+            echo "::warning::gitleaks v${v} did not resolve on the Go module proxy."
+            echo "::warning::If this module is private or renamed, the Docker build will fail."
+          fi
+
+  # ── Docker image ───────────────────────────────────────────────────────────
+  # The only place the multi-stage build, the pinned versions and the non-root
+  # USER are actually exercised.
+  docker:
+    name: Docker build and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: .
+          load: true
+          tags: ai-transit:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Which detect-secrets the image runs (checkov installs a fork of the same package)
+        run: |
+          docker run --rm --entrypoint sh ai-transit:ci -c \
+            'pip3 list 2>/dev/null | grep -i "detect-secrets"; detect-secrets --version; command -v detect-secrets' || true
+
+      - name: Image runs as a non-root user
+        run: |
+          uid=$(docker run --rm --entrypoint id ai-transit:ci -u)
+          echo "container uid: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "::error::Container runs as root; the pipeline's own CWE-250 check would flag this."
+            exit 1
+          fi
+
+      - name: No-argument invocation prints usage
+        run: |
+          out=$(docker run --rm ai-transit:ci 2>&1 || true)
+          echo "$out" | head -20
+          echo "$out" | grep -q "Usage:" \
+            || { echo "::error::Expected usage text with no arguments."; exit 1; }
+
+      - name: Smoke test — clean fixture scans to PASS
+        run: |
+          mkdir -p out
+          # The mount hides the image's own `chmod 777 /output`: the non-root `transit` user must be able to write here.
+          chmod 777 out
+          docker run --rm \
+            -v "$PWD/tests/fixtures/clean:/mnt/localrepo:ro" \
+            -v "$PWD/out:/output" \
+            ai-transit:ci --quiet /mnt/localrepo
+          ls -la out/
+          ls out/*.zip >/dev/null 2>&1 \
+            || { echo "::error::No approved archive produced for the clean fixture."; exit 1; }
+
+      - name: Smoke test — vulnerable fixture is blocked
+        run: |
+          set +e
+          docker run --rm \
+            -v "$PWD/tests/fixtures/vulnerable:/mnt/localrepo:ro" \
+            ai-transit:ci --quiet /mnt/localrepo
+          code=$?
+          set -e
+          echo "exit code: $code"
+          [ "$code" -eq 1 ] \
+            || { echo "::error::Vulnerable fixture should exit 1, got ${code}."; exit 1; }
+
+      # The same two smoke tests with the Python engine (TRANSIT_ENGINE=python), inside the image, where the real
+      # gitleaks, detect-secrets, ClamAV, YARA, Semgrep, Bandit, ShellCheck and the others are installed.
+      - name: Smoke test — Python engine, clean fixture scans to PASS
+        run: |
+          mkdir -p out_py
+          chmod 777 out_py
+          docker run --rm -e TRANSIT_ENGINE=python \
+            -v "$PWD/tests/fixtures/clean:/mnt/localrepo:ro" \
+            -v "$PWD/out_py:/output" \
+            ai-transit:ci --quiet /mnt/localrepo
+          ls -la out_py/
+          ls out_py/*.zip >/dev/null 2>&1 \
+            || { echo "::error::No approved archive produced for the clean fixture by the Python engine."; exit 1; }
+
+      - name: Smoke test — Python engine, vulnerable fixture is blocked
+        run: |
+          set +e
+          docker run --rm -e TRANSIT_ENGINE=python \
+            -v "$PWD/tests/fixtures/vulnerable:/mnt/localrepo:ro" \
+            ai-transit:ci --quiet /mnt/localrepo
+          code=$?
+          set -e
+          echo "exit code: $code"
+          [ "$code" -eq 1 ] \
+            || { echo "::error::Vulnerable fixture should exit 1 with the Python engine, got ${code}."; exit 1; }

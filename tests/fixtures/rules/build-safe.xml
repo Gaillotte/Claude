@@ -1,0 +1,11 @@
+<project name="widget" default="compile">
+  <property name="build.dir" value="build"/>
+  <property name="db.password" value="${env.DB_PASSWORD}"/>
+  <target name="compile">
+    <javac srcdir="src" destdir="${build.dir}"/>
+    <get src="https://repo.example.test/lib.jar" dest="lib/lib.jar"/>
+  </target>
+  <target name="clean">
+    <delete dir="${build.dir}"/>
+  </target>
+</project>

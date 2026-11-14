@@ -1,0 +1,120 @@
+{
+ "exit": 1,
+ "last_line": "FAIL",
+ "meta": {
+  "engine": "bash",
+  "locale": "C.UTF-8",
+  "tools_present": [
+   "npm",
+   "file",
+   "strings",
+   "unzip"
+  ]
+ },
+ "report": {
+  "coverage": {
+   "L1_ioc_yara": "skipped:yara or rules directory missing",
+   "L1_malware": "skipped:clamav not installed",
+   "L1_secrets_entropy": "skipped:detect-secrets not installed",
+   "L1_secrets_gitleaks": "skipped:gitleaks not installed",
+   "L2_owasp_cwe": "skipped:semgrep not installed",
+   "L3_dependency_cve": "skipped:disabled (RUN_SCA is not true)",
+   "L4_patterns": "ran",
+   "L5_per_language_sast": "ran",
+   "L6_licence": "skipped:disabled (RUN_SCANCODE is not true)"
+  },
+  "coverage_complete": false,
+  "coverage_gaps": [
+   "L1_ioc_yara",
+   "L1_malware",
+   "L1_secrets_entropy",
+   "L1_secrets_gitleaks",
+   "L2_owasp_cwe",
+   "L3_dependency_cve",
+   "L6_licence"
+  ],
+  "decision": "REJECTED",
+  "file_results": {
+   "__global__": {
+    "messages": [
+     "[WARN] clamscan missing",
+     "[WARN] detect-secrets missing",
+     "[WARN] gitleaks missing \u2014 secret scan skipped",
+     "[WARN] semgrep missing \u2014 OWASP/CWE layer skipped (pip install semgrep)",
+     "[WARN] yara or rules directory missing"
+    ],
+    "status": "WARN"
+   },
+   "raw\u001b]0;pwned\u0007.txt": {
+    "messages": [
+     "[FAIL] CWE-798:hardcoded_credential",
+     "[FAIL] CWE-798:hardcoded_credential_in_doc"
+    ],
+    "status": "FAIL"
+   }
+  },
+  "findings": [
+   {
+    "category": "cwe",
+    "file": "raw\u001b]0;pwned\u0007.txt",
+    "line": null,
+    "message": "CWE-798:hardcoded_credential",
+    "references": [
+     "CWE-798"
+    ],
+    "rule_id": "CWE-798",
+    "rule_name": "hardcoded_credential",
+    "severity": "HIGH",
+    "tool": "grep-pattern"
+   },
+   {
+    "category": "cwe",
+    "file": "raw\u001b]0;pwned\u0007.txt",
+    "line": null,
+    "message": "CWE-798:hardcoded_credential_in_doc",
+    "references": [
+     "CWE-798"
+    ],
+    "rule_id": "CWE-798",
+    "rule_name": "hardcoded_credential_in_doc",
+    "severity": "HIGH",
+    "tool": "grep-pattern"
+   }
+  ],
+  "findings_by_file": {
+   "raw\u001b]0;pwned\u0007.txt": [
+    "CWE-798:hardcoded_credential",
+    "CWE-798:hardcoded_credential_in_doc"
+   ]
+  },
+  "scan_name": "conf",
+  "source": {
+   "sha256": "22ec05a5e0c519597cec3a8cd8b99bd5ff0129254fdf362490bd80b9922cca4d"
+  },
+  "standards": [
+   "OWASP-Top10-2021",
+   "CWE-Top25",
+   "CERT-Secure-Coding",
+   "PDF-Active-Content",
+   "Build-Script-Hardening",
+   "HTML-Active-Content",
+   "XML-Build-Hardening",
+   "Package-Manifest-Integrity",
+   "Gradle-Build-Hardening",
+   "Install-Time-Python",
+   "Known-Credential-Formats",
+   "PowerShell-Hardening",
+   "Windows-Batch-Hardening",
+   "Java-Archive-Hardening",
+   "Office-Document-Hardening"
+  ],
+  "status_background": "#F8D7DA",
+  "status_color": "#B02A37",
+  "summary": {
+   "fail": 2,
+   "pass": 0,
+   "warn": 5
+  },
+  "verdict": "FAIL"
+ }
+}

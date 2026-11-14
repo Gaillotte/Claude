@@ -1,0 +1,106 @@
+{
+ "exit": 0,
+ "last_line": "PASS",
+ "meta": {
+  "engine": "bash",
+  "locale": "C.UTF-8",
+  "tools_present": [
+   "npm",
+   "file",
+   "strings",
+   "unzip"
+  ]
+ },
+ "report": {
+  "coverage": {
+   "L1_ioc_yara": "skipped:yara or rules directory missing",
+   "L1_malware": "skipped:clamav not installed",
+   "L1_secrets_entropy": "skipped:detect-secrets not installed",
+   "L1_secrets_gitleaks": "skipped:gitleaks not installed",
+   "L2_owasp_cwe": "skipped:semgrep not installed",
+   "L3_dependency_cve": "skipped:trivy not installed",
+   "L4_patterns": "ran",
+   "L5_per_language_sast": "ran",
+   "L6_licence": "skipped:scancode not installed"
+  },
+  "coverage_complete": false,
+  "coverage_gaps": [
+   "L1_ioc_yara",
+   "L1_malware",
+   "L1_secrets_entropy",
+   "L1_secrets_gitleaks",
+   "L2_owasp_cwe",
+   "L3_dependency_cve",
+   "L6_licence"
+  ],
+  "decision": "APPROVED",
+  "file_results": {
+   "README.md": {
+    "messages": [],
+    "status": "PASS"
+   },
+   "__global__": {
+    "messages": [
+     "[WARN] OFFLINE:Python dependency CVE scan unavailable (pip-audit and safety both require a network advisory service) \u2014 rely on the staged trivy database for Python CVEs",
+     "[WARN] clamscan missing",
+     "[WARN] detect-secrets missing",
+     "[WARN] gitleaks missing \u2014 secret scan skipped",
+     "[WARN] scancode missing \u2014 licence/copyright layer skipped (pip install scancode-toolkit)",
+     "[WARN] semgrep missing \u2014 OWASP/CWE layer skipped (pip install semgrep)",
+     "[WARN] trivy missing \u2014 dependency CVE scan skipped",
+     "[WARN] yara or rules directory missing"
+    ],
+    "status": "WARN"
+   },
+   "requirements.txt": {
+    "messages": [],
+    "status": "PASS"
+   },
+   "src/app.py": {
+    "messages": [
+     "[WARN] bandit missing"
+    ],
+    "status": "WARN"
+   },
+   "src/setup.sh": {
+    "messages": [
+     "[WARN] shellcheck missing"
+    ],
+    "status": "WARN"
+   }
+  },
+  "findings": [],
+  "findings_by_file": {},
+  "scan_name": "conf",
+  "source": {
+   "sha256": "065a8e52df6613ad7ef0a7f532cb05a0b6796c0be9552d0525664574e92206be"
+  },
+  "standards": [
+   "OWASP-Top10-2021",
+   "CWE-Top25",
+   "CERT-Secure-Coding",
+   "SCA-CVE",
+   "ScanCode-Licence-Copyright",
+   "PDF-Active-Content",
+   "Build-Script-Hardening",
+   "HTML-Active-Content",
+   "XML-Build-Hardening",
+   "Package-Manifest-Integrity",
+   "Gradle-Build-Hardening",
+   "Install-Time-Python",
+   "Known-Credential-Formats",
+   "PowerShell-Hardening",
+   "Windows-Batch-Hardening",
+   "Java-Archive-Hardening",
+   "Office-Document-Hardening"
+  ],
+  "status_background": "#D1E7DD",
+  "status_color": "#198754",
+  "summary": {
+   "fail": 0,
+   "pass": 4,
+   "warn": 10
+  },
+  "verdict": "PASS"
+ }
+}
