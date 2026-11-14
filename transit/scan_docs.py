@@ -13,7 +13,7 @@ import re
 import subprocess
 import tempfile
 
-from transit.core import (FILE_STATUS, _ascii_lower, _known_cred_check, _s, call_scanner, first_line, grep_check, has_cmd,
+from transit.core import (FILE_STATUS, _ascii_lower, _b, _known_cred_check, _s, call_scanner, first_line, grep_check, has_cmd,
                           record_fail, record_pass, record_warn, run_helper, run_tool, shebang_scanner)
 
 
@@ -65,9 +65,9 @@ def _pipe_output(argv1, argv2):
     """`out=$(argv1 | argv2 || true); [[ -n "$out" ]]`: does the second program print anything. The exit statuses are not read, only
     the output, like the shell reads it; both programs have stdin and stderr on /dev/null."""
     try:
-        p1 = subprocess.Popen([os.fsencode(a) for a in argv1], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        p1 = subprocess.Popen([_b(a) for a in argv1], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL)
-        p2 = subprocess.Popen([os.fsencode(a) for a in argv2], stdin=p1.stdout, stdout=subprocess.PIPE,
+        p2 = subprocess.Popen([_b(a) for a in argv2], stdin=p1.stdout, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL)
     except OSError:
         return False
