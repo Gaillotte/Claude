@@ -171,6 +171,8 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 - `record_fail` checks `SEV_THRESHOLD` → downgrades to WARN if severity below `MIN_SEVERITY`
 - `FILE_STATUS[path]` → `PASS | WARN | FAIL`; `FINDINGS[path]` accumulates FAIL messages
 
+**Bandit** is read the way real bandit prints: `Severity: Medium` or `High` in any case, the test id from the `Issue: [B602:…]` line above it (the older `Test ID` form is still read). The check used to look for upper-case `MEDIUM|HIGH` and a `Test ID` line that bandit never prints, so it never fired with the real tool; the fix newly fails about 4 of 100 real standard-library Python files (calibration, 2026-11-14). Pinned by Layer L for both engines.
+
 **Diff mode** (`--since COMMIT`): `fetch_repo.sh` writes changed file paths to `.diff_files`; `scan_by_type()` skips files not in that set.
 
 **Output:** `generate_report_json` + `generate_report_html` → JSON/HTML in `$WORK_DIR/reports/`; then `echo "$GLOBAL_VERDICT"`.

@@ -73,10 +73,20 @@ def scan_python(f):
         # `bandit -q -l -i "$f" 2>/dev/null || true`: the status is thrown away, the text is read
         _, raw = run_tool(["bandit", "-q", "-l", "-i", f])
         out = _text(raw)
-        if re.search(r"Severity: (MEDIUM|HIGH)", out):
-            sev = re.search(r"Severity: [A-Za-z0-9_]+", out).group(0)
+        # Real bandit prints "Severity: High" and names the test in the Issue line above it; the "Test ID" form is still read.
+        sev_m = re.search(r"Severity: (MEDIUM|HIGH)", out, re.I)
+        if sev_m:
             line = next((ln for ln in out.split("\n") if "Test ID" in ln), "")
-            record_fail(f, "bandit:%s:%s" % (sev, "\n".join(re.findall(r"B[0-9]+", line))))
+            bid = "\n".join(re.findall(r"B[0-9]+", line))
+            if not bid:
+                lines = out.split("\n")
+                for i, ln in enumerate(lines):
+                    if i > 0 and re.search(r"Severity: (MEDIUM|HIGH)", ln, re.I):
+                        m = re.search(r"Issue: \[(B[0-9]+)", lines[i - 1])
+                        if m:
+                            bid = m.group(1)
+                        break
+            record_fail(f, "bandit:%s:%s" % (sev_m.group(0), bid))
             failed = True
     else:
         record_warn(f, "bandit missing")

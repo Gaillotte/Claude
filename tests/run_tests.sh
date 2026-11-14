@@ -3449,6 +3449,78 @@ PY
     # K-END
 fi
 
+# ════════════════════════════════════════════════════════════════════════════
+# LAYER L — Fixes found while porting the engine to Python (each seen RED before the change, in both engines)
+# ════════════════════════════════════════════════════════════════════════════
+group "Layer L — fixes found by the Python port"
+if ! _skipping; then
+    LW="${SCRATCH}/l_work"; LR="${SCRATCH}/l_rep"; mkdir -p "$LW" "$LR"
+    l_scan() {   # l_scan <engine> <dir> <name> <stub dir>; sets LREP, LEC
+        LREP="${LR}/report_scan_$3.json"; rm -f "$LREP"
+        (cd "$ROOT_DIR" && TRANSIT_ENGINE="$1" PATH="$4:${PATH}" WORK_DIR="$LW" timeout 300 bash ./scan_pipeline.sh "$2" "$LR" "$3" >/dev/null 2>&1); LEC=$?
+    }
+    l_py() { python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
+    l_stub() {   # l_stub <name> <body on stdin>: a bandit stand-in in its own directory
+        local d="${SCRATCH}/l_st_$1"; rm -rf "$d"; mkdir -p "$d"
+        { printf '#!/bin/sh\n'; cat; } > "$d/bandit"; chmod +x "$d/bandit"; printf '%s' "$d"
+    }
+    LB="${SCRATCH}/l_bandit_repo"; rm -rf "$LB"; mkdir -p "$LB"; printf 'print(1)\n' > "$LB/a.py"
+    # What real bandit 1.9.4 prints: title-case severity, the test named in the Issue line, no "Test ID" line, and a
+    # LOW issue ahead of the one that matters. The check used to look for upper-case MEDIUM|HIGH and a "Test ID" line,
+    # so it never fired with the real tool.
+    L_REAL=$(l_stub real <<'STUB'
+cat <<'OUT'
+Run started:2026-11-14 11:34:23
+
+Test results:
+>> Issue: [B404:blacklist] Consider possible security implications associated with the subprocess module.
+   Severity: Low   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   Location: ./a.py:1:0
+--------------------------------------------------
+>> Issue: [B602:subprocess_popen_with_shell_equals_true] subprocess call with shell=True identified, security issue.
+   Severity: High   Confidence: High
+   CWE: CWE-78 (https://cwe.mitre.org/data/definitions/78.html)
+   Location: ./a.py:2:0
+OUT
+STUB
+)
+    L_MED=$(l_stub med <<'STUB'
+printf '>> Issue: [B306:blacklist] Use of insecure and deprecated function (mktemp).\n   Severity: Medium   Confidence: High\n'
+STUB
+)
+    L_LOW=$(l_stub low <<'STUB'
+printf '>> Issue: [B404:blacklist] Consider possible security implications.\n   Severity: Low   Confidence: High\n'
+STUB
+)
+    L_OLD=$(l_stub old <<'STUB'
+printf '>> Issue: x\n   Test ID: B602\n   Severity: HIGH   Confidence: High\n'
+STUB
+)
+    L_BIG=$(l_stub big <<'STUB'
+head -c 300000 /dev/zero | tr '\0' 'x'; printf '\n>> Issue: [B602:y] z\n   Severity: High   Confidence: High\n'
+STUB
+)
+    for LE in bash python; do
+        l_scan "$LE" "$LB" "l_real_$LE" "$L_REAL"
+        assert_eq "FAIL" "$(l_py "$LREP" "d['verdict']")" "bandit [$LE]: real bandit output (title case, Issue line) with a High finding fails the file"
+        assert_contains "$(l_py "$LREP" "d['file_results'][sys.argv[3]]['message']" "${LB}/a.py")" "bandit:Severity: High:B602" \
+            "bandit [$LE]: …naming the High finding and its test, not the Low issue before it"
+        l_scan "$LE" "$LB" "l_med_$LE" "$L_MED"
+        assert_eq "FAIL" "$(l_py "$LREP" "d['verdict']")" "bandit [$LE]: a Medium finding fails the file too"
+        l_scan "$LE" "$LB" "l_low_$LE" "$L_LOW"
+        assert_eq "PASS" "$(l_py "$LREP" "d['verdict']")" "bandit [$LE]: a Low finding alone does not"
+        l_scan "$LE" "$LB" "l_old_$LE" "$L_OLD"
+        assert_contains "$(l_py "$LREP" "d['file_results'][sys.argv[3]]['message']" "${LB}/a.py")" "bandit:Severity: HIGH:B602" \
+            "bandit [$LE]: the upper-case form with a Test ID line is still read as before"
+        l_scan "$LE" "$LB" "l_big_$LE" "$L_BIG"
+        assert_eq "FAIL" "$(l_py "$LREP" "d['verdict']")" "bandit [$LE]: a finding after 300 KB of output is not lost"
+    done
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 # LAYER F — Static checks on the pipeline itself
 # ═════════════════════════════════════════════════════════════════════════════

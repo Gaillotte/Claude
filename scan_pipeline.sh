@@ -1257,10 +1257,17 @@ scan_python() {
     if has_cmd bandit; then
         local out
         out=$(bandit -q -l -i "$f" 2>/dev/null || true)
-        if echo "$out" | grep -qE 'Severity: (MEDIUM|HIGH)'; then
-            local sev
-            sev=$(echo "$out" | grep -oE 'Severity: \w+' | head -1)
-            record_fail "$f" "bandit:${sev}:$(echo "$out" | grep 'Test ID' | head -1 | grep -oE 'B[0-9]+')"
+        # Real bandit prints "Severity: High" (title case) and names the test in the Issue line above it
+        # ("Issue: [B602:subprocess_popen_with_shell_equals_true]"); there is no "Test ID" line. The check looked for
+        # upper-case MEDIUM|HIGH and a "Test ID" line, so it never fired with the real tool. The output is read
+        # through here-strings, not `echo | grep -q`: under pipefail grep -q exits at the first match, echo dies of
+        # SIGPIPE on a large output, and the match read as none. The "Test ID" form is still read as before.
+        if grep -qiE 'Severity: (MEDIUM|HIGH)' <<<"$out"; then
+            local sev bid
+            sev=$(grep -oiE 'Severity: (MEDIUM|HIGH)' <<<"$out" | head -1)
+            bid=$(grep 'Test ID' <<<"$out" | head -1 | grep -oE 'B[0-9]+' || true)
+            [[ -n "$bid" ]] || bid=$(grep -B1 -iE 'Severity: (MEDIUM|HIGH)' <<<"$out" | grep -oE 'Issue: \[B[0-9]+' | head -1 | grep -oE 'B[0-9]+' || true)
+            record_fail "$f" "bandit:${sev}:${bid}"
             failed=true
         fi
     else
