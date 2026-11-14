@@ -43,6 +43,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # ── System packages ────────────────────────────────────────────────────────────
+# Not pinned per package (DL3008): Ubuntu replaces a package's version when it ships a security update, so an exact
+# version here would stop the image building within weeks. The pin is the base image tag above.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash git curl ca-certificates jq zip unzip file coreutils \
     python3 python3-pip \
@@ -52,16 +55,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python packages ────────────────────────────────────────────────────────────
+# Exact versions of the set the CI image build resolved on 2026-11-14 (the build that passed all six smoke tests).
+# Their dependencies still float: for a full lock, `pip freeze` that image into a constraints file.
+# To move a tool: change its version here, rebuild, and let the smoke tests and the Python-engine checks run.
 RUN pip3 install --no-cache-dir \
-    openpyxl \
-    reportlab \
-    detect-secrets \
-    bandit \
-    pip-audit \
-    safety \
-    semgrep \
-    checkov \
-    scancode-toolkit
+    openpyxl==3.1.5 \
+    reportlab==5.1.0 \
+    detect-secrets==1.5.0 \
+    bandit==1.9.4 \
+    pip-audit==2.10.1 \
+    safety==3.8.1 \
+    semgrep==1.185.0 \
+    checkov==3.4.5 \
+    scancode-toolkit==32.5.0
 
 # ── gitleaks (pre-built binary from builder stage) ────────────────────────────
 COPY --from=builder /usr/local/bin/gitleaks /usr/local/bin/gitleaks
@@ -72,6 +78,8 @@ COPY --from=builder /usr/local/bin/gitleaks /usr/local/bin/gitleaks
 # still succeeds but prints a loud warning, because the correct digest depends
 # on TRIVY_VERSION and must be filled in per pin. The `pins` CI job prints the
 # digest for the current pin — paste it here.
+# The pipe is `echo <digest> | sha256sum -c -`: its status is sha256sum's, and the build shell (dash) has no pipefail.
+# hadolint ignore=DL4006
 RUN set -eux; \
     url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"; \
     curl -sfL "$url" -o /tmp/trivy.tar.gz; \
@@ -89,6 +97,8 @@ RUN set -eux; \
 # ── hadolint (pinned version + integrity check) ───────────────────────────────
 # Digest verified against the real 2.12.0 Linux-x86_64 release artifact.
 # If HADOLINT_VERSION is changed, HADOLINT_SHA256 must be updated to match.
+# The pipe is `echo <digest> | sha256sum -c -`: its status is sha256sum's, and the build shell (dash) has no pipefail.
+# hadolint ignore=DL4006
 RUN set -eux; \
     curl -sSL \
       "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
@@ -122,7 +132,7 @@ COPY fetch_repo.sh scan_pipeline.sh scan_pipeline.py ai_transit.sh prepare_offli
      generate_excel_report.py selfcheck.py ./
 # The Python helpers scan_pipeline.sh runs by path (office, jar, PDF, manifests, report writer, tool readers)
 COPY transit ./transit
-RUN chmod +x *.sh
+RUN chmod +x ./*.sh
 
 # ── Work directories ───────────────────────────────────────────────────────────
 # Spelled out: RUN uses /bin/sh (dash on Ubuntu), which does no brace expansion, so
