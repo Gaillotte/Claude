@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT))
 from tests.engine import support  # noqa: E402
 from transit import rx  # noqa: E402
 from transit.findings import Allowlist  # noqa: E402
-from transit.rules import Match, Matcher, ScanBudgetExceeded  # noqa: E402
+from transit.rules import Matcher, ScanBudgetExceeded  # noqa: E402
 from transit.scanners import credentials  # noqa: E402
 from transit.scanners.credentials import CredentialResult, check_known_credentials  # noqa: E402
 

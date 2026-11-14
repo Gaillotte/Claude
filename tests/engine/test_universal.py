@@ -119,10 +119,6 @@ def lines(*parts: str, sep: str = "\n") -> bytes:
     return (sep.join(parts) + sep).encode("utf-8")
 
 
-def recorded(h: support.Harness) -> "list[tuple[str, str]]":
-    return h.messages()
-
-
 def run_scan(test: unittest.TestCase, data: "bytes | str", **kwargs) -> "tuple[support.Harness, list[tuple[str, str]]]":
     h = context(test, data, **kwargs)
     result = universal.scan(h.ctx)
@@ -713,6 +709,12 @@ class ScanTests(unittest.TestCase):
         names = [m for _k, m in got]
         self.assertEqual(names, ["CWE-798:hardcoded_credential", KEY_MESSAGE, "CWE-327:weak_crypto_algorithm"])
 
+    def test_the_d014_switch_makes_the_formats_read_a_nul_file(self):
+        token = j("export GITHUB_TOKEN=", "ghp_", "oKFEOeVI2WdxcX4L8y", "aUEcp4bWTkt2HGVHQx")
+        h = context(self, b"\0" + lines(token, "hashlib.md5(x)"), cfg=support.make_config(TRANSIT_FIXES="D-014"))
+        universal.scan(h.ctx)
+        self.assertEqual(messages_of(h), ["CWE-798:known_credential_format_github_token", "CWE-327:weak_crypto_algorithm"])
+
     def test_the_rules_see_a_match_that_spans_a_nul_byte(self):
         """Not what bash does (``grep_check`` has no ``-a`` and a NUL ends a line there), and the safe direction: a NUL byte must not hide a credential."""
         _h, got = run_scan(self, b'password = "hunter\0supersecret"\n')
@@ -947,6 +949,35 @@ class OracleTests(unittest.TestCase):
                 expected = grep_rows(self.sample("nul.txt", data))
                 got = self.python_hits(h, "nul.txt", data) & set(ROW_MESSAGES)
                 self.assertLessEqual(expected, got)
+
+
+class GoldenTests(unittest.TestCase):
+    """The bash engine's own report of the rules corpus (tests/conformance/golden/rules_corpus.json, 364 files): for every file, the messages
+    of THIS layer in the golden equal the ones ``scan`` records. The set of messages the layer can produce is read from ``scan_pipeline.sh``."""
+
+    #: scan_powershell records the same text for ``$Password = "..."`` (capital P, which the universal rule does not match): not this layer's message.
+    OTHER_SCANNER_SAME_TEXT = {("ps_secret.ps1", "CWE-798:hardcoded_credential")}
+
+    def test_every_file_of_the_rules_corpus(self):
+        golden = json.loads((ROOT / "tests" / "conformance" / "golden" / "rules_corpus.json").read_text(encoding="utf-8"))["report"]["file_results"]
+        ours = set(bash_message_order())
+        h = context(self, b"", verdict="fake")
+        compared, with_message = 0, 0
+        for rel, entry in sorted(golden.items()):
+            path = FIXTURES / rel
+            if rel == "__global__" or not path.is_file():
+                continue
+            expected = {re.sub(r"^\[(WARN|FAIL)\] ", "", message) for message in entry["messages"]} & ours
+            expected -= {message for name, message in self.OTHER_SCANNER_SAME_TEXT if name == rel}
+            ctx = h.new_context(rel, data=path.read_bytes())
+            before = len(h.verdict.log)
+            universal.scan(ctx)
+            got = {e[2] for e in h.verdict.log[before:] if e[0] in ("warn", "fail")}
+            compared += 1
+            with_message += bool(expected)
+            self.assertEqual(got, expected, rel)
+        self.assertGreater(compared, 300)
+        self.assertGreaterEqual(with_message, 8)
 
 
 if __name__ == "__main__":
