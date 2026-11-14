@@ -154,7 +154,7 @@ for t in gitleaks detect-secrets clamscan yara semgrep trivy \
          bandit shellcheck cppcheck hadolint checkov scancode; do
     command -v "$t" >/dev/null && echo "  present : $t" || echo "  MISSING : $t"
 done
-./tests/run_tests.sh          # Expected: ✔ 793/793 passed
+./tests/run_tests.sh          # Expected: ✔ 1083/1083 passed
 ```
 
 A tool missing here will still be missing offline, where it is much harder to
@@ -1299,7 +1299,7 @@ scanning tools — see §17.
 
 ```bash
 ./tests/run_tests.sh
-# Expected: ✔ 793/793 passed
+# Expected: ✔ 1083/1083 passed
 ```
 
 ### 7.6 Generate the integrity manifest
@@ -1367,6 +1367,7 @@ reports are consumed by another job and the archive would only be discarded.
 | `SEMGREP_RULES_DIR` | `$OFFLINE_CACHE/semgrep-rules` | Exported Semgrep rulesets |
 | `TRIVY_CACHE_DIR` | `$OFFLINE_CACHE/trivy-db` | trivy vulnerability database |
 | `CLAMAV_DB_DIR` | `$OFFLINE_CACHE/clamav` | ClamAV signature files |
+| `TRANSIT_ENGINE` | `bash` | `bash` runs the shell engine; `python` runs `scan_pipeline.py`, the same scanner in Python with the same reports, calling the same tools (no extra package: Python 3.10 or later and the standard library) |
 
 Add persistent values to `~/.bashrc`:
 ```bash
@@ -2658,7 +2659,7 @@ done
 
 # 2. The suite needs no tools and no network — it should pass regardless
 ./tests/run_tests.sh
-# Expected: ✔ 793/793 passed
+# Expected: ✔ 1083/1083 passed
 
 # 3. Record the bundle for the integrity check
 python3 selfcheck.py --write-manifest
@@ -3098,7 +3099,7 @@ Expected output on a healthy installation:
   ✔ does NOT flag parameterised SQL (execute("… = ?", (v,)))
   …
 ────────────────────────────────────────
-  ✔  793/793 passed
+  ✔  1083/1083 passed
 ```
 
 ### 17.1 What each layer covers

@@ -23,6 +23,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 OFFLINE_CACHE=/opt/ai-transit/offline-cache \
   ./ai_transit.sh --offline /local/path/to/repo                    # air-gapped
 
+# Python engine: the same behaviour as the shell, calling the same tools (docs/python_port_thin_plan.md)
+TRANSIT_ENGINE=python ./ai_transit.sh https://github.com/org/repo  # scan with scan_pipeline.py instead of the shell engine
+TRANSIT_ENGINE=python bash scan_pipeline.sh /path/to/fetched/repo
+python3 -I scan_pipeline.py /path/to/fetched/repo [report_dir] [name]   # the same, without the launcher
+
 # Private GitHub repos
 GITHUB_TOKEN=ghp_... ./ai_transit.sh https://github.com/org/private-repo
 
@@ -48,6 +53,7 @@ Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantin
 | `MAX_SIZE_MB` | `500` | Repository size limit in MB |
 | `MIN_SEVERITY` | `high` | Minimum severity to FAIL (`low\|medium\|high\|critical`) |
 | `VERBOSITY` | `normal` | Log verbosity (`quiet\|normal\|verbose`) |
+| `TRANSIT_ENGINE` | `bash` | `bash` runs the shell engine, `python` runs `scan_pipeline.py` (same behaviour, same reports); any other value exits 1. Read by `scan_pipeline.sh` before anything else |
 | `SINCE_COMMIT` | _(unset)_ | Diff mode: only scan files changed since this commit SHA |
 | `OFFLINE` | `true` (forced) | `scan_pipeline.sh` has no online mode: no scanner attempts a network call, and `OFFLINE=false` is ignored with a warning. `ai_transit.sh --offline` only governs fetching |
 | `RUN_SCA`, `RUN_SCANCODE` | `false`, `false` | Layer 3 (dependency CVEs) and layer 6 (ScanCode) are off by default; `true` turns each back on. A disabled layer is recorded as `skipped:disabled` in the coverage block |
@@ -108,6 +114,8 @@ ai_transit.sh          ← orchestrator: flag parsing, phase 1 → fetch, phase 
   fetch_repo.sh        ← clones GitHub repo (github.com whitelist, 500 MB limit)
                           writes FETCH_DIR to .fetch_result; diff mode → .diff_files
   scan_pipeline.sh     ← 6-layer scanner; emits PASS or FAIL on stdout last line
+  scan_pipeline.py     ← the same scanner in Python (about 3,200 lines with transit/core.py, scan_*.py, layers.py); same
+                          functions, messages and tool calls; chosen with TRANSIT_ENGINE=python
 
 generate_excel_report.py  ← report_<ts>.json → .xlsx (Summary / Files / Findings tabs)
 selfcheck.py              ← self-check integrity report → PDF/JSON report (7 checks)
@@ -119,6 +127,30 @@ transit/                  ← the Python helpers scan_pipeline.sh runs by path (
 docker-run.sh             ← Docker wrapper; auto-builds; forwards env vars to container
 Dockerfile                ← multi-stage image (builder: Go/gitleaks; runtime: 16 tools)
 ```
+
+## Python engine
+
+`scan_pipeline.py` is the shell engine in Python: the same functions in the same order with the same names and
+messages, calling the same external tools (grep, find, sha256sum and every scanner) with argument lists and never a
+shell. It is not a redesign: `docs/python_port_thin_plan.md` records why (the owner asked for the shell's behaviour with
+as little Python as possible) and `docs/engine_contract.md` plus the 26 golden reports in `tests/conformance/golden` are
+the definition of "the same". Layout: `scan_pipeline.py` (arguments, allowlist, diff mode, file listing, classify_file,
+reports, sidecars), `transit/core.py` (state, console, record_*, the grep helpers, the tool runner),
+`transit/scan_lang.py`, `scan_build.py`, `scan_docs.py` (the `scan_*` functions) and `transit/layers.py` (layers 1 to 3
+and 6). The helper programs in `transit/` are unchanged and run as programs by both engines.
+
+```bash
+python3 tests/conformance/conformance.py check --engine python    # all 26 golden cases, ~25 s
+python3 tests/conformance/family_diff.py 'tests/fixtures/rules/*.mk'   # per-file status and rule ids, bash against Python
+TRANSIT_ENGINE=python ./tests/run_tests.sh                        # the whole suite against the Python engine
+```
+
+**A rule change lands in both engines** (the shell and `scan_pipeline.py`); `conformance.py check --engine python` and
+`family_diff.py` fail if they disagree. Known, deliberate differences from the shell: a missing `grep`, `find` or
+`sha256sum` aborts the run (the shell would read every rule as "no match"); tool output the shell leaves on the console
+is not printed raw; the pip-audit, safety and npm audit branches of layer 3 are not ported (they cannot run while
+`OFFLINE` is forced). Under `TRANSIT_ENGINE=python` two Layer H checks differ by design (they run the shell launcher
+without `transit/` next to it; the engine switch runs first).
 
 ## scan_pipeline.sh internals
 

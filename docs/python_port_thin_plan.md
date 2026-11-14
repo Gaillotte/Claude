@@ -1,7 +1,9 @@
 # Python port, thin variant: the shell's behaviour, in Python, calling the same tools
 
-**Status: proposal of 2026-11-14, written after the owner asked to return to the initial expectation.** It replaces the
-earlier "swap the matching backend" proposal of the same day. Nothing in the repository changes until the owner says go.
+**Status: P0 to P3 done on 2026-11-14 (owner said go the same day).** The earlier "swap the matching backend" proposal is
+replaced by this one. Result: `scan_pipeline.py` and `transit/{core,scan_lang,scan_build,scan_docs,layers}.py`, 3,215 lines;
+all 26 golden reports match; the whole shell suite passes against the Python engine except two Layer H launcher checks.
+P4 (documents, counts, cut-over decision) is in progress; the default engine stays bash until the owner decides.
 
 ## 1. The expectation this plan returns to
 
