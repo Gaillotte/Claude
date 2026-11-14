@@ -2557,9 +2557,9 @@ import json,sys
 print(json.load(open(sys.argv[1]))['verdict'])" "${SCRATCH}/i_rep/report_scan_relroot.json" 2>/dev/null || echo none)" \
         "a relative scan root ('.') under a build/ directory is scanned too"
 
-    # ── Gates for the Python engine ───────────────────────────────────────────────────────
+    # ── Gates for the Python engine (docs/python_port_thin_plan.md) ───────────────────────
     CONF="${ROOT_DIR}/tests/conformance"
-    for _f in check_schema.py test_rx.py pattern_fuzz.py pattern_inventory.py conformance.py; do
+    for _f in check_schema.py family_diff.py conformance.py; do
         assert_file_exists "${CONF}/${_f}" "conformance tooling exists: tests/conformance/${_f}"
     done
     assert_file_exists "${ROOT_DIR}/docs/engine_contract.md" "the engine contract is in the repository"
@@ -2569,19 +2569,6 @@ print(json.load(open(sys.argv[1]))['verdict'])" "${SCRATCH}/i_rep/report_scan_re
     OUT_SC=$(cd "$ROOT_DIR" && timeout 600 python3 -I "${CONF}/check_schema.py" 2>&1); EC_SC=$?
     assert_eq "0" "$EC_SC" "check_schema.py: the bash engine's reports conform to the schema and the invariants"
     [[ "$EC_SC" == 0 ]] || printf '%s\n' "$OUT_SC" | tail -n 8 >&2
-
-    OUT_RX=$(cd "$ROOT_DIR" && timeout 600 python3 -I "${CONF}/test_rx.py" 2>&1); EC_RX=$?
-    assert_eq "0" "$EC_RX" "test_rx.py: the ERE-to-Python regex translator matches recorded GNU grep behaviour"
-    [[ "$EC_RX" == 0 ]] || printf '%s\n' "$OUT_RX" | tail -n 12 >&2
-
-    OUT_PI=$(cd "$ROOT_DIR" && timeout 120 python3 -I "${CONF}/pattern_inventory.py" --check 2>&1); EC_PI=$?
-    assert_eq "0" "$EC_PI" "patterns.json lists every pattern scan_pipeline.sh passes to grep (regenerate if this fails)"
-    [[ "$EC_PI" == 0 ]] || printf '%s\n' "$OUT_PI" | tail -n 6 >&2
-
-    OUT_PF=$(cd "$ROOT_DIR" && timeout 900 python3 -I "${CONF}/pattern_fuzz.py" --quick --no-timing --synthetic 300 2>&1); EC_PF=$?
-    assert_eq "0" "$EC_PF" "pattern_fuzz.py: every pipeline pattern gives the same lines in Python as in GNU grep"
-    [[ "$EC_PF" == 0 ]] || printf '%s\n' "$OUT_PF" | tail -n 12 >&2
-    git -C "$ROOT_DIR" checkout -q -- tests/conformance/pattern_report.md tests/conformance/pattern_report.json 2>/dev/null || true
 
     OUT_CF=$(cd "$ROOT_DIR" && timeout 1800 python3 -I "${CONF}/conformance.py" check 2>&1); EC_CF=$?
     assert_eq "0" "$EC_CF" "conformance.py check: the bash engine still reproduces all stored golden reports"

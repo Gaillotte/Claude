@@ -78,31 +78,9 @@ jobs:
       - name: Run test suite
         run: ./tests/run_tests.sh -v
 
-  # ── Python engine (PYTHON_PORT_PLAN.md; docs/python_engine_design.md section 11) ───────────────
-  # The unit tests of transit/ and the structural lints of tests/engine/test_lints.py (layering, no regex outside
-  # rx.py, no shell, no module state in a scanner, compile with warnings as errors, no token in the tests ...) on
-  # every interpreter the engine supports: Python 3.10 is the floor, 3.13 the newest checked. Plain unittest, standard
-  # library only, no scanning tool needed; -I keeps the current directory and PYTHON* variables out of the run.
-  engine-tests:
-    name: Python engine tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Engine unit tests and lints
-        run: python3 -I -m unittest discover -s tests/engine
-
-  # The Python engine against the golden reports of the bash engine (tests/conformance/golden). One case until the
-  # scanners of Waves 2 and 3 are ported (the others would report "not ported" by design, D-032); advisory until the
-  # pipeline of WP-11 is merged, because the stubs raise NotImplementedError. Drop continue-on-error then.
+  # ── Python engine (docs/python_port_thin_plan.md) ──────────────────────────────────────────
+  # The Python engine against the golden reports of the bash engine (tests/conformance/golden). Advisory until
+  # scan_pipeline.py is written (phase P1 of the plan; it refuses to run until then). Drop continue-on-error then.
   engine-conformance:
     name: Python engine conformance
     runs-on: ubuntu-latest

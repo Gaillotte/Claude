@@ -112,9 +112,10 @@ ai_transit.sh          ← orchestrator: flag parsing, phase 1 → fetch, phase 
 generate_excel_report.py  ← report_<ts>.json → .xlsx (Summary / Files / Findings tabs)
 selfcheck.py              ← self-check integrity report → PDF/JSON report (7 checks)
 transit/                  ← the Python helpers scan_pipeline.sh runs by path (office, jar, PDF, manifest
-                          readers, the JSON report writer, the ScanCode and gitleaks result readers), and the
-                          start of the Python engine (see PYTHON_PORT_PLAN.md). Standard library only; the
-                          integrity manifest, the Dockerfile and the offline bundle all carry it
+                          readers, the JSON report writer, the ScanCode and gitleaks result readers). The Python
+                          engine will be a thin port that calls the same tools (docs/python_port_thin_plan.md).
+                          Standard library only; the integrity manifest, the Dockerfile and the offline bundle
+                          all carry it
 docker-run.sh             ← Docker wrapper; auto-builds; forwards env vars to container
 Dockerfile                ← multi-stage image (builder: Go/gitleaks; runtime: 16 tools)
 ```
@@ -1497,22 +1498,18 @@ When adding a rule, add both a positive fixture and a negative one, then confirm
 new assertion **fails** before the rule exists. A test that has never been seen red
 proves nothing.
 
-**Conformance tooling for the Python engine** (`PYTHON_PORT_PLAN.md`, `docs/engine_contract.md`) lives in
+**Conformance tooling for the Python engine** (`docs/python_port_thin_plan.md`, `docs/engine_contract.md`) lives in
 `tests/conformance/` and is run by Layer I of the suite:
 
 ```bash
-python3 tests/conformance/conformance.py check          # replay 17 cases, compare with golden/*.json (~80 s)
+python3 tests/conformance/conformance.py check          # replay the cases, compare with golden/*.json (~80 s)
+python3 tests/conformance/conformance.py check --engine python   # the same against scan_pipeline.py (once it exists)
 python3 tests/conformance/conformance.py capture --case NAME   # re-record a golden file (only after a deliberate change)
 python3 tests/conformance/check_schema.py               # reports conform to docs/report.schema.json + invariants
-python3 tests/conformance/test_rx.py                    # ERE → Python regex translator (transit/rx.py), 63 tests
-python3 tests/conformance/pattern_inventory.py --check  # patterns.json lists every pattern scan_pipeline.sh passes to grep
-python3 tests/conformance/pattern_inventory.py          # …regenerate it after adding or changing a grep pattern
-python3 tests/conformance/pattern_fuzz.py               # every pattern against real GNU grep (~66 s; --quick for the suite)
+python3 tests/conformance/family_diff.py                # per-file status and rule ids, bash against Python, per scanner family
 ```
 
 A golden file changes only when a report is meant to change: regenerate it in the same commit and say why.
-A new `grep` pattern in `scan_pipeline.sh` makes `pattern_inventory.py --check` fail until `patterns.json` is
-regenerated, which is how the translator's coverage of the pipeline stays honest.
 
 **Scan scope.** The built-in exclusions (`build`, `dist`, `target`, `vendor`, `coverage`, `node_modules`, `.git`, …)
 are matched against the path *below the scan root*, and only for directories. They used to match the whole path, so a

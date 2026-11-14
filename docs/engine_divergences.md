@@ -1,5 +1,10 @@
 # Divergence register
 
+> **2026-11-14: the Python engine is a thin port.** The owner chose a Python engine that reproduces the bash engine
+> exactly and calls the same tools (`docs/python_port_thin_plan.md`). Every `fix-in-python` decision below that is not
+> also fixed in bash is therefore **not implemented**: the Python engine copies bash, and the goldens (recorded from
+> bash) are the only target. The modular engine these entries were written for is parked at commit `796d5a9`.
+
 Every place where the Python engine (`scan_pipeline.py`) is allowed to behave differently from the bash engine
 (`scan_pipeline.sh`, the oracle until cut-over). `docs/engine_contract.md` says what both engines must do and, in its
 section 11, which bash behaviours look accidental; this file records, one entry per behaviour, what the Python
