@@ -132,7 +132,7 @@ CGO_ENABLED=0 go install github.com/zricethezav/gitleaks/v8@latest
 sudo cp ~/go/bin/gitleaks /usr/local/bin/
 
 # A4 — standalone binaries (pin versions; see §19.1 for digests)
-curl -sfL "https://github.com/aquasecurity/trivy/releases/download/v0.58.2/trivy_0.58.2_Linux-64bit.tar.gz" \
+curl -sfL "https://github.com/aquasecurity/trivy/releases/download/v0.69.3/trivy_0.69.3_Linux-64bit.tar.gz" \
     | sudo tar -xzf - -C /usr/local/bin trivy
 sudo curl -sSL "https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64" \
     -o /usr/local/bin/hadolint && sudo chmod +x /usr/local/bin/hadolint
@@ -3173,16 +3173,16 @@ reaches the final image. It runs as the non-root user `transit`.
 
 | Argument | Default | Purpose |
 |----------|---------|---------|
-| `TRIVY_VERSION` | `0.58.2` | trivy release to install |
-| `TRIVY_SHA256` | _(empty)_ | SHA-256 of the trivy tarball; empty disables verification |
+| `TRIVY_VERSION` | `0.69.3` | trivy release to install (0.69.2 and 0.69.3 are the binaries GHSA-69fq-xp46-6x23 names as safe; never 0.69.4) |
+| `TRIVY_SHA256` | `1816b632…` | SHA-256 of the trivy tarball (equal to the release's own checksums file); empty disables verification |
 | `HADOLINT_VERSION` | `2.12.0` | hadolint release to install |
 | `HADOLINT_SHA256` | `56de6d5e…` | SHA-256 of the hadolint binary (verified) |
 | `GITLEAKS_VERSION` | `8.30.1` | gitleaks module version |
 
 ```bash
 docker build -t ai-transit:latest \
-  --build-arg TRIVY_VERSION=0.58.2 \
-  --build-arg TRIVY_SHA256=<digest> .
+  --build-arg TRIVY_VERSION=0.69.3 \
+  --build-arg TRIVY_SHA256=1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75 .
 ```
 
 ### 19.2 Why the digests matter
@@ -3195,9 +3195,14 @@ When a digest argument is empty the build still succeeds, but prints a warning
 **and the artifact's actual digest**, so the correct value can be pasted in
 without a separate download. The `pins` CI job prints the same value.
 
-> `TRIVY_SHA256` ships empty because the pinned trivy version could not be
-> resolved from the development environment. Fill it in from the first `pins` CI
-> run before treating the image as production-ready.
+> `TRIVY_SHA256` is filled in: it is the digest of `trivy_0.69.3_Linux-64bit.tar.gz`
+> and equals the one in the release's `trivy_0.69.3_checksums.txt`. The earlier
+> pin, 0.58.2, is no longer downloadable: the Trivy releases were compromised in
+> March 2026 (GHSA-69fq-xp46-6x23; v0.69.4 was malicious) and only 0.69.2 and
+> 0.69.3 are named as safe binaries. The advisory describes a signature check
+> with `cosign verify-blob` and the release's `.sigstore.json` bundle; it was
+> **not** run when this pin was set, so run it once on a machine you trust before
+> treating the image as production-ready.
 
 ### 19.3 Running through the wrapper
 

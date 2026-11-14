@@ -2,7 +2,7 @@
 ## Usage: docker build -t ai-transit . && docker run --rm -v $(pwd)/Good:/output ai-transit <repo_url>
 ##
 ## Build args (override to pin different versions):
-##   --build-arg TRIVY_VERSION=0.58.2
+##   --build-arg TRIVY_VERSION=0.69.3
 ##   --build-arg GITLEAKS_VERSION=8.30.1
 ##   --build-arg HADOLINT_VERSION=2.12.0
 
@@ -22,17 +22,19 @@ RUN CGO_ENABLED=0 go install github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERS
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM ubuntu:22.04
 
-ARG TRIVY_VERSION=0.58.2
+ARG TRIVY_VERSION=0.69.3
 ARG HADOLINT_VERSION=2.12.0
 
 # SHA-256 digests of the release artifacts above. An empty value downgrades the
 # build to a warning instead of failing, so a version bump does not hard-break
 # the image before someone fills in the new digest.
 #   hadolint 2.12.0  — verified against the real Linux-x86_64 artifact
-#   trivy            — UNVERIFIED: could not be resolved from the development
-#                      environment; the `pins` CI job prints the correct digest
+#   trivy 0.69.3     — equal to the digest in the release's own trivy_0.69.3_checksums.txt.
+#                      0.69.3 is one of the two binaries GHSA-69fq-xp46-6x23 (the March 2026
+#                      compromise of the Trivy releases) names as safe; v0.69.4 was malicious,
+#                      and the releases before 0.69.2 are no longer downloadable.
 ARG HADOLINT_SHA256=56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010
-ARG TRIVY_SHA256=
+ARG TRIVY_SHA256=1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75
 
 ENV DEBIAN_FRONTEND=noninteractive \
     WORK_DIR=/opt/ai-transit \
