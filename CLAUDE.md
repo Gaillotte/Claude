@@ -120,8 +120,8 @@ ai_transit.sh          ← orchestrator: flag parsing, phase 1 → fetch, phase 
 generate_excel_report.py  ← report_<ts>.json → .xlsx (Summary / Files / Findings tabs)
 selfcheck.py              ← self-check integrity report → PDF/JSON report (7 checks)
 transit/                  ← the Python helpers scan_pipeline.sh runs by path (office, jar, PDF, manifest
-                          readers, the JSON report writer, the ScanCode and gitleaks result readers). The Python
-                          engine will be a thin port that calls the same tools (docs/python_port_thin_plan.md).
+                          readers, the JSON report writer, the ScanCode and gitleaks result readers), plus the Python engine's
+                          core.py, scan_lang.py, scan_build.py, scan_docs.py and layers.py (docs/python_port_thin_plan.md).
                           Standard library only; the integrity manifest, the Dockerfile and the offline bundle
                           all carry it
 docker-run.sh             ← Docker wrapper; auto-builds; forwards env vars to container
@@ -1537,7 +1537,7 @@ proves nothing.
 
 ```bash
 python3 tests/conformance/conformance.py check          # replay the cases, compare with golden/*.json (~80 s)
-python3 tests/conformance/conformance.py check --engine python   # the same against scan_pipeline.py (once it exists)
+python3 tests/conformance/conformance.py check --engine python   # the same against scan_pipeline.py (~25 s)
 python3 tests/conformance/conformance.py capture --case NAME   # re-record a golden file (only after a deliberate change)
 python3 tests/conformance/check_schema.py               # reports conform to docs/report.schema.json + invariants
 python3 tests/conformance/family_diff.py                # per-file status and rule ids, bash against Python, per scanner family
