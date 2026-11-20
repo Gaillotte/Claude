@@ -688,7 +688,7 @@ def _ps_rules(f):
         record_fail(f, "CWE-78:PowerShell_EncodedCommand_obfuscation")
         failed = True
     # CWE-95 — decode a blob, then run it
-    if gi(r'frombase64string', f) and (gi(_PS_IEXA, f) or gi(r'(scriptblock\]::create|assembly\]::load|virtualalloc|createthread)', f)):
+    if gi(r'frombase64string', f) and gi("(" + _PS_IEXA + r")|(scriptblock\]::create|assembly\]::load|virtualalloc|createthread)", f):
         record_fail(f, "CWE-95:PowerShell_decodes_and_executes")
         failed = True
     # CWE-95 — a backtick inside the command name
@@ -709,7 +709,7 @@ def _ps_rules(f):
         record_fail(f, "CWE-912:PowerShell_persistence")
         failed = True
     # CWE-78 — a socket whose stream is fed to a command interpreter
-    if ((gi(r'tcpclient', f) and gi(r'getstream', f) and (gi(_PS_IEXA, f) or gi(r'(cmd\.exe|powershell)', f)))
+    if ((gi(r'tcpclient', f) and gi(r'getstream', f) and gi("(" + _PS_IEXA + r")|(cmd\.exe|powershell)", f))
             or gi(r'(nc(\.exe)?[[:space:]]+-[a-z]*e[[:space:]]|/dev/tcp/)', f)):
         record_fail(f, "CWE-78:PowerShell_reverse_shell")
         failed = True
@@ -728,7 +728,7 @@ def _ps_rules(f):
         failed = True
     # CWE-319 — a download over plaintext http://: it blocks if something is then run, alone it warns
     if gi(r'''(downloadfile|downloadstring|downloaddata|iwr|irm|invoke-webrequest|invoke-restmethod|start-bitstransfer)[^;|]*["']http://''', f):
-        if gi(_PS_RUN, f) or gi(_PS_IEXA, f):
+        if gi("(" + _PS_RUN + ")|(" + _PS_IEXA + ")", f):
             record_fail(f, "CWE-319:PowerShell_plaintext_download_then_run")
             failed = True
         else:

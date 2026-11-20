@@ -17,7 +17,7 @@ What it does
   3. A last check refuses an invalid scanning_name: exit status 1, no report, no sidecar.
 
 The validator understands exactly the keywords docs/report.schema.json uses and nothing else: type (a name or a list
-of names), properties, required, additionalProperties (a boolean or a schema), items, enum, pattern, minimum.
+of names), properties, required, additionalProperties (a boolean or a schema), items, enum, pattern, minimum, maxItems.
 Annotation keywords are ignored. Any other keyword raises SchemaError, so the schema cannot quietly start relying on
 something this file does not check. Standard library only, Python 3.10+. Exits 0 when everything holds, 1 otherwise.
 """

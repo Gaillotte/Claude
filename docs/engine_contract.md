@@ -213,7 +213,8 @@ and MUST remove them on every exit path including an abort (S16).
 ### 3.6 What the callers read
 
 * `ai_transit.sh`: the two sidecars; `.verdict`, `.summary.pass`, `.summary.warn`, `.summary.fail` and
-  `.findings_by_file` of the report (through `jq`, with a control-byte filter); on FAIL it opens the newest
+  `.findings_by_file` of the report and, from `.findings[]`, `file`, `line`, `lines`, `line_count` and `rule_id` (the
+  `Where (file:line)` summary), through `jq`, with a control-byte filter; on FAIL it opens the newest
   `<WORK_DIR>/reports/report_*.json`, not the sidecar's path. It passes one argument, so the report is always at
   the default location (code).
 * `generate_excel_report.py` reads `repo_input`, `directory`, `timestamp`, `repo_hash`, `verdict`, `summary.*`
@@ -221,7 +222,11 @@ and MUST remove them on every exit path including an abort (S16).
   or `[WARN]` tag at the start of each piece and derives a severity from `:CRITICAL:` or `:MEDIUM:` inside it. It
   strips the `directory` prefix from the keys, so **every `file_results` key must be `__global__`, the directory,
   or start with `directory + "/"`** (invariant in `check_schema.py`). It lists only files whose status is FAIL
-  or WARN (this hides an `ALLOWED` message on a PASS file, A12).
+  or WARN (this hides an `ALLOWED` message on a PASS file, A12). The splitting is made only before a `[FAIL]` or `[WARN]` tag,
+  so a message that itself holds `" | "` stays one row. For the **Line** column it also reads `findings[]` (`file`,
+  `message`, `line`, `lines`, `line_count`) and joins each `[FAIL]` row to its record by (file relative to `directory`,
+  message stripped of blanks): the records of one key are a queue in the order they were written, which is the order of
+  the `[FAIL]` entries of the file, and each row takes the next one. A record with no line queues an empty text.
 
 ## 4. The JSON report
 
@@ -390,7 +395,9 @@ Consequently `engine:nothing_scanned` has tool `engine`, category `security`, ru
 `engine:nothing_scanned`, severity HIGH and `file` `__global__` (golden `transitignore_everything`), and
 `symlink:target_outside_the_scanned_directory` has tool `symlink` (E22). A WARN has no record.
 
-`line` is the integer after the first `:line` anywhere in the message. `severity` is section 6.3. The `file` field
+`line` is read from the message only for `semgrep[<ruleset>]:<rule>:line<N>:` and `gitleaks:<rule>:line<N>` (at the end of the
+message); for a built-in grep rule it is the first of `lines` (section 5.4); otherwise null. A `:line<N>` elsewhere in a message
+(an archive entry named `x:line7.txt`) is repository text and is ignored. `severity` is section 6.3. The `file` field
 is `file` with `SCAN_DIR/` removed, or `.` when `file` is `SCAN_DIR`. The Python engine MUST produce the same
 `tool`, `category`, `severity`, `file`, `line` and `message` for the same finding; where this table is plainly
 wrong (`bandit` rule id, `CVE-…` tool) the register decides (A16, D-016).
@@ -411,7 +418,8 @@ How both engines work, and what each MUST do:
   evaluated by `grep`, never by Python's `re`. `LC_ALL=C` and `-a` apply as everywhere else.
 * The remembered match is read only by the FAIL recorded right after the helper that produced it, only for the file the
   helper searched, and only for those four message families; every `record_pass`, `record_warn` and recorded FAIL
-  clears it, and every helper call overwrites it. A finding of any other kind, or one recorded against another file
+  clears it. A helper call that matches on the same file adds an entry to it (at most eight); a helper call that does
+  not match, or that searches another file, clears it. A finding of any other kind, or one recorded against another file
   than the one searched, has `line` null, `lines` `[]`, `line_count` 0.
 * A rule that searched a **derived view** of the file (comments stripped, continuations joined, a decoded stream, the
   text of an archive or a document) has no line in the file, so its finding has none. This covers XML, Maven and Ant
@@ -424,19 +432,25 @@ How both engines work, and what each MUST do:
 * A finding of Semgrep or gitleaks keeps the line the tool named, read from its fixed position in the message (`lines` is
   `[N]`, `line_count` 1). A `:line<N>` elsewhere in a message (an archive entry named `x:line7.txt`) is repository text: not a line.
 * A rule made of several whole-file tests (`decode AND execute`) lists the lines of every test that matched (the union,
-  ascending, each line once, `line` its first); a test that does not match forgets the earlier ones. At most eight matches are
-  remembered without a finding; beyond that there is no line.
+  ascending, each line once, `line` its first); a test that does not match forgets the earlier ones, so **an alternative
+  inside such a rule is one helper call** (`grep_check_i "(${IEXA})|(cmd\.exe|powershell)"`, not `A || B`): a failing first
+  alternative would otherwise wipe the entry of the test before it. At most eight matches are remembered without a finding;
+  beyond that there is no line.
 * A finding made by a plain match (`grep -q`, no `-a`) on a file that holds a NUL byte has no line: grep reads such a file as
   binary and takes each NUL for the end of a line, which a line numbering cannot reproduce.
 * Resolution is a stream: nothing that scales with the number of matching lines (a list, an array, a captured output) is held in
   memory. The exclusion of a rule with one is a merge of two ascending lists; the known-credential exclusion is applied to
-  each matched token (the Python engine in batches); a line that holds several tokens is listed once.
+  each matched token (the Python engine in batches of 4096 tokens or 1 MB); a line that holds several tokens is listed once.
+* Numbering is **bounded**, and where a bound is reached the finding keeps its file and has no line (`line` null): the folded
+  search (`grep -zbo`, which cannot use grep's DFA and is quadratic on `[^>]*` over a file of unclosed openers) runs under
+  `timeout` for `LM_Z_TIMEOUT_S` seconds (5 by default, 1 to 99999); the private-key rule holds at most 8 MB of the lines around
+  its headers. A bound that is reached discards everything numbered so far: a partial list is not a list.
 * Both engines MUST produce the same `line`, `lines` and `line_count` for the same finding: `family_diff.py` compares
   them, and the golden reports carry them.
 
 An invariant the code relies on (and that was checked for every helper call site): **every helper call that matches is
 followed by a `record_*`** in the same branch, except two (the `package.json` fallback fact, which the next helper call
-overwrites, and the PowerShell download rule, whose nested call decides). A new rule that matches with a helper and then
+overwrites, and the PowerShell download rule, whose single combined call decides). A new rule that matches with a helper and then
 records nothing, or records a FAIL by other means, must clear the state or accept that a stale match may be read.
 
 ## 6. Verdict and severity

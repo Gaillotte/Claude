@@ -308,6 +308,14 @@ RUN_SCANCODE="${RUN_SCANCODE:-false}"
 LM_FILE=""; LM_N=0
 LM_MODES=(); LM_PATS=(); LM_EXCLS=()
 LM_LINES=""; LM_COUNT=0
+# A search that numbers matches (grep -o / -b) cannot use grep's DFA and is quadratic on a pattern such as `[^>]*` over
+# a file of unclosed openers (30,000 `<!ENTITY ` took 21 s, the matcher itself 2 ms). The numbering of such a search is
+# given LM_Z_TIMEOUT_S seconds and then gives up: the finding keeps its file and loses its line.
+LM_Z_TIMEOUT_S="${LM_Z_TIMEOUT_S:-5}"
+[[ "$LM_Z_TIMEOUT_S" =~ ^[1-9][0-9]{0,4}$ ]] || LM_Z_TIMEOUT_S=5
+# What the private-key rule may hold in memory while it numbers a file (the lines of the first 200 headers and their
+# five following lines): beyond it the finding has no line.
+LM_PEM_BUDGET=8388608
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 record_pass() {
@@ -634,7 +642,10 @@ _lm_add() {   # _lm_add <file> <mode> <pattern> [exclusion]: a helper matched
     LM_FILE="$1"; LM_MODES[LM_N]="$2"; LM_PATS[LM_N]="$3"; LM_EXCLS[LM_N]="${4:-}"
     LM_N=$(( LM_N + 1 ))
 }
-_lm_cap() { awk 'NR == 1 || $1 != last { last = $1; if (++n <= 10) l = l (n > 1 ? " " : "") $1 } END { print l "|" n + 0 }'; }
+# A line that is not a number is the resolver saying it gave up (a timeout, a budget): the finding has no line at all.
+_lm_cap() { awk '$1 !~ /^[0-9]+$/ { bad = 1; next }
+                 NR == 1 || $1 != last { last = $1; if (++n <= 10) l = l (n > 1 ? " " : "") $1 }
+                 END { if (bad) print "|0"; else print l "|" n + 0 }'; }
 
 # The numbers of the lines of $2 that match -E pattern $1 (grep flags in $3, e.g. -an or -aniE), ascending.
 _lm_nums() { { grep "$3" -e "$1" "$2" 2>/dev/null || true; } | cut -d: -f1; }
@@ -659,7 +670,7 @@ _lm_entry() {
                     | { grep -nviE -e "$KNOWN_CRED_EXCL" || true; } | cut -d: -f1) ;;
         Z)  # the file read as one record: grep gives the byte offset of each match, and the line is the number
             # of newlines before it. The regular expression is still grep's; Python only counts newlines.
-            { grep -zboiE -e "$pat" "$LM_FILE" 2>/dev/null || true; } | python3 -c '
+            { timeout "$LM_Z_TIMEOUT_S" grep -zboiE -e "$pat" "$LM_FILE" 2>/dev/null || { (( $? != 124 )) || printf 'TIMEOUT:\0'; }; } | python3 -c '
 import sys
 def offsets(read):                 # records are b"<offset>:<text>\0"; the text, however long, is never kept
     num, head = b"", True
@@ -677,6 +688,8 @@ def offsets(read):                 # records are b"<offset>:<text>\0"; the text,
                     num += chunk[pos:c]; pos = c + 1; head = False
                     if num.isdigit():
                         yield int(num)
+                    elif num == b"TIMEOUT":
+                        yield -1
                     num = b""
             else:
                 z = chunk.find(b"\0", pos)
@@ -687,6 +700,9 @@ def offsets(read):                 # records are b"<offset>:<text>\0"; the text,
 pos = newlines = last = 0
 with open(sys.argv[1], "rb") as fh:
     for off in offsets(sys.stdin.buffer.read):
+        if off < 0:                # grep was stopped: what was read is not the whole answer
+            print("x")
+            break
         while pos < off:
             chunk = fh.read(min(1 << 20, off - pos))
             if not chunk:
@@ -734,16 +750,18 @@ _lm_resolve() {
 _lm_pem_lines() {
     local hdr='-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----'
     { grep -anE -A5 -e "$hdr" "$1" 2>/dev/null || true; } \
-      | awk -v cap=200 '
+      | awk -v cap=200 -v budget="$LM_PEM_BUDGET" '
           { if (!match($0, /^[0-9]+[:-]/)) next
             n = substr($0, 1, RLENGTH - 1) + 0
             if (stop && n > stop) exit
+            if ((held += length($0)) > budget) { gave = 1; exit }
             t[n] = substr($0, RLENGTH + 1)
             if (substr($0, RLENGTH, 1) == ":" && nh < cap) { hdr[++nh] = n; if (nh == cap) stop = n + 5 } }
-          END { for (i = 1; i <= nh; i++) { h = hdr[i]; w = ""
+          END { if (gave) { print "GIVEUP"; exit }
+                for (i = 1; i <= nh; i++) { h = hdr[i]; w = ""
                   for (k = h; k <= h + 5; k++) if (k in t) w = w t[k] " "
                   gsub(/[\015\011]/, " ", w); print h "\t" w } }' \
-      | { grep -aE -e "${hdr}.{0,200}[A-Za-z0-9+/]{60,}" || true; } | cut -f1
+      | { grep -aE -e "(${hdr}.{0,200}[A-Za-z0-9+/]{60,})|^GIVEUP$" || true; } | cut -f1
 }
 
 # ── Known credential formats ─────────────────────────────────────────────────
@@ -3798,8 +3816,7 @@ _ps_rules() {
     # CWE-95 — decode a blob, then run it. Decoding alone is ordinary (a
     # certificate, a file), so this needs an execution primitive in the same file.
     if grep_check_i 'frombase64string' "$f" \
-       && { grep_check_i "$IEXA" "$f" \
-            || grep_check_i '(scriptblock\]::create|assembly\]::load|virtualalloc|createthread)' "$f"; }; then
+       && grep_check_i "(${IEXA})|(scriptblock\]::create|assembly\]::load|virtualalloc|createthread)" "$f"; then
         record_fail "$f" "CWE-95:PowerShell_decodes_and_executes"
         PS_FAILED=true
     fi
@@ -3832,7 +3849,7 @@ _ps_rules() {
     # CWE-78 — a socket whose stream is fed to a command interpreter. A TcpClient
     # on its own is a port check and is not reported.
     if { grep_check_i 'tcpclient' "$f" && grep_check_i 'getstream' "$f" \
-         && { grep_check_i "$IEXA" "$f" || grep_check_i '(cmd\.exe|powershell)' "$f"; }; } \
+         && grep_check_i "(${IEXA})|(cmd\.exe|powershell)" "$f"; } \
        || grep_check_i '(nc(\.exe)?[[:space:]]+-[a-z]*e[[:space:]]|/dev/tcp/)' "$f"; then
         record_fail "$f" "CWE-78:PowerShell_reverse_shell"
         PS_FAILED=true
@@ -3863,7 +3880,7 @@ _ps_rules() {
     # CWE-319 — a download over plaintext http://. If something is then run the
     # contents were chosen by whoever is on the path, so it blocks; alone, it warns.
     if grep_check_i '(downloadfile|downloadstring|downloaddata|iwr|irm|invoke-webrequest|invoke-restmethod|start-bitstransfer)[^;|]*["'"'"']http://' "$f"; then
-        if grep_check_i "$RUN" "$f" || grep_check_i "$IEXA" "$f"; then
+        if grep_check_i "(${RUN})|(${IEXA})" "$f"; then
             record_fail "$f" "CWE-319:PowerShell_plaintext_download_then_run"
             PS_FAILED=true
         else

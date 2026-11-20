@@ -231,7 +231,8 @@ How it works, in both engines (`scan_pipeline.sh`, and `transit/core.py` for the
 - `grep_check`, `grep_check_i`, `grep_check_excl`, `grep_flat`, the known-credential rule and the private-key rule
   **remember** what they matched: the file, and per match the mode, the pattern and the exclusion (`_lm_add`). A rule made of
   several whole-file tests (`decodes AND executes`, the PowerShell compositions) leaves one entry per test that matched, and its
-  finding lists the lines of all of them; a test that does not match forgets them all. Nothing is searched twice unless a FAIL is
+  finding lists the lines of all of them; a test that does not match forgets them all, so **an alternative inside such a rule
+  is one helper call with `(A)|(B)`, never `A || B`** (a failing first alternative would wipe the test before it). Nothing is searched twice unless a FAIL is
   recorded; then `_lm_resolve` searches the file once more for each entry with the same pattern and options and `-n`. Python only
   numbers lines: **every regular expression is still evaluated by `grep`**.
 - The state is read only by the FAIL recorded right after the helpers, only for the file they searched, and only for the
@@ -249,6 +250,10 @@ How it works, in both engines (`scan_pipeline.sh`, and `transit/core.py` for the
 - **Everything is a stream.** No file, no list of matching lines and no output of grep is held in a variable, an array or a
   Python list: a file of 12 million matching lines costs about 10 MB (it cost 1.3 GB in the Python engine, and the private-key
   search re-read the file once per header: 58 s on a 25 MB file, now one pass).
+- **Numbering is bounded; at a bound the finding keeps its file and has no line.** The folded `-z` search runs under `timeout`
+  for `LM_Z_TIMEOUT_S` seconds (default 5): `grep -zbo` cannot use grep's DFA and is quadratic on `[^>]*` over unclosed openers
+  (30,000 `<!ENTITY ` took 21 s to number, the matcher 2 ms). The private-key rule holds at most 8 MB of the lines around its
+  headers. The known-credential batches of the Python engine are cut at 1 MB as well as at 4096 tokens.
 - **A file that holds a NUL byte is binary to grep**, and the plain helpers (`grep -q`, no `-a`) read each NUL as the end of a line.
   A finding made by a plain match on such a file has **no line**: numbering it would list a line the rule did not match. The
   modes that read text (`-a`, `-z`) are not affected.

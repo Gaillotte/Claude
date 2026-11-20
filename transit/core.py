@@ -247,7 +247,7 @@ def _write_finding(tool, category, severity, rule_id, rule_name, file, line, col
 _TOOL_RULE = re.compile(r"^([a-z][a-z0-9_-]{1,30}):([^:]+)")
 # A tool that names its line puts it at a fixed position: "semgrep[ruleset]:rule:lineN:SEV:text" and "gitleaks:rule:lineN".
 # A ":lineN" inside the text of a message (a jar entry named "x:line7.txt") is repository text, not a line.
-_LINE_NO = re.compile(r"^(?:semgrep\[[^\]]*\]:[^:]*:line([0-9]{1,9}):|gitleaks:.*:line([0-9]{1,9})$)", re.DOTALL)
+_LINE_NO = re.compile(r"^(?:semgrep\[[^\]]*\]:[^:]*:line([0-9]{1,9}):|gitleaks:.*:line([0-9]{1,9})\Z)", re.DOTALL)
 
 
 # ── Lines of a finding ──────────────────────────────────────────────────────
@@ -269,6 +269,19 @@ _LM_PEM_HEADER = r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----"
 _LM_PEM_WINDOW = _LM_PEM_HEADER + r".{0,200}[A-Za-z0-9+/]{60,}"
 _LM_PEM_HEADERS_TRIED = 200
 _LM_TOKEN_BATCH = 4096
+_LM_TOKEN_BATCH_BYTES = 1 << 20      # a batch is also cut by size: a few huge tokens must not be held together
+_LM_PEM_BUDGET = 8 << 20             # what the private-key rule may hold while it numbers a file: beyond it, no line
+
+
+class _LmGaveUp(Exception):
+    """The numbering of a finding was stopped (a timeout, a budget): the finding keeps its file and has no line."""
+
+
+def _lm_z_timeout():
+    """Seconds the numbering of a folded (-z) search may take (LM_Z_TIMEOUT_S, 5 by default). A search that numbers its matches
+    (grep -o / -b) cannot use grep's DFA and is quadratic on a pattern such as `[^>]*` over a file of unclosed openers."""
+    v = os.environ.get("LM_Z_TIMEOUT_S", "")
+    return v if re.fullmatch(r"[1-9][0-9]{0,4}", v) else "5"
 _LM_PREFIX = re.compile(rb"^([0-9]+)([:-])")
 
 
@@ -319,19 +332,20 @@ def _lm_minus(first, second):
 
 def _lm_tokens(pattern, path):
     """Known credential formats: the line of every matched token that the exclusion list does not drop. The exclusion applies to
-    the token, not to the line, so tokens go to grep in batches of 4096 (one process per batch, never the whole file)."""
+    the token, not to the line, so tokens go to grep in batches of 4096 tokens or 1 MB (one process per batch, never the whole file)."""
     def kept(rows):
         _, out = run_tool(["grep", "-nviE", "-e", KNOWN_CRED_EXCL], input=b"".join(tok + b"\n" for _, tok in rows))
         keep = {int(k.split(b":", 1)[0]) for k in out.split(b"\n") if k[:1].isdigit()}
         return [rows[i - 1][0] for i in sorted(keep) if i <= len(rows)]
-    rows = []
+    rows, size = [], 0
     for row in _lm_rows(["grep", "-noIE", "-e", pattern, "--", path]):
         number, _, token = row.rstrip(b"\n").partition(b":")
         if number.isdigit():
             rows.append((int(number), token))
-        if len(rows) >= _LM_TOKEN_BATCH:
+            size += len(token) + 1
+        if len(rows) >= _LM_TOKEN_BATCH or size >= _LM_TOKEN_BATCH_BYTES:
             yield from kept(rows)
-            rows = []
+            rows, size = [], 0
     if rows:
         yield from kept(rows)
 
@@ -385,12 +399,14 @@ def _lm_newline_lines(path, offsets):
 def _lm_folded(pattern, path):
     """The lines on which a match of the folded (grep -z) search starts."""
     try:
-        proc = subprocess.Popen(_argv(["grep", "-zboiE", "-e", pattern, "--", path]), stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(_argv(["timeout", _lm_z_timeout(), "grep", "-zboiE", "-e", pattern, "--", path]),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError:
         return
     try:
         yield from _lm_newline_lines(path, _lm_offsets(proc.stdout.read))
+        if proc.wait() == 124:                      # timeout stopped grep: what was read is not the whole answer
+            raise _LmGaveUp()
     finally:
         proc.stdout.close()
         if proc.poll() is None:
@@ -402,7 +418,7 @@ def _lm_pem_lines(path):
     """The header lines of a private key whose own window (five lines, folded) passes the key rule: one pass over the file, the
     first 200 headers (a file with more is a bundle of keys), one grep over the folded windows. The first version read the
     file once per header."""
-    text, headers, stop = {}, [], 0
+    text, headers, stop, held = {}, [], 0, 0
     for row in _lm_rows(["grep", "-anE", "-A5", "-e", _LM_PEM_HEADER, "--", path]):
         m = _LM_PREFIX.match(row)
         if not m:
@@ -410,6 +426,9 @@ def _lm_pem_lines(path):
         n = int(m.group(1))
         if stop and n > stop:
             break
+        held += len(row)
+        if held > _LM_PEM_BUDGET:                      # lines this long are not keys: bounded memory, no line
+            raise _LmGaveUp()
         text[n] = row[m.end():].rstrip(b"\n")
         if m.group(2) == b":" and len(headers) < _LM_PEM_HEADERS_TRIED:
             headers.append(n)
@@ -481,7 +500,7 @@ def _lm_resolve():
                 total += 1
                 if len(first) < _LM_CAP:
                     first.append(n)
-    except OSError:
+    except (OSError, _LmGaveUp):
         return [], 0
     return first, total
 

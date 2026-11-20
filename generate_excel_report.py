@@ -9,6 +9,7 @@ Onglet 2 — Findings : FAIL + WARN uniquement, triés par sévérité
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -209,13 +210,17 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
 
     # The lines a FAIL names: findings[] carries them per record (`lines`, at most ten, and `line_count`), the message
     # of file_results is the same text as the record's. A finding with no line (a derived view, a container) has none.
+    # Two records of one file can share a message (a rule that two scanners both apply): each is a queue of line texts
+    # in the order the records were written, which is the order of the [FAIL] entries of the file, and every [FAIL]
+    # row takes the next one. A record with no line queues an empty text so that the positions stay aligned.
     lines_of: dict = {}
     for rec in data.get("findings", []):
         lines = rec.get("lines") or ([rec["line"]] if rec.get("line") else [])
+        text = ""
         if lines:
             total = rec.get("line_count") or len(lines)
             text = ", ".join(str(n) for n in lines) + (f" of {total}" if total > len(lines) else "")
-            lines_of.setdefault((rec.get("file"), rec.get("message")), text)
+        lines_of.setdefault((rec.get("file"), (rec.get("message") or "").strip()), []).append(text)
 
     rows = []
     for filepath, info in file_results.items():
@@ -224,8 +229,13 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
             continue
         message = info.get("message", "").rstrip(" | ")
         # Split on " | " (the delimiter used by record_fail accumulation).
-        # A bare "|" split would incorrectly break on pipe chars in finding text.
-        findings = [m.strip() for m in message.split(" | ") if m.strip()]
+        # A bare "|" split would incorrectly break on pipe chars in finding text. Entries carry a [FAIL]/[WARN] tag,
+        # so where they do the split is made only before a tag: a message that itself holds " | " stays one entry.
+        if "[FAIL]" in message or "[WARN]" in message:
+            parts = re.split(r" \| (?=\[(?:FAIL|WARN)\])", message)
+        else:
+            parts = message.split(" | ")
+        findings = [m.strip() for m in parts if m.strip()]
         if not findings:
             findings = ["(no details)"]
         for finding in findings:
@@ -254,7 +264,11 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
                     sev, sev_order = "MEDIUM", 2
                 else:
                     sev, sev_order = "LOW", 3
-            rows.append((sev_order, sev, filepath, finding, entry_status))
+            where = ""
+            if entry_status == "FAIL":
+                queue = lines_of.get((_rel(filepath, scan_dir), finding.strip()))
+                where = queue.pop(0) if queue else ""
+            rows.append((sev_order, sev, filepath, finding, entry_status, where))
 
     # Sort: CRITICAL first, then HIGH, MEDIUM, LOW
     rows.sort(key=lambda r: r[0])
@@ -263,7 +277,7 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
     sev_fill = {"CRITICAL": "FF0000", "HIGH": COLOR_FAIL,
                 "MEDIUM": COLOR_WARN, "LOW": "D9D9D9"}
 
-    for idx, (_, sev, filepath, finding, status) in enumerate(rows, start=1):
+    for idx, (_, sev, filepath, finding, status, where) in enumerate(rows, start=1):
         row = idx + 1
         fill = status_fill.get(status, None)
         _data_cell(ws, row, 1, idx)
@@ -275,7 +289,7 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
         cell.alignment = Alignment(horizontal="center", vertical="center")
         rel_path = _rel(filepath, scan_dir)
         _data_cell(ws, row, 3, rel_path, fill)
-        _data_cell(ws, row, 4, lines_of.get((rel_path, finding), ""), fill)
+        _data_cell(ws, row, 4, where, fill)
         _data_cell(ws, row, 5, finding, fill)
         _data_cell(ws, row, 6, status, fill)
         ws.row_dimensions[row].height = 18
