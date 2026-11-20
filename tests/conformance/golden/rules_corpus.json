@@ -6,7 +6,6 @@
   "locale": "C.UTF-8",
   "tools_present": [
    "npm",
-   "shellcheck",
    "file",
    "strings",
    "unzip"
@@ -1414,7 +1413,8 @@
    },
    "office_rt3_script_mentions_rtf": {
     "messages": [
-     "[FAIL] CWE-78:remote_code_execution_curl_pipe_bash"
+     "[FAIL] CWE-78:remote_code_execution_curl_pipe_bash",
+     "[WARN] shellcheck missing"
     ],
     "status": "FAIL"
    },
@@ -2249,8 +2249,10 @@
     "status": "PASS"
    },
    "safe_shell.sh": {
-    "messages": [],
-    "status": "PASS"
+    "messages": [
+     "[WARN] shellcheck missing"
+    ],
+    "status": "WARN"
    },
    "safe_sql.py": {
     "messages": [
@@ -8257,7 +8259,7 @@
   "summary": {
    "fail": 323,
    "pass": 58,
-   "warn": 215
+   "warn": 217
   },
   "verdict": "FAIL"
  }
