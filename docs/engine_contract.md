@@ -188,8 +188,11 @@ the same time overwrite each other's sidecars `(unverified: not run)`.
   counters; one row for every entry of `file_results` with the path, the status and the message; and every path,
   message and the directory HTML-escaped (section 9, S3). The reference markup is a dark table page titled
   `AI Transit Report — <TS>` with `<h1>Verdict: <V></h1>`, a `Directory: <code>…</code> | Date: <TS>` line and rows
-  `<tr><td><code>path</code></td><td class='pass|warn|fail'>STATUS</td><td>message</td></tr>`. It has no coverage
-  block and no finding records (code, L6619-L6659).
+  `<tr><td><code>path</code></td><td class='pass|warn|fail'>STATUS</td><td>message</td><td>lines</td></tr>`. The last
+  cell is the **Lines** column: for each FAIL of the file that names lines, `<rule>: 2, 5, 9` (the whole message for a
+  built-in rule, the rule id for another tool), with ` of <n>` after the list when the list is cut at ten, entries
+  joined with `" | "`; empty when no finding of the file names a line (section 5.4). It has no coverage block and no
+  finding records (code, L6619-L6659).
 
 ### 3.5 Temporary files
 
@@ -249,7 +252,7 @@ present in every report written by a completed run; no key is optional at the to
 | `findings_by_file` | object path → string | The FAIL messages of the file joined with `" \| "` (no trailing separator). Key is `SCAN_DIR/relative`, or `SCAN_DIR` for a whole-directory finding, or `__global__` for a finding about the scan itself (the `engine:` family, section 5.1). |
 | `file_results` | object path → `{status, message}` | `status` is `PASS`, `WARN` or `FAIL`. `message` is the file's `[WARN] …` / `[FAIL] …` messages joined with `" \| "`, empty for a clean PASS. Keys: every scanned file, the pseudo-entry `__global__` (missing tools, offline notes, the exclusions WARN, the `engine:` FAILs about the whole scan), and `SCAN_DIR` itself (whole-directory results). A symlink is a key too (section 8.5). |
 
-**`findings[]` record** (all ten fields always present; E6, golden):
+**`findings[]` record** (all twelve fields always present; E6, golden):
 
 | Field | Type | Value |
 |-------|------|-------|
@@ -258,8 +261,10 @@ present in every report written by a completed run; no key is optional at the to
 | `severity` | `INFO` \| `LOW` \| `MEDIUM` \| `HIGH` \| `CRITICAL` | From the one classifier (section 6.3). |
 | `rule_id`, `rule_name` | strings | |
 | `file` | non-empty string | **Relative** to `SCAN_DIR`; `.` for a whole-directory finding; `__global__` for a finding about the whole scan (the `engine:` messages recorded there); unchanged (so absolute) if the file does not sit under `SCAN_DIR/` (E7). |
-| `line` | integer ≥ 0 or null | From `:line<digits>` in the message. |
+| `line` | integer ≥ 0 or null | The first line of the file that matches. From `:line<digits>` in the message when the tool names one (Semgrep, gitleaks); for a built-in rule the first of `lines` (section 5.4). null when there is none. |
 | `column` | integer or null | Always null today. |
+| `lines` | array of integers ≥ 1, at most 10 | Every matching line in ascending order, cut at ten. `[]` exactly when `line` is null (or 0). Otherwise it starts with `line`. |
+| `line_count` | integer ≥ 0 | How many lines match in all: at least `len(lines)`, and more than it only when the list is cut at ten. `0` when `line` is null. |
 | `message` | non-empty string | The message exactly as passed to `record_fail`. |
 | `references` | array of strings | `["CWE-798"]` for gitleaks and detect-secrets, `["CWE-n"]` for `CWE-n:` messages, otherwise empty. |
 
@@ -389,6 +394,41 @@ Consequently `engine:nothing_scanned` has tool `engine`, category `security`, ru
 is `file` with `SCAN_DIR/` removed, or `.` when `file` is `SCAN_DIR`. The Python engine MUST produce the same
 `tool`, `category`, `severity`, `file`, `line` and `message` for the same finding; where this table is plainly
 wrong (`bandit` rule id, `CVE-…` tool) the register decides (A16, D-016).
+
+### 5.4 The lines of a finding
+
+A finding of a built-in grep rule (message families `CWE-*`, `OWASP-*`, `CVE-*`, `make:*`) names the lines that match.
+The message is **not** changed (the allowlist reads its first two colon tokens and the severity reads its markers), so
+the lines live only in the structured fields `line`, `lines` and `line_count`, and in the Lines column of the HTML
+report and the Line column of the Excel report.
+
+How both engines work, and what each MUST do:
+
+* The grep helpers (`grep_check`, `grep_check_i`, `grep_check_excl`, `grep_flat`, `_known_cred_check`, the
+  private-key rule) remember the file, the way they searched it (plain, case-insensitive, with an exclusion, over the
+  whole file as one record, per matched token, the private-key window) and the pattern. Nothing is searched a second time
+  unless a FAIL is recorded, and then once, with the **same pattern and options** and `-n`: every regular expression is
+  evaluated by `grep`, never by Python's `re`. `LC_ALL=C` and `-a` apply as everywhere else.
+* The remembered match is read only by the FAIL recorded right after the helper that produced it, only for the file the
+  helper searched, and only for those four message families; every `record_pass`, `record_warn` and recorded FAIL
+  clears it, and every helper call overwrites it. A finding of any other kind, or one recorded against another file
+  than the one searched, has `line` null, `lines` `[]`, `line_count` 0.
+* A rule that searched a **derived view** of the file (comments stripped, continuations joined, a decoded stream, the
+  text of an archive or a document) has no line in the file, so its finding has none. This covers XML, Maven and Ant
+  rules that run on the comment-stripped copy, `scan_bat`, `scan_makefile`'s joined view, the JSON manifest
+  facts, PDF, jar and office findings. **Null is the correct answer there; a number that points at the wrong place is a
+  defect.**
+* The folded search (`grep -z`) reports the line on which the match **starts**; a declaration split over two lines counts
+  once. The known-credential rule applies its exclusion list to the matched token, not to the line. The private-key
+  rule reports the header line whose own five-line window holds the key body, and tries at most the first 200 headers.
+* A finding whose message carries `:line<N>` keeps that line (`lines` is `[N]`, `line_count` 1).
+* Both engines MUST produce the same `line`, `lines` and `line_count` for the same finding: `family_diff.py` compares
+  them, and the golden reports carry them.
+
+An invariant the code relies on (and that was checked for every helper call site): **every helper call that matches is
+followed by a `record_*`** in the same branch, except two (the `package.json` fallback fact, which the next helper call
+overwrites, and the PowerShell download rule, whose nested call decides). A new rule that matches with a helper and then
+records nothing, or records a FAIL by other means, must clear the state or accept that a stale match may be read.
 
 ## 6. Verdict and severity
 

@@ -212,10 +212,48 @@ so `coverage_complete` is false until `RUN_SCA` / `RUN_SCANCODE` are set.
 Other report fields: `decision` (`APPROVED` for a PASS, else `REJECTED`) with
 `status_color` / `status_background`, `scan_name`, and `source` (`directory`, `sha256`).
 `findings` is a **list of records**, one per FAIL (`tool`, `category`, `severity`, `rule_id`,
-`rule_name`, `file`, `line`, `message`, `references`), written as JSON lines while the scan
+`rule_name`, `file`, `line`, `lines`, `line_count`, `message`, `references`), written as JSON lines while the scan
 runs (`_emit_finding`) and folded in at the end; the per-file dictionary `findings` used to
 be is now `findings_by_file`. A finding about the whole directory (gitleaks, ClamAV) has
 `file` `.`.
+
+## Lines of a finding
+
+A finding of a built-in grep rule (messages `CWE-*`, `OWASP-*`, `CVE-*`, `make:*`) says **where**, not only which file and
+which rule: `line` (the first matching line), `lines` (every matching line, at most ten) and `line_count` (how many lines
+match in all; larger than `len(lines)` only when the list is cut). The message text is **not** changed, because the
+allowlist reads its first two colon tokens and the severity reads its `:LEVEL:` markers: the lines live in the structured
+fields, in the **Lines** column of the HTML report, in the **Line** column of the Excel Findings tab and in the launcher's
+`Where (file:line)` summary. A tool that names its own line (Semgrep, gitleaks) keeps it (`lines` is `[N]`).
+
+How it works, in both engines (`scan_pipeline.sh`, and `transit/core.py` for the Python engine):
+
+- `grep_check`, `grep_check_i`, `grep_check_excl`, `grep_flat`, the known-credential rule and the private-key rule
+  **remember** what they matched (`LM_FILE`, `LM_MODE`, `LM_PAT`, `LM_EXCL`). Nothing is searched twice unless a FAIL is
+  recorded; then `_lm_resolve` searches the file once more with the same pattern and options and `-n`. Python only
+  numbers lines: **every regular expression is still evaluated by `grep`**.
+- The state is read only by the FAIL recorded right after the helper, only for the file the helper searched, and only for the
+  four message families above. `record_pass`, `record_warn`, `_emit_finding`, `classify_file`, `scan_universal_patterns`
+  and `_pdf_has` clear it and every helper call overwrites it. **Every helper call that matches is followed by a
+  `record_*`** (checked for all call sites; the two exceptions are explained in `docs/engine_contract.md` §5.4): a rule
+  that matches and then records nothing, or records a FAIL by other means, can leave a stale match.
+- Modes: plain and `-i` (`-n` numbers); with an exclusion (the lines of the pattern minus the lines of the exclusion);
+  the folded `-z` search (the byte offset of each match, counted in newlines, so a declaration split over two lines is
+  reported on the line it starts); a known credential (the exclusion list is applied to the matched token, not to the line);
+  the private key (the header whose own five-line window holds the 60-character body, first 200 headers).
+
+**Null is the right answer, not a gap, wherever the rule did not search the file itself**: the comment-stripped copy
+in `scan_xml` (pom.xml, build.xml, the XML credential rule), `scan_bat`, `scan_makefile`'s joined view, the facts
+parsed from `package.json` and `composer.json`, PDF streams, and every container (jar, office, archive). A line number there
+would point at the wrong place. Making those views line-preserving, and taking lines from Bandit, ShellCheck and
+cppcheck, is future work (a view that keeps its newlines can change what a line-based rule matches, so each needs its own
+calibration). Bounded: at most ten lines are listed whatever the file, so the cost of a finding is one more `grep`.
+
+**Adding a rule that uses a helper needs nothing more.** A rule that does not go through a helper (an `awk`, a Python fact,
+a view) gets `line` null, which is correct; clear the state (`LM_FILE=""`) if it follows a helper that matched.
+Tests: Layer M of `tests/run_tests.sh` (86 assertions, both engines, mutation-tested: same-file guard, exclusion,
+token exclusion, the cap, the folded offset), the schema invariants in `check_schema.py`, `family_diff.py` (it compares
+the lines too) and the golden reports.
 
 ## WARN vs FAIL semantics
 

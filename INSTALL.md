@@ -3115,6 +3115,7 @@ Expected output on a healthy installation:
 | E — diff mode | `--since` scans exactly the changed files; `.git` excluded from local copies |
 | G — customised deployment | Optional `report_dir` / `scanning_name`, no online mode, gitleaks run on the pipeline's terms (a repository's own `.gitleaks.toml`, `.gitleaksignore` and inline allow comments are ignored), structured findings and the new report fields, layers 3 and 6 off by default and recorded as `skipped:disabled`, exit status 1 unless PASS, hostile inputs (non-UTF-8 names, stale `.diff_files`, empty allowlist, trailing slash, unusable names) |
 | F — static | Parse checks, shellcheck, and lint rules for the bug classes that have already shipped (six silent-failure classes, `echo -e` on repository text, and an associative array measured with `${#…}` without being initialised) |
+| M — lines of a finding | `findings[].line`, `lines` (the first ten) and `line_count` for both engines: a quoted credential, a known credential format (a placeholder token on another line is not counted), three and twelve matching lines, a rule with an exclusion, CRLF and NUL-holding files, a private key, a declaration split across two lines, a rule that searched a derived view or a container (null, never a wrong line), the message left unchanged, the HTML Lines column, the Excel Line column and the launcher's `file:line` summary |
 
 ### 17.2 Fixtures
 
