@@ -251,7 +251,7 @@ calibration). Bounded: at most ten lines are listed whatever the file, so the co
 
 **Adding a rule that uses a helper needs nothing more.** A rule that does not go through a helper (an `awk`, a Python fact,
 a view) gets `line` null, which is correct; clear the state (`LM_FILE=""`) if it follows a helper that matched.
-Tests: Layer M of `tests/run_tests.sh` (86 assertions, both engines, mutation-tested: same-file guard, exclusion,
+Tests: Layer M of `tests/run_tests.sh` (both engines, mutation-tested: same-file guard, exclusion,
 token exclusion, the cap, the folded offset), the schema invariants in `check_schema.py`, `family_diff.py` (it compares
 the lines too) and the golden reports.
 
