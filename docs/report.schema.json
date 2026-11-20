@@ -170,6 +170,8 @@
           "file",
           "line",
           "column",
+          "lines",
+          "line_count",
           "message",
           "references"
         ],
@@ -190,8 +192,19 @@
             "type": "string",
             "pattern": ".+"
           },
-          "line": { "type": ["integer", "null"], "minimum": 0 },
+          "line": {
+            "description": "The first line of the file that matches (1-based), or null when the rule names no line: a rule that searched a derived view of the file (comments stripped, continuations joined, a decoded stream), a container (archive, document) or a finding about the whole directory.",
+            "type": ["integer", "null"], "minimum": 0
+          },
           "column": { "description": "Always null today.", "type": ["integer", "null"], "minimum": 0 },
+          "lines": {
+            "description": "Every matching line, in order, at most ten. [] when `line` is null; otherwise it starts with `line`.",
+            "type": "array", "maxItems": 10, "items": { "type": "integer", "minimum": 1 }
+          },
+          "line_count": {
+            "description": "How many lines match in all: at least the length of `lines`, and more than it when the list is cut at ten. 0 when `line` is null.",
+            "type": "integer", "minimum": 0
+          },
           "message": { "type": "string", "pattern": ".+" },
           "references": { "type": "array", "items": { "type": "string" } }
         }

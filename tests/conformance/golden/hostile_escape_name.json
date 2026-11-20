@@ -57,7 +57,11 @@
    {
     "category": "cwe",
     "file": "raw\u001b]0;pwned\u0007.txt",
-    "line": null,
+    "line": 1,
+    "line_count": 1,
+    "lines": [
+     1
+    ],
     "message": "CWE-798:hardcoded_credential",
     "references": [
      "CWE-798"
@@ -70,7 +74,11 @@
    {
     "category": "cwe",
     "file": "raw\u001b]0;pwned\u0007.txt",
-    "line": null,
+    "line": 1,
+    "line_count": 1,
+    "lines": [
+     1
+    ],
     "message": "CWE-798:hardcoded_credential_in_doc",
     "references": [
      "CWE-798"

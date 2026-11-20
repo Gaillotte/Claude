@@ -76,6 +76,10 @@
     "category": "secret",
     "file": "leak.py",
     "line": 3,
+    "line_count": 1,
+    "lines": [
+     3
+    ],
     "message": "gitleaks:generic-api-key:line3",
     "references": [
      "CWE-798"

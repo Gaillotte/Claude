@@ -57,7 +57,11 @@
    {
     "category": "cwe",
     "file": "<img src=x onerror=1>.py",
-    "line": null,
+    "line": 1,
+    "line_count": 1,
+    "lines": [
+     1
+    ],
     "message": "CWE-95:dynamic_code_execution_eval_exec",
     "references": [
      "CWE-95"

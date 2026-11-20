@@ -266,6 +266,7 @@ GLOBAL_VERDICT="PASS"
 declare -A FINDINGS      # path → concatenated FAIL messages
 declare -A FILE_STATUS   # path → PASS | FAIL | WARN
 declare -A FILE_MSG      # path → message
+declare -A FILE_LINES    # path → "rule: the lines that match, … | " (the Lines column of the HTML report)
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
@@ -297,9 +298,18 @@ trap 'rm -f "$FINDINGS_JL" "${_TMP_LIST:-}" "${XML_TMP:-}"' EXIT
 RUN_SCA="${RUN_SCA:-false}"
 RUN_SCANCODE="${RUN_SCANCODE:-false}"
 
+# ── Where a rule matched (see "Lines of a finding" below) ────────────────────
+# The grep helpers remember what they last matched: the file, how they searched it (LM_MODE) and the pattern.
+# Nothing is searched a second time unless a FAIL is recorded, and then once (_lm_resolve). Every record_pass,
+# record_warn and _emit_finding clears it, and every helper call overwrites it, so a match can only be read by
+# the finding recorded right after the helper that produced it, and only for the same file.
+LM_FILE=""; LM_MODE=""; LM_PAT=""; LM_EXCL=""
+LM_LINES=""; LM_COUNT=0
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 record_pass() {
     local file="${1:-}"
+    LM_FILE=""
     (( PASS_COUNT++ )) || true
     if [[ -n "$file" && -z "${FILE_STATUS[$file]:-}" ]]; then
         FILE_STATUS["$file"]="PASS"
@@ -309,6 +319,7 @@ record_pass() {
 
 record_warn() {
     local file="${1:-__global__}"; shift
+    LM_FILE=""
     (( WARN_COUNT++ )) || true
     warn "$*"
     # WARN never downgrades an existing FAIL status.
@@ -365,11 +376,13 @@ _classify_severity() {
 # file names and messages come from the scanned repository. Every string is first
 # turned back into bytes and decoded leniently, because a file name that is not valid
 # UTF-8 arrives as lone surrogates that json cannot write; the line is plain ASCII.
-# Args: tool category severity rule_id rule_name file line column message [references]
+# Args: tool category severity rule_id rule_name file line column message lines line_count [references]
+# `lines` is a comma-separated list (the first ten matching lines), `line_count` how many lines match in all.
 _write_finding() {
     local tool="$1" category="$2" severity="$3" rule_id="$4" rule_name="$5"
     local file="$6" line="$7" column="$8" message="$9"
-    shift 9
+    local lines="${10}" line_count="${11}"
+    shift 11
     local refs="${*:-}"
     python3 -c "
 import json, os, sys
@@ -377,10 +390,12 @@ a = [os.fsencode(x).decode('utf-8', 'replace') for x in sys.argv[1:]]
 rec = dict(tool=a[0], category=a[1], severity=a[2], rule_id=a[3], rule_name=a[4], file=a[5],
            line=int(a[6]) if a[6].isdigit() else None,
            column=int(a[7]) if a[7].isdigit() else None,
-           message=a[8], references=a[9].split(',') if a[9] else [])
+           lines=[int(x) for x in a[9].split(',') if x.isdigit()],
+           line_count=int(a[10]) if a[10].isdigit() else 0,
+           message=a[8], references=a[11].split(',') if a[11] else [])
 print(json.dumps(rec))
 " "$tool" "$category" "$severity" "$rule_id" "$rule_name" "$file" \
-      "$line" "$column" "$message" "$refs" >> "$FINDINGS_JL" 2>/dev/null || true
+      "$line" "$column" "$message" "$lines" "$line_count" "$refs" >> "$FINDINGS_JL" 2>/dev/null || true
 }
 
 # Work out the structured fields from the message, whose shape depends on the
@@ -426,7 +441,29 @@ _emit_finding() {
         # still say who they are.
         tool="${BASH_REMATCH[1]}"; rule_id="${BASH_REMATCH[2]}"
     fi
-    if [[ "$msg" =~ :line([0-9]+) ]]; then line="${BASH_REMATCH[1]}"; fi
+    # The line comes from the tool when the message carries one (Semgrep: ":lineN:"); a built-in grep rule has
+    # none in its message and takes the lines its last helper matched (see "Lines of a finding"). Only the
+    # message families those rules use, only the file that helper searched, and only once: anything else is null.
+    local lines="" line_count=0
+    if [[ "$msg" =~ :line([0-9]+) ]]; then
+        line="${BASH_REMATCH[1]}"
+        if [[ "$line" != *[!0-9]* ]] && (( 10#$line >= 1 )); then lines="$line"; line_count=1; fi
+    elif [[ -n "$LM_FILE" && "$file" == "$LM_FILE" ]]; then
+        case "$msg" in
+            CWE-*|OWASP-*|CVE-*|make:*)
+                _lm_resolve
+                if (( LM_COUNT > 0 )); then
+                    line="${LM_LINES%% *}"; lines="${LM_LINES// /,}"; line_count="$LM_COUNT"
+                fi ;;
+        esac
+    fi
+    LM_FILE=""
+    if [[ -n "$lines" ]]; then
+        # a built-in rule is named by its whole message (CWE-22:path_traversal_encoded), another tool by its rule id
+        local lines_label="${rule_id:-$tool}"
+        [[ "$tool" == "grep-pattern" ]] && lines_label="$msg"
+        FILE_LINES["$file"]+="${lines_label}: ${lines//,/, }$( (( line_count > 10 )) && echo " of ${line_count}" || true) | "
+    fi
 
     [[ -z "$rule_name" ]] && rule_name="$msg"
     [[ -z "$tool" ]] && tool="unknown"
@@ -435,7 +472,7 @@ _emit_finding() {
     local rel="${file#"$SCAN_DIR/"}"
     [[ "$rel" == "$SCAN_DIR" ]] && rel="."
     _write_finding "$tool" "$category" "$_MSG_SEV_NAME" "$rule_id" "$rule_name" \
-                   "$rel" "$line" "" "$msg" "$refs"
+                   "$rel" "$line" "" "$msg" "$lines" "$line_count" "$refs"
 }
 
 record_fail() {
@@ -497,11 +534,21 @@ record_fail_hard() {
 # and grep exits 2 with "unrecognized option". `if` reads 2 as false, so the
 # rule becomes silently inert: it never fires and never complains. -e marks the
 # argument as the pattern and ends the ambiguity.
-grep_check() { grep -qE -e "$1" "$2" 2>/dev/null; }
+grep_check() {
+    local rc=0
+    grep -qE -e "$1" "$2" 2>/dev/null || rc=$?
+    if (( rc == 0 )); then LM_FILE="$2"; LM_MODE=E; LM_PAT="$1"; LM_EXCL=""; else LM_FILE=""; fi
+    return "$rc"
+}
 # Case-insensitive variant. Needed where a convention fixes the case of the
 # thing being matched rather than the rule: Makefile variables are upper-case by
 # convention, so a lower-case PASSWORD pattern would never fire on one.
-grep_check_i() { grep -qiE -e "$1" "$2" 2>/dev/null; }
+grep_check_i() {
+    local rc=0
+    grep -qiE -e "$1" "$2" 2>/dev/null || rc=$?
+    if (( rc == 0 )); then LM_FILE="$2"; LM_MODE=iE; LM_PAT="$1"; LM_EXCL=""; else LM_FILE=""; fi
+    return "$rc"
+}
 # Match $1 on a line that does NOT also match the exclusion $2. POSIX ERE has
 # no negative lookahead, and the exclusions that matter here cannot be folded
 # into the pattern: a ${...} reference, a Maven-encrypted {...} value, a
@@ -516,7 +563,12 @@ grep_check_i() { grep -qiE -e "$1" "$2" 2>/dev/null; }
 # to the first grep, which then prints no lines to the pipe, so the second reads nothing and the rule could
 # never match: one NUL byte silenced every rule that uses an exclusion. Like the other helpers, a match still
 # counts on such a file.
-grep_check_excl() { grep -ahiE -e "$1" "$3" 2>/dev/null | grep -aviE -e "$2" >/dev/null; }
+grep_check_excl() {
+    local rc=0
+    grep -ahiE -e "$1" "$3" 2>/dev/null | grep -aviE -e "$2" >/dev/null || rc=$?
+    if (( rc == 0 )); then LM_FILE="$3"; LM_MODE=X; LM_PAT="$1"; LM_EXCL="$2"; else LM_FILE=""; fi
+    return "$rc"
+}
 # Same test over the file with its newlines folded into the text, for constructs that can legally be split
 # across lines (an <!ENTITY …> declaration). Without this a payload evades every line-based rule by adding a
 # line break. -z makes the whole file one record, which is the folded view: no pattern that uses this helper
@@ -535,7 +587,11 @@ grep_check_excl() { grep -ahiE -e "$1" "$3" 2>/dev/null | grep -aviE -e "$2" >/d
 grep_flat() {
     local rc=0
     grep -ziE -e "$1" "$2" >/dev/null || rc=$?
-    if (( rc <= 1 )); then return "$rc"; fi
+    if (( rc <= 1 )); then
+        if (( rc == 0 )); then LM_FILE="$2"; LM_MODE=Z; LM_PAT="$1"; LM_EXCL=""; else LM_FILE=""; fi
+        return "$rc"
+    fi
+    LM_FILE=""
     # Neither a match nor a clean file: the search did not finish. It used to count as a match (fail-closed), and
     # the report then named a specific attack (CWE-611, CWE-776) that was not there, with the real cause only on
     # the console. It is now its own finding on the file (FLAT_FILE names the file when $2 is a temporary view of
@@ -550,6 +606,76 @@ grep_flat() {
 }
 FLAT_INCOMPLETE=false
 FLAT_FILE=""
+
+# ── Lines of a finding ───────────────────────────────────────────────────────
+# A finding of a built-in rule says which lines of the file match: `line` (the first one), `lines` (every
+# matching line, at most ten) and `line_count` (how many lines match in all). The message is not touched: the
+# allowlist, the severity and the stored messages read it.
+#
+# The helpers above only remember what matched (LM_*). _lm_resolve runs when a FAIL is recorded, searches the
+# file once more with the SAME pattern and options and -n, and sets LM_LINES (space separated) and LM_COUNT.
+# A rule that searched something other than the file itself (a comment-stripped copy, continuations joined, a
+# decoded stream, the text of an archive) has no line in the file: the file a helper searched must be the file
+# the finding is recorded against, or there is no line, never a wrong one. The result is capped at ten lines
+# and cut in the reader (awk), never with `head`, which would make the producer die of SIGPIPE under pipefail.
+_lm_cap() { awk '{ if (++n <= 10) l = l (n > 1 ? " " : "") $1 } END { print l "|" n + 0 }'; }
+
+# The numbers of the lines of $2 that match -E pattern $1 (grep flags in $3, e.g. -an or -aniE).
+_lm_nums() { { grep "$3" -e "$1" "$2" 2>/dev/null || true; } | cut -d: -f1; }
+
+_lm_resolve() {
+    LM_LINES=""; LM_COUNT=0
+    [[ -n "$LM_FILE" && -f "$LM_FILE" ]] || return 0
+    local out=""
+    case "$LM_MODE" in
+        E)  out=$(_lm_nums "$LM_PAT" "$LM_FILE" -anE | _lm_cap) || out="" ;;
+        iE) out=$(_lm_nums "$LM_PAT" "$LM_FILE" -aniE | _lm_cap) || out="" ;;
+        X)  # lines that match the pattern and do not match the exclusion: the lines of the first set minus the second
+            out=$(awk 'FILENAME == ARGV[1] { b[$1] = 1; next } !($1 in b) { print $1 }' \
+                      <(_lm_nums "$LM_EXCL" "$LM_FILE" -aniE) <(_lm_nums "$LM_PAT" "$LM_FILE" -aniE) | _lm_cap) || out="" ;;
+        T)  # known credential formats: the exclusion applies to the matched token, not to the line
+            local nt
+            nt=$(grep -noIE -e "$LM_PAT" "$LM_FILE" 2>/dev/null || true)
+            [[ -n "$nt" ]] || return 0
+            out=$(awk 'FILENAME == ARGV[1] { k[$1] = 1; next } (FNR in k) { print substr($0, 1, index($0, ":") - 1) }' \
+                      <(cut -d: -f2- <<<"$nt" | { grep -nviE -e "$KNOWN_CRED_EXCL" || true; } | cut -d: -f1) \
+                      <(printf '%s\n' "$nt") | _lm_cap) || out="" ;;
+        Z)  # the file read as one record: grep gives the byte offset of each match, and the line is the number
+            # of newlines before it. The regular expression is still grep's; Python only counts newlines.
+            out=$({ grep -zboiE -e "$LM_PAT" "$LM_FILE" 2>/dev/null || true; } | python3 -c "
+import sys
+offs = sorted(int(r.split(b':', 1)[0]) for r in sys.stdin.buffer.read().split(b'\0') if r[:1].isdigit())
+lines, pos, nl = [], 0, 0
+with open(sys.argv[1], 'rb') as fh:
+    for off in offs:
+        while pos < off:
+            chunk = fh.read(min(1 << 20, off - pos))
+            if not chunk: break
+            nl += chunk.count(b'\n'); pos += len(chunk)
+        if not lines or lines[-1] != nl + 1: lines.append(nl + 1)
+print(' '.join(map(str, lines[:10])) + '|' + str(len(lines)))
+" "$LM_FILE" 2>/dev/null) || out="" ;;
+        P)  out=$(_lm_pem_lines "$LM_FILE" | _lm_cap) || out="" ;;
+    esac
+    [[ "$out" == *"|"* ]] || return 0
+    LM_LINES="${out%|*}"; LM_COUNT="${out#*|}"
+    [[ "$LM_COUNT" == *[!0-9]* || -z "$LM_COUNT" ]] && { LM_LINES=""; LM_COUNT=0; }
+    return 0
+}
+
+# The private-key rule: a header followed within five lines (200 characters once the line breaks are folded) by
+# a run of 60 base64 characters. The header lines whose own window passes that test. At most the first 200
+# headers are tried: a window is three small processes, and a file with more is a bundle of keys.
+_lm_pem_lines() {
+    local f="$1" h n=0
+    while IFS= read -r h; do
+        (( ++n > 200 )) && break
+        if sed -n "${h},$((h + 5))p;$((h + 5))q" "$f" 2>/dev/null | tr '\r\n\t' '   ' \
+             | grep -aE -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}' >/dev/null; then
+            printf '%s\n' "$h"
+        fi
+    done < <(grep -anE -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----' "$f" 2>/dev/null | cut -d: -f1 || true)
+}
 
 # ── Known credential formats ─────────────────────────────────────────────────
 # Providers issue tokens with a fixed, distinctive shape — a literal prefix plus a
@@ -1088,6 +1214,8 @@ _known_cred_check() {
         for _k in "${!KNOWN_CRED_NAMES[@]}"; do
             if grep -ohIE -e "(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_k]})([^A-Za-z0-9]|\$)" "$target" 2>/dev/null \
                  | grep -viE -e "$KNOWN_CRED_EXCL" >/dev/null; then
+                LM_FILE="$target"; LM_MODE=T; LM_EXCL=""
+                LM_PAT="(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_k]})([^A-Za-z0-9]|\$)"
                 record_fail "$report" "CWE-798:known_credential_format_${KNOWN_CRED_NAMES[$_k]}"
                 hit=0
             fi
@@ -1109,6 +1237,7 @@ _known_cred_check() {
 scan_universal_patterns() {
     local f="$1"
     local triggered=false
+    LM_FILE=""
 
     # CWE-798 / CWE-259 — Hardcoded credentials.
     #
@@ -1150,6 +1279,7 @@ scan_universal_patterns() {
          | tr '\r\n\t' '   ' \
          | grep -aE -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}' \
          >/dev/null; then
+        LM_FILE="$f"; LM_MODE=P; LM_PAT=""; LM_EXCL=""
         record_fail "$f" "CWE-321:hardcoded_private_key"
         triggered=true
     fi
@@ -3285,7 +3415,7 @@ scan_makefile() {
 # AdditionalActions key — a false positive that flags this project's own
 # installation guide. Every short name below is therefore matched only where the
 # next byte cannot continue a PDF name.
-_pdf_has() { grep -qaE "$2" "$1" 2>/dev/null; }    # _pdf_has <file> <pattern>
+_pdf_has() { LM_FILE=""; grep -qaE "$2" "$1" 2>/dev/null; }    # _pdf_has <file> <pattern>; a PDF has no lines to name
 
 # Emit a searchable rendering of a PDF on stdout: the raw bytes with hex-escaped
 # name characters decoded, then every FlateDecode stream that inflates.
@@ -3828,6 +3958,7 @@ _flat_office_head() {
 classify_file() {
     local f="$1"
     local base ext
+    LM_FILE=""
     base=$(basename "$f")
     ext="${f##*.}"
     # Matched in lower case. The dispatch was case-sensitive, so UPPER.PS1 and
@@ -4267,7 +4398,7 @@ tr:nth-child(even){background:#16213e}
               WARN: <span class='warn'>${WARN_COUNT}</span> |
               FAIL: <span class='fail'>${FAIL_COUNT}</span></p>"
         echo "<h2>Results by file</h2>"
-        echo "<table><tr><th>File</th><th>Status</th><th>Finding</th></tr>"
+        echo "<table><tr><th>File</th><th>Status</th><th>Finding</th><th>Lines</th></tr>"
         for path in "${!FILE_STATUS[@]}"; do
             local status="${FILE_STATUS[$path]}"
             local msg="${FILE_MSG[$path]:-}"
@@ -4275,7 +4406,8 @@ tr:nth-child(even){background:#16213e}
             case "$status" in PASS) cls="pass";; FAIL) cls="fail";; *) cls="warn";; esac
             _html_esc "$path"; local path_html="$ESC"
             _html_esc "$msg";  local msg_html="$ESC"
-            echo "<tr><td><code>${path_html}</code></td><td class='${cls}'>${status}</td><td>${msg_html}</td></tr>"
+            _html_esc "${FILE_LINES[$path]:-}"; local lines_html="$ESC"
+            echo "<tr><td><code>${path_html}</code></td><td class='${cls}'>${status}</td><td>${msg_html}</td><td>${lines_html}</td></tr>"
         done
         echo "</table></body></html>"
     } > "$REPORT_HTML"

@@ -13,7 +13,7 @@ import re
 import subprocess
 import tempfile
 
-from transit.core import (FILE_STATUS, _ascii_lower, _b, _known_cred_check, _s, call_scanner, first_line, grep_check, has_cmd,
+from transit.core import (FILE_STATUS, G, _ascii_lower, _b, _known_cred_check, _s, call_scanner, first_line, grep_check, has_cmd,
                           record_fail, record_pass, record_warn, run_helper, run_tool, shebang_scanner)
 
 
@@ -329,7 +329,8 @@ def scan_office(f, sniffed=""):
 
 # ── PDF ──────────────────────────────────────────────────────────────────────
 def _pdf_has(f, pattern):
-    """`grep -qaE PATTERN FILE`."""
+    """`grep -qaE PATTERN FILE`. A PDF has no lines to name."""
+    G.LM_FILE = ""
     return run_tool(["grep", "-qaE", "-e", pattern, "--", f])[0] == 0
 
 

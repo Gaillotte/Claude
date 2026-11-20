@@ -18,7 +18,7 @@ from fnmatch import fnmatchcase
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))       # `python3 -I` does not put it there
 
-from transit.core import (ALLOW_MAP, DEFAULT_EXCLUDE_DIRS, FILE_MSG, FILE_STATUS, FINDINGS, G, LAYER_COVERAGE, _ascii_lower,
+from transit.core import (ALLOW_MAP, DEFAULT_EXCLUDE_DIRS, FILE_LINES, FILE_MSG, FILE_STATUS, FINDINGS, G, LAYER_COVERAGE, _ascii_lower,
                           _b, _clr, _s, _san, call_scanner, cleanup_tmp, fail, first_line, has_cmd, info, init_offline_env,
                           ok, record_fail, record_fail_hard, record_layer, record_warn, register_tmp, run_helper, run_tool,
                           shebang_scanner, warn)
@@ -194,6 +194,7 @@ def classify_file(f):
     """Layer 4 on every file, then the scanner its basename, extension (lower-cased) or first bytes call for."""
     base = os.path.basename(f).rstrip("\n")                  # `$(basename)` drops trailing newlines
     ext = _ascii_lower(f.rsplit(".", 1)[-1] if "." in f else f)
+    G.LM_FILE = ""
 
     call_scanner("scan_universal_patterns", f)
 
@@ -422,11 +423,11 @@ tr:nth-child(even){background:#16213e}
            % ("\n              <span class='tag'>SCA/CVE</span>" if G.RUN_SCA == "true" else ""),
            "<p>PASS: <span class='pass'>%d</span> |\n              WARN: <span class='warn'>%d</span> |\n"
            "              FAIL: <span class='fail'>%d</span></p>" % (G.PASS_COUNT, G.WARN_COUNT, G.FAIL_COUNT),
-           "<h2>Results by file</h2>", "<table><tr><th>File</th><th>Status</th><th>Finding</th></tr>"]
+           "<h2>Results by file</h2>", "<table><tr><th>File</th><th>Status</th><th>Finding</th><th>Lines</th></tr>"]
     for path, status in FILE_STATUS.items():
         cls = {"PASS": "pass", "FAIL": "fail"}.get(status, "warn")
-        out.append("<tr><td><code>%s</code></td><td class='%s'>%s</td><td>%s</td></tr>"
-                   % (_html_esc(path), cls, status, _html_esc(FILE_MSG.get(path, ""))))
+        out.append("<tr><td><code>%s</code></td><td class='%s'>%s</td><td>%s</td><td>%s</td></tr>"
+                   % (_html_esc(path), cls, status, _html_esc(FILE_MSG.get(path, "")), _html_esc(FILE_LINES.get(path, ""))))
     out.append("</table></body></html>")
     with open(G.REPORT_HTML, "wb") as fh:
         fh.write(_b("\n".join(out) + "\n"))

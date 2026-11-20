@@ -9,7 +9,7 @@
 Globs are relative to the repository root. The files they match are copied into one temporary directory (a file keeps its path
 below the part of its glob that has no wildcard, so `Makefile` and `composer.json` are still routed by basename and a
 `.transit-allow.json` at the top of a fixture directory is still at the top), and both engines scan that directory with the same
-environment. For every file the status, the messages (as a set) and the rule ids of its findings are compared; a difference is
+environment. For every file the status, the messages (as a set), the rule ids of its findings and the lines each names are compared; a difference is
 printed, and so is the coverage block when it differs. `__global__` is not compared: it is the business of conformance.py.
 A scanner the Python engine has not ported shows up as the WARN `python engine has not ported <scanner> yet`; the count of
 differences that are only that is printed at the end. Exit status: 0 no difference, 1 differences, 2 usage error or an engine
@@ -95,10 +95,12 @@ def run_engine(engine, scan, base):
 
 
 def per_file(report):
-    ids = {}
+    ids, where = {}, {}
     for rec in report["findings"]:
         ids.setdefault(rec["file"], set()).add(rec["rule_id"])
-    return {path: (v["status"], set(v["messages"]), ids.get(path, set()))
+        # the lines a finding names are part of what the engines must agree on
+        where.setdefault(rec["file"], set()).add((rec["rule_id"], tuple(rec.get("lines") or ()), rec.get("line_count", 0)))
+    return {path: (v["status"], set(v["messages"]), ids.get(path, set()), where.get(path, set()))
             for path, v in report["file_results"].items() if path != "__global__"}
 
 
@@ -139,6 +141,9 @@ def main():
             for label, only in (("bash", ea[2] - eb[2]), ("python", eb[2] - ea[2])):
                 for r in sorted(only):
                     print("   rule id only in %s: %s" % (label, _p(r)))
+            for label, only in (("bash", ea[3] - eb[3]), ("python", eb[3] - ea[3])):
+                for rule, lines, total in sorted(only):
+                    print("   lines only in %s: %s lines %s of %d" % (label, _p(rule), list(lines), total))
             if eb[1] - ea[1] and all(m.startswith(NOT_PORTED) for m in eb[1] - ea[1]):
                 unported += 1
         ca, cb = reports["bash"]["coverage"], reports["python"]["coverage"]

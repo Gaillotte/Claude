@@ -61,7 +61,11 @@
    {
     "category": "cwe",
     "file": "src/db.py",
-    "line": null,
+    "line": 3,
+    "line_count": 1,
+    "lines": [
+     3
+    ],
     "message": "CWE-89:SQL_injection_query_built_by_string_interpolation",
     "references": [
      "CWE-89"

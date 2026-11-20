@@ -77,6 +77,8 @@ G = types.SimpleNamespace(
     GLOBAL_VERDICT="PASS", PASS_COUNT=0, WARN_COUNT=0, FAIL_COUNT=0,
     FLAT_INCOMPLETE=False, FLAT_FILE="", L5_PARTIAL="",
     TMP_PATHS=[],
+    # where the last grep helper matched: the file, how it searched it and the pattern (see "Lines of a finding")
+    LM_FILE="", LM_MODE="", LM_PAT="", LM_EXCL="",
 )
 
 DEFAULT_EXCLUDE_DIRS = ("node_modules", ".git", "vendor", ".tox", "__pycache__", ".venv", "venv",
@@ -85,6 +87,7 @@ DEFAULT_EXCLUDE_DIRS = ("node_modules", ".git", "vendor", ".tox", "__pycache__",
 FINDINGS = {}        # path -> concatenated FAIL messages
 FILE_STATUS = {}     # path -> PASS | FAIL | WARN
 FILE_MSG = {}        # path -> "[WARN] message | [FAIL] message | ..."
+FILE_LINES = {}      # path -> "rule: the lines that match, ... | " (the Lines column of the HTML report)
 LAYER_COVERAGE = {}  # layer id -> "ran" | "skipped:<reason>" | "partial:<reason>"
 ALLOW_MAP = {}       # "rule::relpath" -> reason
 
@@ -179,6 +182,7 @@ def note_l5_partial(reason):
 
 # ── Verdict helpers ─────────────────────────────────────────────────────────
 def record_pass(file=""):
+    G.LM_FILE = ""
     G.PASS_COUNT += 1
     if file and not FILE_STATUS.get(file):
         FILE_STATUS[file] = "PASS"
@@ -188,6 +192,7 @@ def record_pass(file=""):
 def record_warn(file="__global__", *msg):
     file = file or "__global__"
     text = " ".join(msg)
+    G.LM_FILE = ""
     G.WARN_COUNT += 1
     warn(text)
     # WARN never downgrades an existing status.
@@ -221,12 +226,15 @@ def _classify_severity(msg):
     return _SEV.get(lvl.upper(), (3, "HIGH"))
 
 
-def _write_finding(tool, category, severity, rule_id, rule_name, file, line, column, message, refs=""):
+def _write_finding(tool, category, severity, rule_id, rule_name, file, line, column, message, lines="", line_count="", refs=""):
+    """`lines` is a comma-separated list (the first ten matching lines), `line_count` how many lines match in all."""
     def clean(x):
         return _b(x).decode("utf-8", "replace")
     rec = dict(tool=clean(tool), category=clean(category), severity=clean(severity), rule_id=clean(rule_id),
                rule_name=clean(rule_name), file=clean(file),
                line=int(line) if line.isdigit() else None, column=int(column) if column.isdigit() else None,
+               lines=[int(x) for x in lines.split(",") if x.isdigit()],
+               line_count=int(line_count) if line_count.isdigit() else 0,
                message=clean(message), references=clean(refs).split(",") if refs else [])
     try:
         with open(G.FINDINGS_JL, "a", encoding="ascii") as fh:
@@ -237,6 +245,95 @@ def _write_finding(tool, category, severity, rule_id, rule_name, file, line, col
 
 _TOOL_RULE = re.compile(r"^([a-z][a-z0-9_-]{1,30}):([^:]+)")
 _LINE_NO = re.compile(r":line([0-9]+)")
+
+
+# ── Lines of a finding ──────────────────────────────────────────────────────
+# A finding of a built-in rule says which lines of the file match: `line` (the first one), `lines` (every matching line, at
+# most ten) and `line_count` (how many lines match in all). The message is not touched: the allowlist, the severity and the
+# stored messages read it. The grep helpers only remember what matched (G.LM_*); _lm_resolve runs when a FAIL is recorded,
+# searches the file once more with the SAME pattern and options and -n, and returns (the first ten lines, how many in all).
+# Every pattern is still evaluated by grep: Python only numbers lines. A rule that searched something other than the file
+# itself (a comment-stripped copy, continuations joined, a decoded stream, the text of an archive) has no line in the file:
+# the file a helper searched must be the file the finding is recorded against, or there is no line, never a wrong one.
+_LM_FAMILIES = ("CWE-", "OWASP-", "CVE-", "make:")
+_LM_CAP = 10
+_LM_PEM_HEADER = r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----"
+_LM_PEM_WINDOW = _LM_PEM_HEADER + r".{0,200}[A-Za-z0-9+/]{60,}"
+_LM_PEM_HEADERS_TRIED = 200
+_TR_FOLD = bytes.maketrans(b"\r\n\t", b"   ")
+
+
+def _lm_nums(flags, pattern, path):
+    """The numbers of the lines of `path` that match `pattern` (grep -n output)."""
+    _, out = run_tool(["grep", flags, "-e", pattern, "--", path])
+    return [int(row.split(b":", 1)[0]) for row in out.split(b"\n") if row[:1].isdigit()]
+
+
+def _lm_newline_lines(path, offsets):
+    """The line number of each ascending byte offset (the newlines before it, plus one), without duplicates."""
+    lines, pos, newlines = [], 0, 0
+    with open(path, "rb") as fh:
+        for off in offsets:
+            while pos < off:
+                chunk = fh.read(min(1 << 20, off - pos))
+                if not chunk:
+                    break
+                newlines += chunk.count(b"\n")
+                pos += len(chunk)
+            if not lines or lines[-1] != newlines + 1:
+                lines.append(newlines + 1)
+    return lines
+
+
+def _lm_pem_lines(path):
+    """The header lines of a private key whose own window (five lines, folded) passes the key rule. At most the first 200
+    headers are tried: a file with more is a bundle of keys."""
+    headers = _lm_nums("-anE", _LM_PEM_HEADER, path)[:_LM_PEM_HEADERS_TRIED]
+    if not headers:
+        return []
+    with open(path, "rb") as fh:
+        rows = fh.read().split(b"\n")
+    found = []
+    for h in headers:
+        window = b"".join(r + b"\n" for r in rows[h - 1:h + 5]).translate(_TR_FOLD)
+        if run_tool(["grep", "-aE", "-e", _LM_PEM_WINDOW], input=window)[0] == 0:
+            found.append(h)
+    return found
+
+
+def _lm_resolve():
+    """-> (the first ten matching lines, the number of matching lines) of the last grep helper that matched, or ([], 0)."""
+    path, mode, pat, excl = G.LM_FILE, G.LM_MODE, G.LM_PAT, G.LM_EXCL
+    if not path or not os.path.isfile(path):
+        return [], 0
+    try:
+        if mode == "E":
+            found = _lm_nums("-anE", pat, path)
+        elif mode == "iE":
+            found = _lm_nums("-aniE", pat, path)
+        elif mode == "X":                      # matches the pattern and not the exclusion: the first set minus the second
+            skip = set(_lm_nums("-aniE", excl, path))
+            found = [n for n in _lm_nums("-aniE", pat, path) if n not in skip]
+        elif mode == "T":                      # known credential formats: the exclusion applies to the matched token
+            _, out = run_tool(["grep", "-noIE", "-e", pat, "--", path])
+            rows = [row for row in out.split(b"\n") if row[:1].isdigit()]
+            if not rows:
+                return [], 0
+            tokens = b"".join(row.split(b":", 1)[1] + b"\n" for row in rows)
+            _, kept = run_tool(["grep", "-nviE", "-e", KNOWN_CRED_EXCL], input=tokens)
+            keep = {int(k.split(b":", 1)[0]) for k in kept.split(b"\n") if k[:1].isdigit()}
+            found = list(dict.fromkeys(int(rows[i - 1].split(b":", 1)[0]) for i in sorted(keep) if i <= len(rows)))
+        elif mode == "Z":                      # the file as one record: grep gives the byte offset of each match
+            _, out = run_tool(["grep", "-zboiE", "-e", pat, "--", path])
+            offsets = sorted(int(r.split(b":", 1)[0]) for r in out.split(b"\0") if r[:1].isdigit())
+            found = _lm_newline_lines(path, offsets)
+        elif mode == "P":
+            found = _lm_pem_lines(path)
+        else:
+            return [], 0
+    except OSError:
+        return [], 0
+    return found[:_LM_CAP], len(found)
 
 
 def _emit_finding(file, msg):
@@ -275,14 +372,31 @@ def _emit_finding(file, msg):
         m = _TOOL_RULE.match(msg)
         if m:
             tool, rule_id = m.group(1), m.group(2)
+    # The line comes from the tool when the message carries one (Semgrep: ":lineN:"); a built-in grep rule has none in its
+    # message and takes the lines its last helper matched. Only the message families those rules use, only the file that
+    # helper searched, and only once: anything else is null.
     m = _LINE_NO.search(msg)
-    line = m.group(1) if m else ""
+    line, lines, line_count = "", "", 0
+    if m:
+        line = m.group(1)
+        if int(line) >= 1:
+            lines, line_count = line, 1
+    elif G.LM_FILE and file == G.LM_FILE and msg.startswith(_LM_FAMILIES):
+        found, total = _lm_resolve()
+        if total:
+            line, lines, line_count = str(found[0]), ",".join(str(n) for n in found), total
+    G.LM_FILE = ""
+    if lines:
+        # a built-in rule is named by its whole message (CWE-22:path_traversal_encoded), another tool by its rule id
+        label = msg if tool == "grep-pattern" else (rule_id or tool)
+        FILE_LINES[file] = FILE_LINES.get(file, "") + "%s: %s%s | " % (
+            label, ", ".join(lines.split(",")), " of %d" % line_count if line_count > 10 else "")
     rule_name = rule_name or msg
     tool = tool or "unknown"
     rel = file[len(G.SCAN_DIR) + 1:] if file.startswith(G.SCAN_DIR + "/") else file
     if rel == G.SCAN_DIR:
         rel = "."
-    _write_finding(tool, category, sev_name, rule_id, rule_name, rel, line, "", msg, refs)
+    _write_finding(tool, category, sev_name, rule_id, rule_name, rel, line, "", msg, lines, str(line_count), refs)
 
 
 def record_fail(file, *msg):
@@ -555,6 +669,7 @@ def _status(argv):
 
 def grep_pipe(argv1, argv2, tr=None):
     """`argv1 | [tr] | argv2 >/dev/null` under pipefail: True when both ended with status 0."""
+    G.LM_FILE = ""
     try:
         p1 = subprocess.Popen(_argv(argv1), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         p2 = subprocess.Popen(_argv(argv2), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -578,17 +693,33 @@ def grep_pipe(argv1, argv2, tr=None):
     return p1.wait() == 0 and p2.wait() == 0
 
 
+def _lm_set(path, mode, pattern, excl=""):
+    G.LM_FILE, G.LM_MODE, G.LM_PAT, G.LM_EXCL = path, mode, pattern, excl
+
+
 def grep_check(pattern, path):
-    return _status(["grep", "-qE", "-e", pattern, "--", path]) == 0
+    if _status(["grep", "-qE", "-e", pattern, "--", path]) == 0:
+        _lm_set(path, "E", pattern)
+        return True
+    G.LM_FILE = ""
+    return False
 
 
 def grep_check_i(pattern, path):
-    return _status(["grep", "-qiE", "-e", pattern, "--", path]) == 0
+    if _status(["grep", "-qiE", "-e", pattern, "--", path]) == 0:
+        _lm_set(path, "iE", pattern)
+        return True
+    G.LM_FILE = ""
+    return False
 
 
 def grep_check_excl(pattern, excl, path):
     """The pattern on a line that does not also match the exclusion; both greps read the file as text (-a)."""
-    return grep_pipe(["grep", "-ahiE", "-e", pattern, "--", path], ["grep", "-aviE", "-e", excl])
+    if grep_pipe(["grep", "-ahiE", "-e", pattern, "--", path], ["grep", "-aviE", "-e", excl]):
+        _lm_set(path, "X", pattern, excl)
+        return True
+    G.LM_FILE = ""
+    return False
 
 
 def grep_flat(pattern, path):
@@ -596,7 +727,12 @@ def grep_flat(pattern, path):
     to the end is neither a match nor a clean file: the FAIL engine:search_incomplete on the file, once, and G.FLAT_INCOMPLETE."""
     rc = _status(["grep", "-ziE", "-e", pattern, "--", path])
     if rc <= 1:
+        if rc == 0:
+            _lm_set(path, "Z", pattern)
+        else:
+            G.LM_FILE = ""
         return rc == 0
+    G.LM_FILE = ""
     subject = G.FLAT_FILE or path
     warn("grep_flat: the search of %s could not be completed (grep exit %d)" % (subject, rc))
     G.FLAT_INCOMPLETE = True
@@ -659,8 +795,9 @@ def _known_cred_check(report, target):
     hit = False
     if _status(["grep", "-qIE", "-e", KNOWN_CRED_ALL, "--", target]) == 0:
         for name, pat in zip(KNOWN_CRED_NAMES, KNOWN_CRED_PATS):
-            if grep_pipe(["grep", "-ohIE", "-e", "(^|[^A-Za-z0-9])(%s)([^A-Za-z0-9]|$)" % pat, "--", target],
-                         ["grep", "-viE", "-e", KNOWN_CRED_EXCL]):
+            token_rx = "(^|[^A-Za-z0-9])(%s)([^A-Za-z0-9]|$)" % pat
+            if grep_pipe(["grep", "-ohIE", "-e", token_rx, "--", target], ["grep", "-viE", "-e", KNOWN_CRED_EXCL]):
+                _lm_set(target, "T", token_rx)
                 record_fail(report, "CWE-798:known_credential_format_%s" % name)
                 hit = True
     if _status(["grep", "-qIE", "-e", _JWT, "--", target]) == 0:

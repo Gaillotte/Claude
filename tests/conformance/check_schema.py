@@ -69,7 +69,7 @@ class SchemaError(Exception):
     """The schema itself uses something this validator does not implement, or is malformed."""
 
 
-SUPPORTED = {"type", "properties", "required", "additionalProperties", "items", "enum", "pattern", "minimum"}
+SUPPORTED = {"type", "properties", "required", "additionalProperties", "items", "enum", "pattern", "minimum", "maxItems"}
 ANNOTATIONS = {"$schema", "$id", "$comment", "title", "description"}
 
 
@@ -142,6 +142,9 @@ def validate(instance, schema, path: str = "$") -> list[str]:
                 else:
                     errors.extend(validate(value, extra, sub))
 
+    if "maxItems" in schema and isinstance(instance, list) and len(instance) > schema["maxItems"]:
+        errors.append("%s: %d items, above the maximum %d" % (path, len(instance), schema["maxItems"]))
+
     if isinstance(instance, list) and "items" in schema:
         for i, value in enumerate(instance):
             errors.extend(validate(value, schema["items"], "%s[%d]" % (path, i)))
@@ -202,6 +205,20 @@ def check_invariants(report: dict) -> list[str]:
         if k not in fr or fr[k]["status"] != "FAIL":
             errors.append("findings_by_file key %r is not a file with status FAIL" % k)
     for i, rec in enumerate(report["findings"]):
+        # `line` is the first of `lines`; a finding with no line has none of them; `line_count` is at least what is listed.
+        line, lines, total = rec["line"], rec["lines"], rec["line_count"]
+        if not line:
+            if lines or total:
+                errors.append("findings[%d] has no line but lines %s and line_count %d" % (i, lines, total))
+        else:
+            if not lines or lines[0] != line:
+                errors.append("findings[%d].line %d is not the first of lines %s" % (i, line, lines))
+            if lines != sorted(set(lines)):
+                errors.append("findings[%d].lines %s is not strictly ascending" % (i, lines))
+            if total < len(lines):
+                errors.append("findings[%d].line_count %d is below the %d lines listed" % (i, total, len(lines)))
+            if total > len(lines) and len(lines) != 10:
+                errors.append("findings[%d] lists %d of %d lines but the list is cut at ten" % (i, len(lines), total))
         # A finding about the whole directory has file "."; one about the scan itself (engine:nothing_scanned) is
         # recorded on the pseudo-entry __global__, which is not under the directory.
         key = d if rec["file"] == "." else rec["file"] if rec["file"] == "__global__" else d + "/" + rec["file"]
@@ -235,7 +252,8 @@ def sample_report() -> dict:
         "standards": ["OWASP-Top10-2021", "CWE-Top25", "CERT-Secure-Coding", "PDF-Active-Content"],
         "summary": {"pass": 1, "warn": 2, "fail": 1},
         "findings": [{"tool": "grep-pattern", "category": "cwe", "severity": "HIGH", "rule_id": "CWE-89",
-                      "rule_name": "SQL_injection", "file": "src/db.py", "line": None, "column": None,
+                      "rule_name": "SQL_injection", "file": "src/db.py", "line": 12, "column": None,
+                      "lines": [12, 30], "line_count": 2,
                       "message": "CWE-89:SQL_injection", "references": ["CWE-89"]}],
         "findings_by_file": {d + "/src/db.py": "CWE-89:SQL_injection"},
         "file_results": {"__global__": {"status": "WARN", "message": "[WARN] gitleaks missing"},
@@ -259,6 +277,14 @@ def _drop(path):
         for p in path[:-1]:
             cur = cur[p]
         del cur[path[-1]]
+    return apply
+
+
+def _all(*steps):
+    """Several mutations applied in turn."""
+    def apply(r):
+        for step in steps:
+            step(r)
     return apply
 
 
@@ -301,6 +327,13 @@ MUTATIONS = [
     ("category outside enum", _set(["findings", 0, "category"], "other"), "$.findings[0].category"),
     ("finding line is a string", _set(["findings", 0, "line"], "12"), "expected integer or null"),
     ("finding line is negative", _set(["findings", 0, "line"], -3), "below the minimum"),
+    ("finding lines holds a string", _set(["findings", 0, "lines"], ["12", "30"]), "expected integer"),
+    ("finding lines holds eleven entries", _all(_set(["findings", 0, "lines"], list(range(12, 23))),
+                                                _set(["findings", 0, "line_count"], 11)), "above the maximum 10"),
+    ("finding lines holds line 0", _set(["findings", 0, "lines"], [0, 30]), "below the minimum"),
+    ("finding line_count is negative", _set(["findings", 0, "line_count"], -1), "below the minimum"),
+    ("finding line_count missing", _drop(["findings", 0, "line_count"]), "required key 'line_count' is missing"),
+    ("finding lines missing", _drop(["findings", 0, "lines"]), "required key 'lines' is missing"),
     ("finding references holds a number", _set(["findings", 0, "references"], [798]), "references[0]"),
     ("finding file empty", _set(["findings", 0, "file"], ""), "$.findings[0].file"),
     ("file status outside enum", _set(["file_results", "__global__", "status"], "OK"), "is not one of ['PASS', 'WARN', 'FAIL']"),
@@ -319,6 +352,13 @@ MUTATIONS = [
     ("invariant: file outside the directory", _set(["file_results", "/etc/passwd"], {"status": "PASS", "message": ""}), "neither __global__"),
     ("invariant: FAIL status without a [FAIL] message", _set(["file_results", "/scan/repo/src/db.py", "message"], "[WARN] x"), "no [FAIL] message"),
     ("invariant: findings_by_file names a PASS file", _set(["findings_by_file", "/scan/repo/README.md"], "x"), "not a file with status FAIL"),
+    ("invariant: line is not the first of lines", _set(["findings", 0, "lines"], [30, 12]), "is not the first of lines"),
+    ("invariant: lines not ascending", _set(["findings", 0, "lines"], [12, 12]), "not strictly ascending"),
+    ("invariant: line_count below the lines listed", _set(["findings", 0, "line_count"], 1), "below the 2 lines listed"),
+    ("invariant: a list cut before ten", _set(["findings", 0, "line_count"], 5), "the list is cut at ten"),
+    ("invariant: a line with no lines", _set(["findings", 0, "lines"], []), "is not the first of lines"),
+    ("invariant: lines without a line", _all(_set(["findings", 0, "line"], None), _set(["findings", 0, "lines"], [3]),
+                                             _set(["findings", 0, "line_count"], 1)), "has no line but lines"),
     ("invariant: finding message not in findings_by_file", _set(["findings", 0, "message"], "CWE-1:other"), "is not in findings_by_file"),
 ]
 

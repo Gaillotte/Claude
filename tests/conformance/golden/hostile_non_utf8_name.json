@@ -57,7 +57,11 @@
    {
     "category": "cwe",
     "file": "bad\ufffd\ufffdname.py",
-    "line": null,
+    "line": 2,
+    "line_count": 1,
+    "lines": [
+     2
+    ],
     "message": "CWE-78:OS_command_injection_risk",
     "references": [
      "CWE-78"

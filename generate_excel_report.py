@@ -199,13 +199,23 @@ def build_sheet_files(wb: Workbook, data: dict) -> None:
 def build_sheet_findings(wb: "Workbook", data: dict) -> None:
     ws = wb.create_sheet(title="Findings")
 
-    headers = ["#", "Severity", "File", "Finding / Rule", "Status"]
+    headers = ["#", "Severity", "File", "Line", "Finding / Rule", "Status"]
     for col, h in enumerate(headers, start=1):
         _header_cell(ws, 1, col, h)
     ws.row_dimensions[1].height = 22
 
     file_results: dict = data.get("file_results", {})
     scan_dir: str = data.get("directory", "")
+
+    # The lines a FAIL names: findings[] carries them per record (`lines`, at most ten, and `line_count`), the message
+    # of file_results is the same text as the record's. A finding with no line (a derived view, a container) has none.
+    lines_of: dict = {}
+    for rec in data.get("findings", []):
+        lines = rec.get("lines") or ([rec["line"]] if rec.get("line") else [])
+        if lines:
+            total = rec.get("line_count") or len(lines)
+            text = ", ".join(str(n) for n in lines) + (f" of {total}" if total > len(lines) else "")
+            lines_of.setdefault((rec.get("file"), rec.get("message")), text)
 
     rows = []
     for filepath, info in file_results.items():
@@ -263,20 +273,23 @@ def build_sheet_findings(wb: "Workbook", data: dict) -> None:
         cell.fill = _fill(sev_fill.get(sev, "FFFFFF"))
         cell.border = THIN_BORDER
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        _data_cell(ws, row, 3, _rel(filepath, scan_dir), fill)
-        _data_cell(ws, row, 4, finding, fill)
-        _data_cell(ws, row, 5, status, fill)
+        rel_path = _rel(filepath, scan_dir)
+        _data_cell(ws, row, 3, rel_path, fill)
+        _data_cell(ws, row, 4, lines_of.get((rel_path, finding), ""), fill)
+        _data_cell(ws, row, 5, finding, fill)
+        _data_cell(ws, row, 6, status, fill)
         ws.row_dimensions[row].height = 18
 
     _set_col_width(ws, "A", 6)
     _set_col_width(ws, "B", 12)
     _set_col_width(ws, "C", 60)
-    _set_col_width(ws, "D", 80)
-    _set_col_width(ws, "E", 10)
+    _set_col_width(ws, "D", 16)
+    _set_col_width(ws, "E", 80)
+    _set_col_width(ws, "F", 10)
 
     ws.freeze_panes = "A2"
     if rows:
-        ws.auto_filter.ref = f"A1:E{len(rows) + 1}"
+        ws.auto_filter.ref = f"A1:F{len(rows) + 1}"
 
 
 # ── Point d'entrée ────────────────────────────────────────────────────────────

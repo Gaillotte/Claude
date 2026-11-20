@@ -244,7 +244,13 @@ else
               "  Fail    : " + (.summary.fail | tostring),
               "",
               "  Findings:",
-              ((.findings_by_file // {}) | to_entries[] | "    - " + .key + " → " + .value)
+              ((.findings_by_file // {}) | to_entries[] | "    - " + .key + " → " + .value),
+              "",
+              "  Where (file:line):",
+              ((.findings // [])[] | select((.line // 0) >= 1)
+                 | "    - " + .file + ":" + (.line | tostring)
+                   + (if (.line_count // 0) > 1 then "  (" + (.line_count | tostring) + " lines match: " + ((.lines // []) | map(tostring) | join(", ")) + (if (.line_count // 0) > ((.lines // []) | length) then ", …" else "" end) + ")" else "" end)
+                   + "  " + .rule_id)
             ' "$LATEST_REPORT" | tr '\001-\011\013-\037\177' '?' >&2
         else
             tr '\001-\011\013-\037\177' '?' < "$LATEST_REPORT" >&2

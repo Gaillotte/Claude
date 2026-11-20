@@ -265,7 +265,7 @@ def normalize(report: dict | None, scan: Path, work: Path) -> dict | None:
         for k, v in sorted(report.get("file_results", {}).items())}
     fbf = report.get("findings_by_file", {})
     out["findings_by_file"] = {rel(k): rel(_msgs(v)) for k, v in sorted(fbf.items())}
-    fields = ("tool", "category", "severity", "rule_id", "rule_name", "file", "line", "message", "references")
+    fields = ("tool", "category", "severity", "rule_id", "rule_name", "file", "line", "lines", "line_count", "message", "references")
     recs = [{f: rel(r.get(f)) for f in fields} for r in report.get("findings", [])]
     out["findings"] = sorted(recs, key=lambda r: (str(r["file"]), str(r["rule_id"]), r["line"] or 0, str(r["message"])))
     return rel(out)

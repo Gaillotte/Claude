@@ -48,8 +48,10 @@ _UNIVERSAL_REST = [
 
 def scan_universal_patterns(f):
     """Layer 4, run on every file first: credentials, private keys, known credential formats, traversal, weak crypto."""
+    G.LM_FILE = ""
     grep_rules(f, _UNIVERSAL_CREDENTIAL)
     if grep_pipe(["grep", "-aE", "-A5", "-e", _PEM_HEADER, "--", f], ["grep", "-aE", "-e", _PEM_BODY], tr=_TR_SPACES):
+        G.LM_FILE, G.LM_MODE, G.LM_PAT, G.LM_EXCL = f, "P", "", ""
         record_fail(f, "CWE-321:hardcoded_private_key")
     _known_cred_check(f, f)
     grep_rules(f, _UNIVERSAL_REST)
