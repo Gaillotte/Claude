@@ -10,7 +10,7 @@ import json
 import os
 import re
 
-from transit.core import (G, _known_cred_check, grep_check, grep_pipe, grep_rules, has_cmd, note_l5_partial, record_fail,
+from transit.core import (G, _known_cred_check, _lm_add, grep_check, grep_pipe, grep_rules, has_cmd, note_l5_partial, record_fail,
                           record_pass, record_warn, run_tool)
 
 
@@ -51,7 +51,8 @@ def scan_universal_patterns(f):
     G.LM_FILE = ""
     grep_rules(f, _UNIVERSAL_CREDENTIAL)
     if grep_pipe(["grep", "-aE", "-A5", "-e", _PEM_HEADER, "--", f], ["grep", "-aE", "-e", _PEM_BODY], tr=_TR_SPACES):
-        G.LM_FILE, G.LM_MODE, G.LM_PAT, G.LM_EXCL = f, "P", "", ""
+        G.LM_FILE = ""
+        _lm_add(f, "P", "")
         record_fail(f, "CWE-321:hardcoded_private_key")
     _known_cred_check(f, f)
     grep_rules(f, _UNIVERSAL_REST)

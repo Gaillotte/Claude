@@ -299,11 +299,14 @@ RUN_SCA="${RUN_SCA:-false}"
 RUN_SCANCODE="${RUN_SCANCODE:-false}"
 
 # ── Where a rule matched (see "Lines of a finding" below) ────────────────────
-# The grep helpers remember what they last matched: the file, how they searched it (LM_MODE) and the pattern.
-# Nothing is searched a second time unless a FAIL is recorded, and then once (_lm_resolve). Every record_pass,
-# record_warn and _emit_finding clears it, and every helper call overwrites it, so a match can only be read by
-# the finding recorded right after the helper that produced it, and only for the same file.
-LM_FILE=""; LM_MODE=""; LM_PAT=""; LM_EXCL=""
+# The grep helpers remember what they matched: the file, and for each match how it was searched (LM_MODES) with
+# which pattern (LM_PATS) and exclusion (LM_EXCLS). A rule made of several whole-file tests (decodes AND executes)
+# leaves one entry per test that matched; a test that does not match forgets them all. Nothing is searched a second
+# time unless a FAIL is recorded, and then once per entry (_lm_resolve). Every record_pass, record_warn and
+# _emit_finding clears it and every helper call that does not match clears it, so a match can only be read by the
+# finding recorded right after the helpers that produced it, and only for the same file.
+LM_FILE=""; LM_N=0
+LM_MODES=(); LM_PATS=(); LM_EXCLS=()
 LM_LINES=""; LM_COUNT=0
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -441,13 +444,16 @@ _emit_finding() {
         # still say who they are.
         tool="${BASH_REMATCH[1]}"; rule_id="${BASH_REMATCH[2]}"
     fi
-    # The line comes from the tool when the message carries one (Semgrep: ":lineN:"); a built-in grep rule has
-    # none in its message and takes the lines its last helper matched (see "Lines of a finding"). Only the
-    # message families those rules use, only the file that helper searched, and only once: anything else is null.
+    # The line comes from the tool when it names one (Semgrep, gitleaks); a built-in grep rule has none in its
+    # message and takes the lines its helpers matched (see "Lines of a finding"). Only the message families those
+    # rules use, only the file those helpers searched, and only once: anything else is null.
     local lines="" line_count=0
-    if [[ "$msg" =~ :line([0-9]+) ]]; then
+    # Only a message built by a tool that names its line has one, and only at the position that tool puts it:
+    # "semgrep[ruleset]:rule:lineN:SEV:text" and "gitleaks:rule:lineN". A ":lineN" inside the text of a message
+    # (a jar entry named "x:line7.txt") is repository text and says nothing about where a rule matched.
+    if [[ "$msg" =~ ^semgrep\[[^]]*\]:[^:]*:line([0-9]{1,9}): || "$msg" =~ ^gitleaks:.*:line([0-9]{1,9})$ ]]; then
         line="${BASH_REMATCH[1]}"
-        if [[ "$line" != *[!0-9]* ]] && (( 10#$line >= 1 )); then lines="$line"; line_count=1; fi
+        if (( 10#$line >= 1 )); then lines="$line"; line_count=1; fi
     elif [[ -n "$LM_FILE" && "$file" == "$LM_FILE" ]]; then
         case "$msg" in
             CWE-*|OWASP-*|CVE-*|make:*)
@@ -537,7 +543,7 @@ record_fail_hard() {
 grep_check() {
     local rc=0
     grep -qE -e "$1" "$2" 2>/dev/null || rc=$?
-    if (( rc == 0 )); then LM_FILE="$2"; LM_MODE=E; LM_PAT="$1"; LM_EXCL=""; else LM_FILE=""; fi
+    if (( rc == 0 )); then _lm_add "$2" E "$1"; else LM_FILE=""; fi
     return "$rc"
 }
 # Case-insensitive variant. Needed where a convention fixes the case of the
@@ -546,7 +552,7 @@ grep_check() {
 grep_check_i() {
     local rc=0
     grep -qiE -e "$1" "$2" 2>/dev/null || rc=$?
-    if (( rc == 0 )); then LM_FILE="$2"; LM_MODE=iE; LM_PAT="$1"; LM_EXCL=""; else LM_FILE=""; fi
+    if (( rc == 0 )); then _lm_add "$2" iE "$1"; else LM_FILE=""; fi
     return "$rc"
 }
 # Match $1 on a line that does NOT also match the exclusion $2. POSIX ERE has
@@ -566,7 +572,7 @@ grep_check_i() {
 grep_check_excl() {
     local rc=0
     grep -ahiE -e "$1" "$3" 2>/dev/null | grep -aviE -e "$2" >/dev/null || rc=$?
-    if (( rc == 0 )); then LM_FILE="$3"; LM_MODE=X; LM_PAT="$1"; LM_EXCL="$2"; else LM_FILE=""; fi
+    if (( rc == 0 )); then _lm_add "$3" X "$1" "$2"; else LM_FILE=""; fi
     return "$rc"
 }
 # Same test over the file with its newlines folded into the text, for constructs that can legally be split
@@ -588,7 +594,7 @@ grep_flat() {
     local rc=0
     grep -ziE -e "$1" "$2" >/dev/null || rc=$?
     if (( rc <= 1 )); then
-        if (( rc == 0 )); then LM_FILE="$2"; LM_MODE=Z; LM_PAT="$1"; LM_EXCL=""; else LM_FILE=""; fi
+        if (( rc == 0 )); then _lm_add "$2" Z "$1"; else LM_FILE=""; fi
         return "$rc"
     fi
     LM_FILE=""
@@ -612,51 +618,107 @@ FLAT_FILE=""
 # matching line, at most ten) and `line_count` (how many lines match in all). The message is not touched: the
 # allowlist, the severity and the stored messages read it.
 #
-# The helpers above only remember what matched (LM_*). _lm_resolve runs when a FAIL is recorded, searches the
-# file once more with the SAME pattern and options and -n, and sets LM_LINES (space separated) and LM_COUNT.
-# A rule that searched something other than the file itself (a comment-stripped copy, continuations joined, a
-# decoded stream, the text of an archive) has no line in the file: the file a helper searched must be the file
-# the finding is recorded against, or there is no line, never a wrong one. The result is capped at ten lines
-# and cut in the reader (awk), never with `head`, which would make the producer die of SIGPIPE under pipefail.
-_lm_cap() { awk '{ if (++n <= 10) l = l (n > 1 ? " " : "") $1 } END { print l "|" n + 0 }'; }
+# The helpers above only remember what matched (_lm_add). _lm_resolve runs when a FAIL is recorded, searches the
+# file once more for each remembered match with the SAME pattern and options and -n, and sets LM_LINES (space
+# separated) and LM_COUNT; a rule made of several tests lists the lines of all of them. A rule that searched
+# something other than the file itself (a comment-stripped copy, continuations joined, a decoded stream, the text
+# of an archive) has no line in the file: the file a helper searched must be the file the finding is recorded
+# against, or there is no line, never a wrong one.
+#
+# Everything is a stream: no file, no list of matching lines and no output of grep is held in a variable or in an
+# array, so a file of millions of matching lines costs time and no memory. The result is cut at ten lines in the
+# reader (awk), never with `head`, which would make the producer die of SIGPIPE under pipefail.
+_lm_add() {   # _lm_add <file> <mode> <pattern> [exclusion]: a helper matched
+    if [[ -z "$LM_FILE" || "$LM_FILE" != "$1" ]]; then LM_N=0; LM_MODES=(); LM_PATS=(); LM_EXCLS=(); fi
+    if (( LM_N >= 8 )); then LM_FILE=""; return 0; fi      # eight matches and no finding: not a rule, no line
+    LM_FILE="$1"; LM_MODES[LM_N]="$2"; LM_PATS[LM_N]="$3"; LM_EXCLS[LM_N]="${4:-}"
+    LM_N=$(( LM_N + 1 ))
+}
+_lm_cap() { awk 'NR == 1 || $1 != last { last = $1; if (++n <= 10) l = l (n > 1 ? " " : "") $1 } END { print l "|" n + 0 }'; }
 
-# The numbers of the lines of $2 that match -E pattern $1 (grep flags in $3, e.g. -an or -aniE).
+# The numbers of the lines of $2 that match -E pattern $1 (grep flags in $3, e.g. -an or -aniE), ascending.
 _lm_nums() { { grep "$3" -e "$1" "$2" 2>/dev/null || true; } | cut -d: -f1; }
+
+# The numbers of the lines of entry $1, ascending (a line is listed once per match: _lm_cap lists it once).
+_lm_entry() {
+    local mode="${LM_MODES[$1]}" pat="${LM_PATS[$1]}" excl="${LM_EXCLS[$1]}"
+    case "$mode" in
+        E)  _lm_nums "$pat" "$LM_FILE" -anE ;;
+        iE) _lm_nums "$pat" "$LM_FILE" -aniE ;;
+        X)  # the lines that match the pattern and not the exclusion: both lists are ascending, so one merge
+            awk 'BEGIN { ex = ARGV[2]; ARGV[2] = ""; more = ((getline b < ex) > 0) }
+                 { while (more && b + 0 < $1 + 0) more = ((getline b < ex) > 0)
+                   if (!(more && b + 0 == $1 + 0)) print $1 }' \
+                <(_lm_nums "$pat" "$LM_FILE" -aniE) <(_lm_nums "$excl" "$LM_FILE" -aniE) ;;
+        T)  # known credential formats: the exclusion applies to the matched token, not to the line. The first list
+            # is the line of every token, the second the position of every token that survives the exclusion.
+            awk 'BEGIN { kf = ARGV[2]; ARGV[2] = ""; more = ((getline k < kf) > 0) }
+                 { if (more && NR == k + 0) { print $1; more = ((getline k < kf) > 0) } }' \
+                <({ grep -noIE -e "$pat" "$LM_FILE" 2>/dev/null || true; } | cut -d: -f1) \
+                <({ grep -noIE -e "$pat" "$LM_FILE" 2>/dev/null || true; } | cut -d: -f2- \
+                    | { grep -nviE -e "$KNOWN_CRED_EXCL" || true; } | cut -d: -f1) ;;
+        Z)  # the file read as one record: grep gives the byte offset of each match, and the line is the number
+            # of newlines before it. The regular expression is still grep's; Python only counts newlines.
+            { grep -zboiE -e "$pat" "$LM_FILE" 2>/dev/null || true; } | python3 -c '
+import sys
+def offsets(read):                 # records are b"<offset>:<text>\0"; the text, however long, is never kept
+    num, head = b"", True
+    while True:
+        chunk = read(1 << 20)
+        if not chunk:
+            return
+        pos, n = 0, len(chunk)
+        while pos < n:
+            if head:
+                c = chunk.find(b":", pos)
+                if c < 0:
+                    num += chunk[pos:]; pos = n
+                else:
+                    num += chunk[pos:c]; pos = c + 1; head = False
+                    if num.isdigit():
+                        yield int(num)
+                    num = b""
+            else:
+                z = chunk.find(b"\0", pos)
+                if z < 0:
+                    pos = n
+                else:
+                    pos = z + 1; head = True
+pos = newlines = last = 0
+with open(sys.argv[1], "rb") as fh:
+    for off in offsets(sys.stdin.buffer.read):
+        while pos < off:
+            chunk = fh.read(min(1 << 20, off - pos))
+            if not chunk:
+                break
+            newlines += chunk.count(b"\n"); pos += len(chunk)
+        if newlines + 1 != last:
+            last = newlines + 1
+            print(last)
+' "$LM_FILE" 2>/dev/null || true ;;
+        P)  _lm_pem_lines "$LM_FILE" ;;
+    esac
+}
+
+# A file that holds a NUL byte is binary to grep, and the plain helpers (grep -q, no -a) then read each NUL as the end of
+# a line: a pattern that is satisfied across it does not match, and `$` matches before it. Numbering the lines of such a
+# file would need that same reading and a count of what it splits, and lines numbered another way can list a line the rule
+# did not match. So a finding made by a plain match (E, iE) on such a file has no line. The other modes read the file as text
+# (-a, -z) in the matcher and in the resolver alike.
+_lm_has_nul() { local n; n=$(tr -cd '\0' < "$1" 2>/dev/null | wc -c) || n=0; (( n > 0 )); }
 
 _lm_resolve() {
     LM_LINES=""; LM_COUNT=0
-    [[ -n "$LM_FILE" && -f "$LM_FILE" ]] || return 0
-    local out=""
-    case "$LM_MODE" in
-        E)  out=$(_lm_nums "$LM_PAT" "$LM_FILE" -anE | _lm_cap) || out="" ;;
-        iE) out=$(_lm_nums "$LM_PAT" "$LM_FILE" -aniE | _lm_cap) || out="" ;;
-        X)  # lines that match the pattern and do not match the exclusion: the lines of the first set minus the second
-            out=$(awk 'FILENAME == ARGV[1] { b[$1] = 1; next } !($1 in b) { print $1 }' \
-                      <(_lm_nums "$LM_EXCL" "$LM_FILE" -aniE) <(_lm_nums "$LM_PAT" "$LM_FILE" -aniE) | _lm_cap) || out="" ;;
-        T)  # known credential formats: the exclusion applies to the matched token, not to the line
-            local nt
-            nt=$(grep -noIE -e "$LM_PAT" "$LM_FILE" 2>/dev/null || true)
-            [[ -n "$nt" ]] || return 0
-            out=$(awk 'FILENAME == ARGV[1] { k[$1] = 1; next } (FNR in k) { print substr($0, 1, index($0, ":") - 1) }' \
-                      <(cut -d: -f2- <<<"$nt" | { grep -nviE -e "$KNOWN_CRED_EXCL" || true; } | cut -d: -f1) \
-                      <(printf '%s\n' "$nt") | _lm_cap) || out="" ;;
-        Z)  # the file read as one record: grep gives the byte offset of each match, and the line is the number
-            # of newlines before it. The regular expression is still grep's; Python only counts newlines.
-            out=$({ grep -zboiE -e "$LM_PAT" "$LM_FILE" 2>/dev/null || true; } | python3 -c "
-import sys
-offs = sorted(int(r.split(b':', 1)[0]) for r in sys.stdin.buffer.read().split(b'\0') if r[:1].isdigit())
-lines, pos, nl = [], 0, 0
-with open(sys.argv[1], 'rb') as fh:
-    for off in offs:
-        while pos < off:
-            chunk = fh.read(min(1 << 20, off - pos))
-            if not chunk: break
-            nl += chunk.count(b'\n'); pos += len(chunk)
-        if not lines or lines[-1] != nl + 1: lines.append(nl + 1)
-print(' '.join(map(str, lines[:10])) + '|' + str(len(lines)))
-" "$LM_FILE" 2>/dev/null) || out="" ;;
-        P)  out=$(_lm_pem_lines "$LM_FILE" | _lm_cap) || out="" ;;
-    esac
+    [[ -n "$LM_FILE" && "$LM_N" -gt 0 && -f "$LM_FILE" ]] || return 0
+    local out="" i
+    for (( i = 0; i < LM_N; i++ )); do
+        case "${LM_MODES[i]}" in E|iE) if _lm_has_nul "$LM_FILE"; then return 0; fi; break ;; esac
+    done
+    if (( LM_N == 1 )); then
+        out=$(_lm_entry 0 | _lm_cap) || out=""
+    else
+        out=$(for (( i = 0; i < LM_N; i++ )); do _lm_entry "$i" || true; done | sort -n -u | _lm_cap) || out=""
+    fi
     [[ "$out" == *"|"* ]] || return 0
     LM_LINES="${out%|*}"; LM_COUNT="${out#*|}"
     [[ "$LM_COUNT" == *[!0-9]* || -z "$LM_COUNT" ]] && { LM_LINES=""; LM_COUNT=0; }
@@ -664,17 +726,24 @@ print(' '.join(map(str, lines[:10])) + '|' + str(len(lines)))
 }
 
 # The private-key rule: a header followed within five lines (200 characters once the line breaks are folded) by
-# a run of 60 base64 characters. The header lines whose own window passes that test. At most the first 200
-# headers are tried: a window is three small processes, and a file with more is a bundle of keys.
+# a run of 60 base64 characters. The header lines whose own window passes that test, from ONE pass over the file:
+# grep prints each header with its five following lines, awk folds the window of each of the first 200 headers
+# into one line and stops reading when the 200th window is complete, and a single grep applies the rule to the
+# folded windows. (A file with more than 200 headers is a bundle of keys.) The first version read the file once
+# per header, which took four minutes on a hostile 100 MB file.
 _lm_pem_lines() {
-    local f="$1" h n=0
-    while IFS= read -r h; do
-        (( ++n > 200 )) && break
-        if sed -n "${h},$((h + 5))p;$((h + 5))q" "$f" 2>/dev/null | tr '\r\n\t' '   ' \
-             | grep -aE -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}' >/dev/null; then
-            printf '%s\n' "$h"
-        fi
-    done < <(grep -anE -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----' "$f" 2>/dev/null | cut -d: -f1 || true)
+    local hdr='-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----'
+    { grep -anE -A5 -e "$hdr" "$1" 2>/dev/null || true; } \
+      | awk -v cap=200 '
+          { if (!match($0, /^[0-9]+[:-]/)) next
+            n = substr($0, 1, RLENGTH - 1) + 0
+            if (stop && n > stop) exit
+            t[n] = substr($0, RLENGTH + 1)
+            if (substr($0, RLENGTH, 1) == ":" && nh < cap) { hdr[++nh] = n; if (nh == cap) stop = n + 5 } }
+          END { for (i = 1; i <= nh; i++) { h = hdr[i]; w = ""
+                  for (k = h; k <= h + 5; k++) if (k in t) w = w t[k] " "
+                  gsub(/[\015\011]/, " ", w); print h "\t" w } }' \
+      | { grep -aE -e "${hdr}.{0,200}[A-Za-z0-9+/]{60,}" || true; } | cut -f1
 }
 
 # ── Known credential formats ─────────────────────────────────────────────────
@@ -1214,8 +1283,8 @@ _known_cred_check() {
         for _k in "${!KNOWN_CRED_NAMES[@]}"; do
             if grep -ohIE -e "(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_k]})([^A-Za-z0-9]|\$)" "$target" 2>/dev/null \
                  | grep -viE -e "$KNOWN_CRED_EXCL" >/dev/null; then
-                LM_FILE="$target"; LM_MODE=T; LM_EXCL=""
-                LM_PAT="(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_k]})([^A-Za-z0-9]|\$)"
+                LM_FILE=""
+                _lm_add "$target" T "(^|[^A-Za-z0-9])(${KNOWN_CRED_PATS[$_k]})([^A-Za-z0-9]|\$)"
                 record_fail "$report" "CWE-798:known_credential_format_${KNOWN_CRED_NAMES[$_k]}"
                 hit=0
             fi
@@ -1279,7 +1348,8 @@ scan_universal_patterns() {
          | tr '\r\n\t' '   ' \
          | grep -aE -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----.{0,200}[A-Za-z0-9+/]{60,}' \
          >/dev/null; then
-        LM_FILE="$f"; LM_MODE=P; LM_PAT=""; LM_EXCL=""
+        LM_FILE=""
+        _lm_add "$f" P ""
         record_fail "$f" "CWE-321:hardcoded_private_key"
         triggered=true
     fi

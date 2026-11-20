@@ -6,6 +6,7 @@
   "locale": "C.UTF-8",
   "tools_present": [
    "npm",
+   "shellcheck",
    "file",
    "strings",
    "unzip"
@@ -1413,8 +1414,7 @@
    },
    "office_rt3_script_mentions_rtf": {
     "messages": [
-     "[FAIL] CWE-78:remote_code_execution_curl_pipe_bash",
-     "[WARN] shellcheck missing"
+     "[FAIL] CWE-78:remote_code_execution_curl_pipe_bash"
     ],
     "status": "FAIL"
    },
@@ -2249,10 +2249,8 @@
     "status": "PASS"
    },
    "safe_shell.sh": {
-    "messages": [
-     "[WARN] shellcheck missing"
-    ],
-    "status": "WARN"
+    "messages": [],
+    "status": "PASS"
    },
    "safe_sql.py": {
     "messages": [
@@ -6738,9 +6736,10 @@
    {
     "category": "cwe",
     "file": "ps_decode_exec.psm1",
-    "line": 3,
-    "line_count": 1,
+    "line": 2,
+    "line_count": 2,
     "lines": [
+     2,
      3
     ],
     "message": "CWE-95:PowerShell_decodes_and_executes",
@@ -6908,9 +6907,10 @@
    {
     "category": "cwe",
     "file": "ps_plaintext_dl_run.ps1",
-    "line": 2,
-    "line_count": 1,
+    "line": 1,
+    "line_count": 2,
     "lines": [
+     1,
      2
     ],
     "message": "CWE-319:PowerShell_plaintext_download_then_run",
@@ -6925,9 +6925,11 @@
    {
     "category": "cwe",
     "file": "ps_reverse_shell.ps1",
-    "line": 6,
-    "line_count": 1,
+    "line": 1,
+    "line_count": 3,
     "lines": [
+     1,
+     2,
      6
     ],
     "message": "CWE-78:PowerShell_reverse_shell",
@@ -6993,9 +6995,10 @@
    {
     "category": "cwe",
     "file": "ps_shellcode.ps1",
-    "line": 3,
-    "line_count": 1,
+    "line": 2,
+    "line_count": 2,
     "lines": [
+     2,
      3
     ],
     "message": "CWE-94:PowerShell_in_memory_shellcode_loader",
@@ -7148,9 +7151,10 @@
    {
     "category": "cwe",
     "file": "setup_evil/setup.py",
-    "line": 19,
-    "line_count": 1,
+    "line": 17,
+    "line_count": 2,
     "lines": [
+     17,
      19
     ],
     "message": "CWE-78:setup_py_reverse_shell",
@@ -7182,9 +7186,10 @@
    {
     "category": "cwe",
     "file": "setup_evil/setup.py",
-    "line": 13,
-    "line_count": 2,
+    "line": 12,
+    "line_count": 3,
     "lines": [
+     12,
      13,
      15
     ],
@@ -8252,7 +8257,7 @@
   "summary": {
    "fail": 323,
    "pass": 58,
-   "warn": 217
+   "warn": 215
   },
   "verdict": "FAIL"
  }

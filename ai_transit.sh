@@ -237,20 +237,24 @@ else
         echo
         warn "Findings summary:"
         if command -v jq &>/dev/null; then
+            # The file names, rule ids and messages are repository text: a line break, an escape or any other control
+            # character in one of them must not forge a line of this summary (the tr below keeps line breaks, which
+            # separate the lines), so each is cleaned first.
             jq -r '
+              def clean: gsub("[[:cntrl:]]"; "?");
               "  Verdict : " + .verdict,
               "  Pass    : " + (.summary.pass | tostring),
               "  Warn    : " + (.summary.warn | tostring),
               "  Fail    : " + (.summary.fail | tostring),
               "",
               "  Findings:",
-              ((.findings_by_file // {}) | to_entries[] | "    - " + .key + " → " + .value),
+              ((.findings_by_file // {}) | to_entries[] | "    - " + (.key | clean) + " → " + (.value | clean)),
               "",
               "  Where (file:line):",
               ((.findings // [])[] | select((.line // 0) >= 1)
-                 | "    - " + .file + ":" + (.line | tostring)
+                 | "    - " + (.file | clean) + ":" + (.line | tostring)
                    + (if (.line_count // 0) > 1 then "  (" + (.line_count | tostring) + " lines match: " + ((.lines // []) | map(tostring) | join(", ")) + (if (.line_count // 0) > ((.lines // []) | length) then ", …" else "" end) + ")" else "" end)
-                   + "  " + .rule_id)
+                   + "  " + (.rule_id | clean))
             ' "$LATEST_REPORT" | tr '\001-\011\013-\037\177' '?' >&2
         else
             tr '\001-\011\013-\037\177' '?' < "$LATEST_REPORT" >&2

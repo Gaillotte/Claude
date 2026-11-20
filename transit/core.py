@@ -14,6 +14,7 @@ LC_ALL=C in its environment like the shell's `export LC_ALL=C`. Scalar shell var
 ...) live in the namespace G, because a name imported with `from transit.core import` would be a copy; the arrays are plain
 module-level dicts. Standard library only.
 """
+import heapq
 import json
 import os
 import re
@@ -77,8 +78,8 @@ G = types.SimpleNamespace(
     GLOBAL_VERDICT="PASS", PASS_COUNT=0, WARN_COUNT=0, FAIL_COUNT=0,
     FLAT_INCOMPLETE=False, FLAT_FILE="", L5_PARTIAL="",
     TMP_PATHS=[],
-    # where the last grep helper matched: the file, how it searched it and the pattern (see "Lines of a finding")
-    LM_FILE="", LM_MODE="", LM_PAT="", LM_EXCL="",
+    # where the grep helpers matched: the file, and per match how it was searched (see "Lines of a finding")
+    LM_FILE="", LM_ENTRIES=[],
 )
 
 DEFAULT_EXCLUDE_DIRS = ("node_modules", ".git", "vendor", ".tox", "__pycache__", ".venv", "venv",
@@ -244,34 +245,130 @@ def _write_finding(tool, category, severity, rule_id, rule_name, file, line, col
 
 
 _TOOL_RULE = re.compile(r"^([a-z][a-z0-9_-]{1,30}):([^:]+)")
-_LINE_NO = re.compile(r":line([0-9]+)")
+# A tool that names its line puts it at a fixed position: "semgrep[ruleset]:rule:lineN:SEV:text" and "gitleaks:rule:lineN".
+# A ":lineN" inside the text of a message (a jar entry named "x:line7.txt") is repository text, not a line.
+_LINE_NO = re.compile(r"^(?:semgrep\[[^\]]*\]:[^:]*:line([0-9]{1,9}):|gitleaks:.*:line([0-9]{1,9})$)", re.DOTALL)
 
 
 # ── Lines of a finding ──────────────────────────────────────────────────────
 # A finding of a built-in rule says which lines of the file match: `line` (the first one), `lines` (every matching line, at
 # most ten) and `line_count` (how many lines match in all). The message is not touched: the allowlist, the severity and the
-# stored messages read it. The grep helpers only remember what matched (G.LM_*); _lm_resolve runs when a FAIL is recorded,
-# searches the file once more with the SAME pattern and options and -n, and returns (the first ten lines, how many in all).
-# Every pattern is still evaluated by grep: Python only numbers lines. A rule that searched something other than the file
-# itself (a comment-stripped copy, continuations joined, a decoded stream, the text of an archive) has no line in the file:
-# the file a helper searched must be the file the finding is recorded against, or there is no line, never a wrong one.
+# stored messages read it. The grep helpers only remember what matched (_lm_add); _lm_resolve runs when a FAIL is recorded,
+# searches the file once more for each remembered match with the SAME pattern and options and -n, and returns (the first ten
+# lines, how many in all); a rule made of several whole-file tests lists the lines of all of them. Every pattern is still
+# evaluated by grep: Python only numbers lines. A rule that searched something other than the file itself (a comment-stripped
+# copy, continuations joined, a decoded stream, the text of an archive) has no line in the file: the file a helper searched
+# must be the file the finding is recorded against, or there is no line, never a wrong one.
+#
+# Everything is a stream: grep's output is read a line at a time and only the number is kept, so a file of millions of matching
+# lines costs time and no memory (the first version captured the whole output: 1.3 GB for a 96 MB file).
 _LM_FAMILIES = ("CWE-", "OWASP-", "CVE-", "make:")
 _LM_CAP = 10
+_LM_MAX_ENTRIES = 8
 _LM_PEM_HEADER = r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----"
 _LM_PEM_WINDOW = _LM_PEM_HEADER + r".{0,200}[A-Za-z0-9+/]{60,}"
 _LM_PEM_HEADERS_TRIED = 200
-_TR_FOLD = bytes.maketrans(b"\r\n\t", b"   ")
+_LM_TOKEN_BATCH = 4096
+_LM_PREFIX = re.compile(rb"^([0-9]+)([:-])")
+
+
+def _lm_add(path, mode, pattern, excl=""):
+    """A helper matched: remember how. A test that does not match forgets them all (G.LM_FILE = "")."""
+    if not G.LM_FILE or G.LM_FILE != path:
+        G.LM_ENTRIES = []
+    if len(G.LM_ENTRIES) >= _LM_MAX_ENTRIES:          # eight matches and no finding: not a rule, no line
+        G.LM_FILE = ""
+        return
+    G.LM_FILE = path
+    G.LM_ENTRIES.append((mode, pattern, excl))
+
+
+def _lm_rows(argv):
+    """The lines a program prints, one at a time (never the whole output)."""
+    try:
+        proc = subprocess.Popen(_argv(argv), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return
+    try:
+        yield from proc.stdout
+    finally:
+        proc.stdout.close()
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
 
 
 def _lm_nums(flags, pattern, path):
-    """The numbers of the lines of `path` that match `pattern` (grep -n output)."""
-    _, out = run_tool(["grep", flags, "-e", pattern, "--", path])
-    return [int(row.split(b":", 1)[0]) for row in out.split(b"\n") if row[:1].isdigit()]
+    """The numbers of the lines of `path` that match `pattern`, ascending (grep -n output)."""
+    for row in _lm_rows(["grep", flags, "-e", pattern, "--", path]):
+        head = row.split(b":", 1)[0]
+        if head.isdigit():
+            yield int(head)
+
+
+def _lm_minus(first, second):
+    """The numbers of `first` that are not in `second` (both ascending): the lines of a pattern that its exclusion does not drop."""
+    second = iter(second)
+    cur = next(second, None)
+    for n in first:
+        while cur is not None and cur < n:
+            cur = next(second, None)
+        if cur != n:
+            yield n
+
+
+def _lm_tokens(pattern, path):
+    """Known credential formats: the line of every matched token that the exclusion list does not drop. The exclusion applies to
+    the token, not to the line, so tokens go to grep in batches of 4096 (one process per batch, never the whole file)."""
+    def kept(rows):
+        _, out = run_tool(["grep", "-nviE", "-e", KNOWN_CRED_EXCL], input=b"".join(tok + b"\n" for _, tok in rows))
+        keep = {int(k.split(b":", 1)[0]) for k in out.split(b"\n") if k[:1].isdigit()}
+        return [rows[i - 1][0] for i in sorted(keep) if i <= len(rows)]
+    rows = []
+    for row in _lm_rows(["grep", "-noIE", "-e", pattern, "--", path]):
+        number, _, token = row.rstrip(b"\n").partition(b":")
+        if number.isdigit():
+            rows.append((int(number), token))
+        if len(rows) >= _LM_TOKEN_BATCH:
+            yield from kept(rows)
+            rows = []
+    if rows:
+        yield from kept(rows)
+
+
+def _lm_offsets(read):
+    """The byte offsets of grep -zbo output: records are b"<offset>:<text>\\0"; the text, however long, is never kept."""
+    num, head = b"", True
+    while True:
+        chunk = read(1 << 20)
+        if not chunk:
+            return
+        pos, n = 0, len(chunk)
+        while pos < n:
+            if head:
+                c = chunk.find(b":", pos)
+                if c < 0:
+                    num += chunk[pos:]
+                    pos = n
+                else:
+                    num += chunk[pos:c]
+                    pos = c + 1
+                    head = False
+                    if num.isdigit():
+                        yield int(num)
+                    num = b""
+            else:
+                z = chunk.find(b"\0", pos)
+                if z < 0:
+                    pos = n
+                else:
+                    pos = z + 1
+                    head = True
 
 
 def _lm_newline_lines(path, offsets):
-    """The line number of each ascending byte offset (the newlines before it, plus one), without duplicates."""
-    lines, pos, newlines = [], 0, 0
+    """The line number of each ascending byte offset (the newlines before it, plus one), each once."""
+    pos = newlines = last = 0
     with open(path, "rb") as fh:
         for off in offsets:
             while pos < off:
@@ -280,60 +377,113 @@ def _lm_newline_lines(path, offsets):
                     break
                 newlines += chunk.count(b"\n")
                 pos += len(chunk)
-            if not lines or lines[-1] != newlines + 1:
-                lines.append(newlines + 1)
-    return lines
+            if newlines + 1 != last:
+                last = newlines + 1
+                yield last
+
+
+def _lm_folded(pattern, path):
+    """The lines on which a match of the folded (grep -z) search starts."""
+    try:
+        proc = subprocess.Popen(_argv(["grep", "-zboiE", "-e", pattern, "--", path]), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return
+    try:
+        yield from _lm_newline_lines(path, _lm_offsets(proc.stdout.read))
+    finally:
+        proc.stdout.close()
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
 
 
 def _lm_pem_lines(path):
-    """The header lines of a private key whose own window (five lines, folded) passes the key rule. At most the first 200
-    headers are tried: a file with more is a bundle of keys."""
-    headers = _lm_nums("-anE", _LM_PEM_HEADER, path)[:_LM_PEM_HEADERS_TRIED]
+    """The header lines of a private key whose own window (five lines, folded) passes the key rule: one pass over the file, the
+    first 200 headers (a file with more is a bundle of keys), one grep over the folded windows. The first version read the
+    file once per header."""
+    text, headers, stop = {}, [], 0
+    for row in _lm_rows(["grep", "-anE", "-A5", "-e", _LM_PEM_HEADER, "--", path]):
+        m = _LM_PREFIX.match(row)
+        if not m:
+            continue                                   # the "--" between two groups
+        n = int(m.group(1))
+        if stop and n > stop:
+            break
+        text[n] = row[m.end():].rstrip(b"\n")
+        if m.group(2) == b":" and len(headers) < _LM_PEM_HEADERS_TRIED:
+            headers.append(n)
+            if len(headers) == _LM_PEM_HEADERS_TRIED:
+                stop = n + 5
     if not headers:
-        return []
+        return
+    windows = b"".join(b"%d\t%s\n" % (h, b" ".join(text[k] for k in range(h, h + 6) if k in text).translate(_TR_FOLD) + b" ")
+                       for h in headers)
+    _, out = run_tool(["grep", "-aE", "-e", _LM_PEM_WINDOW], input=windows)
+    for row in out.split(b"\n"):
+        head = row.split(b"\t", 1)[0]
+        if head.isdigit():
+            yield int(head)
+
+
+_TR_FOLD = bytes.maketrans(b"\r\n\t", b"   ")
+
+
+def _lm_entry(entry, path):
+    """The ascending line numbers of one remembered match (a line is listed once per match; the reader lists it once)."""
+    mode, pattern, excl = entry
+    if mode == "E":
+        return _lm_nums("-anE", pattern, path)
+    if mode == "iE":
+        return _lm_nums("-aniE", pattern, path)
+    if mode == "X":                     # matches the pattern and not the exclusion: the first list minus the second
+        return _lm_minus(_lm_nums("-aniE", pattern, path), _lm_nums("-aniE", excl, path))
+    if mode == "T":
+        return _lm_tokens(pattern, path)
+    if mode == "Z":
+        return _lm_folded(pattern, path)
+    if mode == "P":
+        return _lm_pem_lines(path)
+    return iter(())
+
+
+def _lm_has_nul(path):
+    """True when the file holds a NUL byte. grep reads such a file as binary: the plain helpers (grep -q, no -a) take each NUL
+    for the end of a line, so a pattern satisfied across it does not match and `$` matches before it. Numbering the lines of
+    such a file would need that same reading and a count of what it splits, and lines numbered another way can list a line
+    the rule did not match. So a finding made by a plain match (E, iE) on such a file has no line. The other modes read the
+    file as text (-a, -z) in the matcher and in the resolver alike."""
     with open(path, "rb") as fh:
-        rows = fh.read().split(b"\n")
-    found = []
-    for h in headers:
-        window = b"".join(r + b"\n" for r in rows[h - 1:h + 5]).translate(_TR_FOLD)
-        if run_tool(["grep", "-aE", "-e", _LM_PEM_WINDOW], input=window)[0] == 0:
-            found.append(h)
-    return found
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                return False
+            if b"\0" in chunk:
+                return True
 
 
 def _lm_resolve():
-    """-> (the first ten matching lines, the number of matching lines) of the last grep helper that matched, or ([], 0)."""
-    path, mode, pat, excl = G.LM_FILE, G.LM_MODE, G.LM_PAT, G.LM_EXCL
-    if not path or not os.path.isfile(path):
+    """-> (the first ten matching lines, the number of matching lines) of the helpers that matched, or ([], 0)."""
+    path = G.LM_FILE
+    if not path or not G.LM_ENTRIES or not os.path.isfile(path):
         return [], 0
     try:
-        if mode == "E":
-            found = _lm_nums("-anE", pat, path)
-        elif mode == "iE":
-            found = _lm_nums("-aniE", pat, path)
-        elif mode == "X":                      # matches the pattern and not the exclusion: the first set minus the second
-            skip = set(_lm_nums("-aniE", excl, path))
-            found = [n for n in _lm_nums("-aniE", pat, path) if n not in skip]
-        elif mode == "T":                      # known credential formats: the exclusion applies to the matched token
-            _, out = run_tool(["grep", "-noIE", "-e", pat, "--", path])
-            rows = [row for row in out.split(b"\n") if row[:1].isdigit()]
-            if not rows:
-                return [], 0
-            tokens = b"".join(row.split(b":", 1)[1] + b"\n" for row in rows)
-            _, kept = run_tool(["grep", "-nviE", "-e", KNOWN_CRED_EXCL], input=tokens)
-            keep = {int(k.split(b":", 1)[0]) for k in kept.split(b"\n") if k[:1].isdigit()}
-            found = list(dict.fromkeys(int(rows[i - 1].split(b":", 1)[0]) for i in sorted(keep) if i <= len(rows)))
-        elif mode == "Z":                      # the file as one record: grep gives the byte offset of each match
-            _, out = run_tool(["grep", "-zboiE", "-e", pat, "--", path])
-            offsets = sorted(int(r.split(b":", 1)[0]) for r in out.split(b"\0") if r[:1].isdigit())
-            found = _lm_newline_lines(path, offsets)
-        elif mode == "P":
-            found = _lm_pem_lines(path)
-        else:
+        if any(mode in ("E", "iE") for mode, _, _ in G.LM_ENTRIES) and _lm_has_nul(path):
             return [], 0
     except OSError:
         return [], 0
-    return found[:_LM_CAP], len(found)
+    first, total, last = [], 0, None
+    try:
+        streams = [_lm_entry(e, path) for e in G.LM_ENTRIES]
+        for n in (streams[0] if len(streams) == 1 else heapq.merge(*streams)):
+            if n != last:
+                last = n
+                total += 1
+                if len(first) < _LM_CAP:
+                    first.append(n)
+    except OSError:
+        return [], 0
+    return first, total
 
 
 def _emit_finding(file, msg):
@@ -375,13 +525,13 @@ def _emit_finding(file, msg):
     # The line comes from the tool when the message carries one (Semgrep: ":lineN:"); a built-in grep rule has none in its
     # message and takes the lines its last helper matched. Only the message families those rules use, only the file that
     # helper searched, and only once: anything else is null.
-    m = _LINE_NO.search(msg)
+    m = _LINE_NO.match(msg)
     line, lines, line_count = "", "", 0
     if m:
-        line = m.group(1)
+        line = m.group(1) or m.group(2)
         if int(line) >= 1:
             lines, line_count = line, 1
-    elif G.LM_FILE and file == G.LM_FILE and msg.startswith(_LM_FAMILIES):
+    elif G.LM_FILE and G.LM_ENTRIES and file == G.LM_FILE and msg.startswith(_LM_FAMILIES):
         found, total = _lm_resolve()
         if total:
             line, lines, line_count = str(found[0]), ",".join(str(n) for n in found), total
@@ -693,13 +843,9 @@ def grep_pipe(argv1, argv2, tr=None):
     return p1.wait() == 0 and p2.wait() == 0
 
 
-def _lm_set(path, mode, pattern, excl=""):
-    G.LM_FILE, G.LM_MODE, G.LM_PAT, G.LM_EXCL = path, mode, pattern, excl
-
-
 def grep_check(pattern, path):
     if _status(["grep", "-qE", "-e", pattern, "--", path]) == 0:
-        _lm_set(path, "E", pattern)
+        _lm_add(path, "E", pattern)
         return True
     G.LM_FILE = ""
     return False
@@ -707,7 +853,7 @@ def grep_check(pattern, path):
 
 def grep_check_i(pattern, path):
     if _status(["grep", "-qiE", "-e", pattern, "--", path]) == 0:
-        _lm_set(path, "iE", pattern)
+        _lm_add(path, "iE", pattern)
         return True
     G.LM_FILE = ""
     return False
@@ -716,7 +862,7 @@ def grep_check_i(pattern, path):
 def grep_check_excl(pattern, excl, path):
     """The pattern on a line that does not also match the exclusion; both greps read the file as text (-a)."""
     if grep_pipe(["grep", "-ahiE", "-e", pattern, "--", path], ["grep", "-aviE", "-e", excl]):
-        _lm_set(path, "X", pattern, excl)
+        _lm_add(path, "X", pattern, excl)
         return True
     G.LM_FILE = ""
     return False
@@ -728,7 +874,7 @@ def grep_flat(pattern, path):
     rc = _status(["grep", "-ziE", "-e", pattern, "--", path])
     if rc <= 1:
         if rc == 0:
-            _lm_set(path, "Z", pattern)
+            _lm_add(path, "Z", pattern)
         else:
             G.LM_FILE = ""
         return rc == 0
@@ -797,7 +943,8 @@ def _known_cred_check(report, target):
         for name, pat in zip(KNOWN_CRED_NAMES, KNOWN_CRED_PATS):
             token_rx = "(^|[^A-Za-z0-9])(%s)([^A-Za-z0-9]|$)" % pat
             if grep_pipe(["grep", "-ohIE", "-e", token_rx, "--", target], ["grep", "-viE", "-e", KNOWN_CRED_EXCL]):
-                _lm_set(target, "T", token_rx)
+                G.LM_FILE = ""
+                _lm_add(target, "T", token_rx)
                 record_fail(report, "CWE-798:known_credential_format_%s" % name)
                 hit = True
     if _status(["grep", "-qIE", "-e", _JWT, "--", target]) == 0:

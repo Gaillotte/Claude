@@ -261,7 +261,7 @@ present in every report written by a completed run; no key is optional at the to
 | `severity` | `INFO` \| `LOW` \| `MEDIUM` \| `HIGH` \| `CRITICAL` | From the one classifier (section 6.3). |
 | `rule_id`, `rule_name` | strings | |
 | `file` | non-empty string | **Relative** to `SCAN_DIR`; `.` for a whole-directory finding; `__global__` for a finding about the whole scan (the `engine:` messages recorded there); unchanged (so absolute) if the file does not sit under `SCAN_DIR/` (E7). |
-| `line` | integer ≥ 0 or null | The first line of the file that matches. From `:line<digits>` in the message when the tool names one (Semgrep, gitleaks); for a built-in rule the first of `lines` (section 5.4). null when there is none. |
+| `line` | integer ≥ 0 or null | The first line of the file that matches. From the message only where a tool puts it (`semgrep[…]:<rule>:line<digits>:` and `gitleaks:…:line<digits>` at the end; a `:line<digits>` anywhere else in a message is repository text and is ignored); for a built-in rule the first of `lines` (section 5.4). null when there is none. |
 | `column` | integer or null | Always null today. |
 | `lines` | array of integers ≥ 1, at most 10 | Every matching line in ascending order, cut at ten. `[]` exactly when `line` is null (or 0). Otherwise it starts with `line`. |
 | `line_count` | integer ≥ 0 | How many lines match in all: at least `len(lines)`, and more than it only when the list is cut at ten. `0` when `line` is null. |
@@ -421,7 +421,16 @@ How both engines work, and what each MUST do:
 * The folded search (`grep -z`) reports the line on which the match **starts**; a declaration split over two lines counts
   once. The known-credential rule applies its exclusion list to the matched token, not to the line. The private-key
   rule reports the header line whose own five-line window holds the key body, and tries at most the first 200 headers.
-* A finding whose message carries `:line<N>` keeps that line (`lines` is `[N]`, `line_count` 1).
+* A finding of Semgrep or gitleaks keeps the line the tool named, read from its fixed position in the message (`lines` is
+  `[N]`, `line_count` 1). A `:line<N>` elsewhere in a message (an archive entry named `x:line7.txt`) is repository text: not a line.
+* A rule made of several whole-file tests (`decode AND execute`) lists the lines of every test that matched (the union,
+  ascending, each line once, `line` its first); a test that does not match forgets the earlier ones. At most eight matches are
+  remembered without a finding; beyond that there is no line.
+* A finding made by a plain match (`grep -q`, no `-a`) on a file that holds a NUL byte has no line: grep reads such a file as
+  binary and takes each NUL for the end of a line, which a line numbering cannot reproduce.
+* Resolution is a stream: nothing that scales with the number of matching lines (a list, an array, a captured output) is held in
+  memory. The exclusion of a rule with one is a merge of two ascending lists; the known-credential exclusion is applied to
+  each matched token (the Python engine in batches); a line that holds several tokens is listed once.
 * Both engines MUST produce the same `line`, `lines` and `line_count` for the same finding: `family_diff.py` compares
   them, and the golden reports carry them.
 

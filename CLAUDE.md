@@ -229,18 +229,29 @@ fields, in the **Lines** column of the HTML report, in the **Line** column of th
 How it works, in both engines (`scan_pipeline.sh`, and `transit/core.py` for the Python engine):
 
 - `grep_check`, `grep_check_i`, `grep_check_excl`, `grep_flat`, the known-credential rule and the private-key rule
-  **remember** what they matched (`LM_FILE`, `LM_MODE`, `LM_PAT`, `LM_EXCL`). Nothing is searched twice unless a FAIL is
-  recorded; then `_lm_resolve` searches the file once more with the same pattern and options and `-n`. Python only
+  **remember** what they matched: the file, and per match the mode, the pattern and the exclusion (`_lm_add`). A rule made of
+  several whole-file tests (`decodes AND executes`, the PowerShell compositions) leaves one entry per test that matched, and its
+  finding lists the lines of all of them; a test that does not match forgets them all. Nothing is searched twice unless a FAIL is
+  recorded; then `_lm_resolve` searches the file once more for each entry with the same pattern and options and `-n`. Python only
   numbers lines: **every regular expression is still evaluated by `grep`**.
-- The state is read only by the FAIL recorded right after the helper, only for the file the helper searched, and only for the
+- The state is read only by the FAIL recorded right after the helpers, only for the file they searched, and only for the
   four message families above. `record_pass`, `record_warn`, `_emit_finding`, `classify_file`, `scan_universal_patterns`
-  and `_pdf_has` clear it and every helper call overwrites it. **Every helper call that matches is followed by a
+  and `_pdf_has` clear it and a helper call that does not match clears it. **Every helper call that matches is followed by a
   `record_*`** (checked for all call sites; the two exceptions are explained in `docs/engine_contract.md` §5.4): a rule
   that matches and then records nothing, or records a FAIL by other means, can leave a stale match.
-- Modes: plain and `-i` (`-n` numbers); with an exclusion (the lines of the pattern minus the lines of the exclusion);
-  the folded `-z` search (the byte offset of each match, counted in newlines, so a declaration split over two lines is
-  reported on the line it starts); a known credential (the exclusion list is applied to the matched token, not to the line);
-  the private key (the header whose own five-line window holds the 60-character body, first 200 headers).
+- A line is only ever taken from where a tool puts it: `semgrep[ruleset]:rule:lineN:SEV:text` and `gitleaks:rule:lineN`.
+  A `:lineN` inside the text of any other message (a jar entry named `x:line7.txt`) is repository text and is not a line.
+- Modes: plain and `-i` (`-n` numbers); with an exclusion (the lines of the pattern minus the lines of the exclusion, a merge of two
+  ascending lists); the folded `-z` search (the byte offset of each match, counted in newlines, so a declaration split over two
+  lines is reported on the line it starts); a known credential (the exclusion list is applied to the matched token, not to the
+  line; a line holding several tokens is listed once); the private key (the header whose own five-line window holds the
+  60-character body, from one pass over the file, first 200 headers).
+- **Everything is a stream.** No file, no list of matching lines and no output of grep is held in a variable, an array or a
+  Python list: a file of 12 million matching lines costs about 10 MB (it cost 1.3 GB in the Python engine, and the private-key
+  search re-read the file once per header: 58 s on a 25 MB file, now one pass).
+- **A file that holds a NUL byte is binary to grep**, and the plain helpers (`grep -q`, no `-a`) read each NUL as the end of a line.
+  A finding made by a plain match on such a file has **no line**: numbering it would list a line the rule did not match. The
+  modes that read text (`-a`, `-z`) are not affected.
 
 **Null is the right answer, not a gap, wherever the rule did not search the file itself**: the comment-stripped copy
 in `scan_xml` (pom.xml, build.xml, the XML credential rule), `scan_bat`, `scan_makefile`'s joined view, the facts

