@@ -812,12 +812,16 @@
     "status": "FAIL"
    },
    "office_gettext.pot": {
-    "messages": [],
-    "status": "PASS"
+    "messages": [
+     "[FAIL] unscanned:no_scanner_for_this_file_type"
+    ],
+    "status": "FAIL"
    },
    "office_graphviz.dot": {
-    "messages": [],
-    "status": "PASS"
+    "messages": [
+     "[FAIL] unscanned:no_scanner_for_this_file_type"
+    ],
+    "status": "FAIL"
    },
    "office_gt_attr.docx": {
     "messages": [
@@ -1031,8 +1035,10 @@
     "status": "FAIL"
    },
    "office_plain.doc": {
-    "messages": [],
-    "status": "PASS"
+    "messages": [
+     "[FAIL] unscanned:no_scanner_for_this_file_type"
+    ],
+    "status": "FAIL"
    },
    "office_pptx_macro_action.pptx": {
     "messages": [
@@ -1981,7 +1987,8 @@
    },
    "pgp_private.asc": {
     "messages": [
-     "[FAIL] CWE-321:hardcoded_private_key"
+     "[FAIL] CWE-321:hardcoded_private_key",
+     "[FAIL] unscanned:no_scanner_for_this_file_type"
     ],
     "status": "FAIL"
    },
@@ -4203,6 +4210,32 @@
     "tool": "grep-pattern"
    },
    {
+    "category": "security",
+    "file": "office_gettext.pot",
+    "line": null,
+    "line_count": 0,
+    "lines": [],
+    "message": "unscanned:no_scanner_for_this_file_type",
+    "references": [],
+    "rule_id": "no_scanner_for_this_file_type",
+    "rule_name": "unscanned:no_scanner_for_this_file_type",
+    "severity": "HIGH",
+    "tool": "unscanned"
+   },
+   {
+    "category": "security",
+    "file": "office_graphviz.dot",
+    "line": null,
+    "line_count": 0,
+    "lines": [],
+    "message": "unscanned:no_scanner_for_this_file_type",
+    "references": [],
+    "rule_id": "no_scanner_for_this_file_type",
+    "rule_name": "unscanned:no_scanner_for_this_file_type",
+    "severity": "HIGH",
+    "tool": "unscanned"
+   },
+   {
     "category": "cwe",
     "file": "office_gt_attr.docx",
     "line": null,
@@ -4546,6 +4579,19 @@
     "rule_name": "hardcoded_private_key(1: word/document.xml)",
     "severity": "HIGH",
     "tool": "grep-pattern"
+   },
+   {
+    "category": "security",
+    "file": "office_plain.doc",
+    "line": null,
+    "line_count": 0,
+    "lines": [],
+    "message": "unscanned:no_scanner_for_this_file_type",
+    "references": [],
+    "rule_id": "no_scanner_for_this_file_type",
+    "rule_name": "unscanned:no_scanner_for_this_file_type",
+    "severity": "HIGH",
+    "tool": "unscanned"
    },
    {
     "category": "cwe",
@@ -6579,6 +6625,19 @@
     "tool": "grep-pattern"
    },
    {
+    "category": "security",
+    "file": "pgp_private.asc",
+    "line": null,
+    "line_count": 0,
+    "lines": [],
+    "message": "unscanned:no_scanner_for_this_file_type",
+    "references": [],
+    "rule_id": "no_scanner_for_this_file_type",
+    "rule_name": "unscanned:no_scanner_for_this_file_type",
+    "severity": "HIGH",
+    "tool": "unscanned"
+   },
+   {
     "category": "cwe",
     "file": "pkg_escaped/package.json",
     "line": null,
@@ -7689,6 +7748,12 @@
    "office_follina.docx": [
     "CWE-829:office_object_or_frame_fetched_from_a_remote_host(1: word/_rels/document.xml.rels oleobject -> http://attacker.example/exploit.html!)"
    ],
+   "office_gettext.pot": [
+    "unscanned:no_scanner_for_this_file_type"
+   ],
+   "office_graphviz.dot": [
+    "unscanned:no_scanner_for_this_file_type"
+   ],
    "office_gt_attr.docx": [
     "CWE-829:office_object_or_frame_fetched_from_a_remote_host(1: word/_rels/document.xml.rels oleobject -> http://attacker.example/x.html!)",
     "CWE-829:office_remote_template_injection(1: word/_rels/document.xml.rels attachedtemplate -> http://attacker.example/t.dotm)"
@@ -7747,6 +7812,9 @@
    ],
    "office_pem.docx": [
     "CWE-321:hardcoded_private_key(1: word/document.xml)"
+   ],
+   "office_plain.doc": [
+    "unscanned:no_scanner_for_this_file_type"
    ],
    "office_pptx_program.pptx": [
     "CWE-78:office_presentation_action_runs_a_program(1: ppt/slides/slide1.xml)"
@@ -8123,7 +8191,8 @@
     "CWE-94:PDF_javascript_shellcode_pattern"
    ],
    "pgp_private.asc": [
-    "CWE-321:hardcoded_private_key"
+    "CWE-321:hardcoded_private_key",
+    "unscanned:no_scanner_for_this_file_type"
    ],
    "pkg_escaped/package.json": [
     "CWE-78:npm_lifecycle_hook_fetches_and_executes"
@@ -8274,8 +8343,8 @@
   "status_background": "#F8D7DA",
   "status_color": "#B02A37",
   "summary": {
-   "fail": 324,
-   "pass": 58,
+   "fail": 328,
+   "pass": 54,
    "warn": 217
   },
   "verdict": "FAIL"

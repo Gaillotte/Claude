@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))       # `python3
 
 from transit.core import (ALLOW_MAP, DEFAULT_EXCLUDE_DIRS, FILE_LINES, FILE_MSG, FILE_STATUS, FINDINGS, G, LAYER_COVERAGE, _ascii_lower,
                           _b, _clr, _s, _san, call_scanner, cleanup_tmp, fail, first_line, has_cmd, info, init_offline_env,
-                          ok, record_fail, record_fail_hard, record_layer, record_warn, register_tmp, run_helper, run_tool,
+                          is_control_file, ok, record_fail, record_fail_hard, record_layer, record_warn, register_tmp, run_helper, run_tool,
                           shebang_scanner, warn)
 from transit.layers import scan_dependencies, scan_global, scan_owasp_cwe, scan_scancode
 
@@ -221,10 +221,7 @@ def classify_file(f):
 
 # ── Layer 5: per-type scan ───────────────────────────────────────────────────
 def _is_control_file(f):
-    """The three files the pipeline puts at the root of a scanned directory: scanned like any file, but they do not count as
-    "something was examined"."""
-    root = G.SCAN_DIR[:-1] if G.SCAN_DIR.endswith("/") else G.SCAN_DIR
-    return f in (root + "/.transitignore", root + "/.transit-allow.json", root + "/.manifest_sha256.txt")
+    return is_control_file(f)
 
 
 def _symlink_escapes(link, target):

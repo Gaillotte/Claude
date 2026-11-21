@@ -171,6 +171,13 @@ def cleanup_tmp():
     G.TMP_PATHS.clear()
 
 
+def is_control_file(f):
+    """The three files the pipeline puts at the root of a scanned directory: scanned like any file, but they do not count as
+    "something was examined"."""
+    root = G.SCAN_DIR[:-1] if G.SCAN_DIR.endswith("/") else G.SCAN_DIR
+    return f in (root + "/.transitignore", root + "/.transit-allow.json", root + "/.manifest_sha256.txt")
+
+
 # ── Layer coverage ──────────────────────────────────────────────────────────
 def record_layer(layer, state):
     LAYER_COVERAGE[layer] = state

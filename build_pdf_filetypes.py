@@ -342,7 +342,7 @@ FAMILIES = [
         warn=["Any VBA macro, or one whose source cannot be read",
               "An embedded OLE object; an Equation object without a payload",
               "Encrypted content; a file that cannot be parsed"],
-        note=".dot is Graphviz, .pot is gettext and a .doc is sometimes plain text: the content is sniffed, and text goes back to the unknown-file path (PASS). A password-protected file is reported, not opened."),
+        note=".dot is Graphviz, .pot is gettext and a .doc is sometimes plain text: the content is sniffed, and text goes back to the unknown-file path, where it FAILS as a file no scanner understands. A password-protected file is reported, not opened."),
     dict(
         key="odf", title="OpenDocument (LibreOffice, OpenOffice)", scanner="scan_office",
         ext=[".odt", ".ods", ".odp", ".odg", ".ott", ".ots", ".otp", ".otg", ".fodt", ".fods", ".fodp", ".fodg"],
@@ -399,7 +399,7 @@ FAMILIES = [
         fail=["binary:unexpected_binary_in_AI_repo — EVERY file of these types, whatever it contains",
               "binary:IOC_strings_detected — in addition, when the strings search hits"],
         warn=[],
-        note=".bin is blocked, not analysed: a harmless weights file fails exactly like an ELF, while the same pickle named .pkl or .pt passes (see Unknown extensions). Content-based routing would fix both."),
+        note=".bin is blocked, not analysed: a harmless weights file fails exactly like an ELF, while the same pickle named .pkl or .pt also fails, as a file no scanner understands (see Unknown extensions). Content-based routing would fix both."),
     dict(
         key="archive", title="Archives", scanner="scan_archive",
         ext=[".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz"],
@@ -642,7 +642,7 @@ def render() -> None:
         ("2", "Extension", "Lower-cased first, so .PS1 and .JAR are treated like .ps1 and .jar. One slide per family in this deck. Office extensions are only a hint: the content is sniffed (a .dot may be Graphviz)."),
         ("3", "Shebang", "No known extension: the first line decides — python, bash / sh / zsh / ksh, ruby, node, php, pwsh / powershell."),
         ("4", "MIME type", "Still nothing: file --mime-type. An executable type (x-executable, x-sharedlib, x-dosexec) → FAIL."),
-        ("5", "Default", "Anything else passes Layer 5 untouched. See \"Unknown extensions\"."),
+        ("5", "Default", "Anything else FAILS: a file no scanner understands never passes (unscanned:no_scanner_for_this_file_type). See \"Unknown extensions\"."),
     ]
     y = H - 160
     for n, head, body in steps:
@@ -699,7 +699,7 @@ def render() -> None:
 
     # unknown extensions
     assert page["n"] + 1 == unknown_page
-    frame("Unknown extensions — what is allowed", "Anything not routed above. It is not skipped: it still passes every layer except Layer 5.")
+    frame("Unknown extensions — they fail", "Anything not routed above. No scanner understands it, so it never passes: it FAILS, always, and nothing can lower that.")
     top, bottom = H - 130, 62
     col_w = (W - 72 - 40) / 3
     # col 1: routing of an unknown file
@@ -712,13 +712,14 @@ def render() -> None:
         yy -= 20
     yy -= 8
     body1 = ["No shebang: file --mime-type. x-executable, x-sharedlib or x-dosexec → FAIL (binary:unexpected_executable_mime).",
-             "Any other type → PASS. That is \"allowed\".",
-             "If the file command is not installed the MIME check is skipped and the file passes."]
+             "Any other type → FAIL: unscanned:no_scanner_for_this_file_type, recorded as a hard FAIL (no .transit-allow.json, no --min-severity).",
+             "If the file command is not installed the MIME check is skipped and the file fails the same way.",
+             "The one exception is the pipeline's own input, the root .transitignore."]
     bullets(body1, 50, yy, col_w - 28, yy - bottom - 12, INK, "•", BLU, 14)
     # col 2: what still applies
     x2 = 36 + col_w + 20
     rect(x2, bottom, col_w, top - bottom, GRN_BG, EDGE, 8)
-    txt("STILL APPLIED", x2 + 14, top - 24, 13, FB, GRN)
+    txt("STILL APPLIED (before the FAIL)", x2 + 14, top - 24, 13, FB, GRN)
     bullets(["L1  gitleaks, detect-secrets, ClamAV and YARA — whole directory",
              "L2  Semgrep rulesets — whole directory",
              "L4  universal patterns on this very file: hardcoded credentials, the 18 known token formats, PEM private keys, path traversal in three contexts, SSRF, weak crypto and PRNG, debug artefacts, logging suppression",
@@ -728,12 +729,12 @@ def render() -> None:
     # col 3: what is NOT checked
     x3 = x2 + col_w + 20
     rect(x3, bottom, col_w, top - bottom, AMB_BG, EDGE, 8)
-    txt("WHAT PASSES UNEXAMINED", x3 + 14, top - 24, 13, FB, AMB)
-    bullets(["Source in a language with no scanner: Perl, Lua, VBScript, Groovy (outside Gradle), Scala, Swift, Dart, Elixir … — no per-language rule runs, only Layer 4.",
-             "Pickled models and weights: .pkl .pickle .pt .pth .ckpt .joblib. A pickle that runs os.system PASSED when tested; loading one executes it.",
-             "A .bin pickle is the opposite case: blocked with every other .bin, harmlessly or not.",
-             "Content disguised by name: a script saved as .txt gets only the document rule.",
-             "Remedy for a legitimate file: .transit-allow.json (FAIL → WARN, with a reason) or .transitignore."],
+    txt("WHY IT FAILS, AND THE LIMITS", x3 + 14, top - 24, 13, FB, AMB)
+    bullets(["A file nobody examined must not pass: Perl, Lua, VBScript, Groovy (outside Gradle), Scala, Swift, Dart, Elixir, SVG, TOML, CSS, LICENSE, .gitignore, images, fonts, databases, notebooks, unopened containers.",
+             "Pickled models and weights (.pkl .pickle .pt .pth .ckpt .joblib) fail too: loading a pickle executes it, and nothing here parses one.",
+             "It is a hard FAIL: the repository's own .transit-allow.json and --min-severity cannot lower it.",
+             "Files matched by .transitignore, under the pruned directories (node_modules, vendor, build ...), or unchanged in diff mode are not scanned, so they do not fail here; the native sweep still reads them.",
+             "Remedy: remove the file, or add a scanner for its type (docs/unscanned_file_types.md lists the gaps)."],
             x3 + 14, top - 36, col_w - 28, top - bottom - 48, INK, "•", AMB, 14)
     cv.showPage()
 

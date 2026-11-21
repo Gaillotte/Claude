@@ -670,12 +670,15 @@ for p,i in d.get('file_results',{}).items():
                 "…and does not warn about it either: ${_safe}"
         done
         # .dot is Graphviz, .pot is gettext and a .doc can be plain text: all three are
-        # routed here by extension and must fall back to the unknown-file path, not fail.
+        # routed here by extension and must fall back to the unknown-file path: no office finding, no warning, and since
+        # nothing understands them they fail as an unscanned file (a file no scanner examined never passes).
         for _amb in office_graphviz.dot office_gettext.pot office_plain.doc; do
-            assert_not_contains "$(line_for "$_amb")" "[FAIL]" \
-                "text with an office-looking extension is not an office document and does not fail: ${_amb}"
+            assert_not_contains "$(line_for "$_amb")" "office:" \
+                "text with an office-looking extension is not an office document: no office finding: ${_amb}"
             assert_not_contains "$(line_for "$_amb")" "[WARN]" \
                 "…nor warn: ${_amb}"
+            assert_contains "$(line_for "$_amb")" "unscanned:no_scanner_for_this_file_type" \
+                "…and it fails as a file no scanner understands: ${_amb}"
         done
 
         # External relationships
@@ -4456,6 +4459,79 @@ open('$NDL/bomb.txt', 'wb').write(base64.b64encode(o.getvalue()))"
     truncate -s 600M "$NBD/sparse.dat"
     NSPARSE=$( { TIMEFORMAT=%R; time n_run "$NBD" >/dev/null; } 2>&1 )
     ok_test "native: a 600 MB sparse file and 34 MB files are swept in ${NSPARSE} s"
+fi
+
+# ═════════════════════════════════════════════════════════════════════════════
+# LAYER O — a file that no scanner understands fails, always
+# Before: a type with no scanner (.toml .svg .css .lua .pl .swift .ipynb .env, LICENSE, .gitignore, images, models,
+# databases, unopened containers ...) was routed to the unknown-file path and recorded PASS. A file nobody examined must not
+# pass: it is a FAIL (unscanned:no_scanner_for_this_file_type), recorded with record_fail_hard, so neither the repository's own
+# .transit-allow.json nor --min-severity can lower it. The pipeline's own root .transitignore is the one exception.
+# ═════════════════════════════════════════════════════════════════════════════
+group "Layer O — a file no scanner understands fails, always"
+if ! _skipping; then
+    OW="${SCRATCH}/o_work"; OR="${SCRATCH}/o_rep"; mkdir -p "$OW/w_bash" "$OW/w_python" "$OR"
+    o_scan() {   # o_scan <engine> <dir> <name> [VAR=value ...]; sets OREP
+        local eng="$1" dir="$2" name="$3"; shift 3
+        OREP="${OR}/report_scan_${name}.json"; rm -f "$OREP"
+        (cd "$ROOT_DIR" && env "$@" TRANSIT_ENGINE="$eng" WORK_DIR="${OW}/w_${eng}" timeout 300 bash ./scan_pipeline.sh "$dir" "$OR" "$name" >"${OW}/out_${name}.txt" 2>&1) || true
+    }
+    o_py() { python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
+    # o_unscanned: the files the last report fails as unscanned, sorted, one per line as file|severity
+    o_unscanned() { o_py "$OREP" "'\n'.join(sorted('%s|%s' % (f['file'], f['severity']) for f in d['findings'] if f['message'] == 'unscanned:no_scanner_for_this_file_type'))"; }
+    OD="${SCRATCH}/o_repo"; rm -rf "$OD"; mkdir -p "$OD/assets" "$OD/src" "$OD/docs"
+    printf 'MIT License\n' > "$OD/LICENSE"; printf 'node_modules/\n' > "$OD/.gitignore"; printf '[tool]\nname = "x"\n' > "$OD/pyproject.toml"
+    printf 'plain readme without an extension\n' > "$OD/README"; printf '\x89PNG\r\n\x1a\n\0\0\0\rIHDR' > "$OD/assets/logo.png"
+    printf '\x80\x04\x95model' > "$OD/assets/model.pkl"; printf 'SQLite format 3\0' > "$OD/assets/data.sqlite"
+    printf 'print("hi")\n' > "$OD/notes.lua"; printf 'body { color: red }\n' > "$OD/style.css"; printf 'PK\x03\x04' > "$OD/x.whl"
+    printf '#!/usr/bin/perl\nprint "hi";\n' > "$OD/tool.pl"; printf '{"cells": []}\n' > "$OD/nb.ipynb"
+    # what is scanned (a language scanner, a format scanner, a shebang) or is the pipeline's own input is not unscanned
+    printf 'x = 1\n' > "$OD/src/app.py"; printf '#!/bin/sh\necho hi\n' > "$OD/src/run.sh"; printf '#!/usr/bin/env python3\nprint(1)\n' > "$OD/src/entry"
+    printf '# guide\n' > "$OD/docs/guide.md"; printf '{"a": 1}\n' > "$OD/config.json"; printf 'build/\n' > "$OD/.transitignore"; printf '[]\n' > "$OD/.transit-allow.json"
+    O_WANT=$(printf '%s\n' "${OD}/.gitignore|HIGH" "${OD}/LICENSE|HIGH" "${OD}/README|HIGH" "${OD}/assets/data.sqlite|HIGH" "${OD}/assets/logo.png|HIGH" \
+        "${OD}/assets/model.pkl|HIGH" "${OD}/nb.ipynb|HIGH" "${OD}/notes.lua|HIGH" "${OD}/pyproject.toml|HIGH" "${OD}/style.css|HIGH" "${OD}/tool.pl|HIGH" "${OD}/x.whl|HIGH" \
+        | sed "s|${OD}/||" | sort)
+    for OE in bash python; do
+        o_scan "$OE" "$OD" "o_all_$OE"
+        assert_eq "FAIL" "$(o_py "$OREP" "d['verdict']")" "unscanned [$OE]: a repository with files no scanner understands fails"
+        assert_eq "$O_WANT" "$(o_unscanned)" "unscanned [$OE]: exactly the 12 files no scanner understands fail as unscanned (LICENSE, .gitignore, .toml, a file with no extension, a PNG, a pickle, a database, Lua, CSS, a wheel, Perl, a notebook), each HIGH"
+        assert_eq "0" "$(o_py "$OREP" "sum(1 for f in d['findings'] if f['message'] == 'unscanned:no_scanner_for_this_file_type' and f['file'] in ('src/app.py', 'src/run.sh', 'src/entry', 'docs/guide.md', 'config.json', '.transitignore', '.transit-allow.json'))")" \
+            "unscanned [$OE]: …and a Python, a shell, a shebang, a Markdown, a JSON file and the pipeline's own .transitignore do not"
+        assert_eq "unscanned|no_scanner_for_this_file_type" "$(o_py "$OREP" "next('%s|%s' % (f['tool'], f['rule_id']) for f in d['findings'] if f['file'] == 'LICENSE' and f['message'].startswith('unscanned:'))")" "unscanned [$OE]: the structured record names the tool and the rule"
+        o_py "$OREP" "'\n'.join(sorted('%s|%s|%s' % (f['file'], f['message'], f['severity']) for f in d['findings']))" > "${OW}/findings_$OE.txt"
+    done
+    assert_eq "$(cat "${OW}/findings_bash.txt")" "$(cat "${OW}/findings_python.txt")" "unscanned: the shell engine and the Python engine report exactly the same findings"
+
+    # nothing lowers it: not the repository's allowlist (every spelling), not --min-severity
+    OA="${SCRATCH}/o_allow"; rm -rf "$OA"; mkdir -p "$OA"; printf 'node_modules/\n' > "$OA/.gitignore"; printf 'x = 1\n' > "$OA/ok.py"
+    printf '[{"rule":"unscanned","path":".gitignore","reason":"x"},{"rule":"no_scanner_for_this_file_type","path":".gitignore","reason":"x"},{"rule":"unscanned:no_scanner_for_this_file_type","path":".gitignore","reason":"x"},{"rule":"*","path":".gitignore","reason":"x"}]\n' > "$OA/.transit-allow.json"
+    for OE in bash python; do
+        o_scan "$OE" "$OA" "o_allow_$OE" MIN_SEVERITY=critical
+        assert_eq "FAIL" "$(o_py "$OREP" "d['verdict']")" "unscanned [$OE]: an allowlist entry in the repository (four spellings) and --min-severity critical do not turn it into a pass"
+        assert_eq ".gitignore|HIGH" "$(o_unscanned)" "unscanned [$OE]: …the finding is still HIGH"
+    done
+
+    # repository text never reaches the message: names that look like severity markers, a line break, a terminal escape
+    OH="${SCRATCH}/o_hostile"; rm -rf "$OH"; mkdir -p "$OH"
+    printf 'x\n' > "$OH/x.:low:.toml"; printf 'x\n' > "$OH/y:INFO:.dat"; printf 'x\n' > "$OH/$(printf 'line\nbreak.dat')"; printf 'x\n' > "$OH/$(printf 'raw\033]0;pwned\007.dat')"
+    for OE in bash python; do
+        o_scan "$OE" "$OH" "o_hostile_$OE"
+        assert_eq "4" "$(o_py "$OREP" "sum(1 for f in d['findings'] if f['message'] == 'unscanned:no_scanner_for_this_file_type' and f['severity'] == 'HIGH')")" "unscanned [$OE]: four hostile names ('x.:low:.toml' and ':INFO:' in a name, a line break, an escape) each fail, HIGH, with the same message"
+        assert_eq "0" "$(grep -c $'\033\\]0;pwned' "${OW}/out_o_hostile_${OE}.txt" || true)" "unscanned [$OE]: …and the console shows no terminal escape from a file name"
+    done
+
+    # end to end through the launcher: a repository that contains one such file is rejected and nothing ships; one without passes
+    OL="${SCRATCH}/o_launch"; rm -rf "$OL"; mkdir -p "$OL"; printf 'print(1)\n' > "$OL/ok.py"; printf 'MIT\n' > "$OL/LICENSE"
+    run_pipeline "$OL" --quiet --no-excel
+    assert_eq "1" "$RUN_EXIT" "unscanned: the launcher exits 1 for a repository that holds a LICENSE (nothing scans it)"
+    assert_eq "0" "$(ls "${RUN_WORK}/out"/*.zip 2>/dev/null | wc -l | tr -d ' ')" "unscanned: …and no archive is produced"
+    OK="${SCRATCH}/o_launch_ok"; rm -rf "$OK"; mkdir -p "$OK"; printf 'print(1)\n' > "$OK/ok.py"; printf '# guide\n' > "$OK/README.md"
+    run_pipeline "$OK" --quiet --no-excel
+    assert_eq "0" "$RUN_EXIT" "unscanned: the same repository with only scanned types passes"
+    assert_eq "1" "$(ls "${RUN_WORK}/out"/*.zip 2>/dev/null | wc -l | tr -d ' ')" "unscanned: …and its archive is produced"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════

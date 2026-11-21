@@ -14,7 +14,8 @@ import subprocess
 import tempfile
 
 from transit.core import (FILE_STATUS, G, _ascii_lower, _b, _known_cred_check, _s, call_scanner, first_line, grep_check, has_cmd,
-                          record_fail, record_pass, record_warn, run_helper, run_tool, shebang_scanner)
+                          is_control_file, record_fail, record_fail_hard, record_pass, record_warn, run_helper, run_tool,
+                          shebang_scanner)
 
 
 # ── The inline branches of classify_file ─────────────────────────────────────
@@ -470,4 +471,10 @@ def scan_unknown(f):
         if re.search(r"^(application/x-executable|application/x-sharedlib|application/x-dosexec)", mime, re.M):
             record_fail(f, "binary:unexpected_executable_mime:" + mime)
             return
-    record_pass(f)
+    # A file that no scanner understands is a file nobody examined, and it does not pass: not whatever it is called, not whatever it
+    # holds, and not because the repository says so (record_fail_hard: no allowlist, no --min-severity). The only exception is the
+    # pipeline's own input, the root .transitignore, which the pipeline parses and reports (transitignore:exclusions_applied).
+    if is_control_file(f):
+        record_pass(f)
+        return
+    record_fail_hard(f, "unscanned:no_scanner_for_this_file_type")

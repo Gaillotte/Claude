@@ -1,10 +1,15 @@
 # File types the pipeline does not scan
 
 What a file gets depends on its **extension, its name and (when it has no known extension) its first line**. This
-page lists what gets less than a language- or format-aware scan, what still covers it, and how that was checked.
+page lists the types that no scanner understands, what still covers them, and how that was checked.
 
-Source of truth: `classify_file` in `scan_pipeline.sh` and `scan_pipeline.py` (`_BASENAME_RULES`, `_EXT_RULES`,
-`shebang_scanner` in `transit/core.py`, `DEFAULT_EXCLUDE_DIRS`), at commit `4c2b9ff`. Regenerate the routed list with
+> **A file no scanner understands now FAILS, always** (`unscanned:no_scanner_for_this_file_type`, HIGH). Sections 4.2,
+> 4.4 and 4.5 below used to PASS; they are the types that fail. The finding is a hard FAIL: the repository's own
+> `.transit-allow.json` and `--min-severity` cannot lower it. Exception: the pipeline's own root `.transitignore`.
+> Files that are never classified (section 4.1) do not fail here. Details: `CLAUDE.md`, "Files no scanner understands fail".
+
+Source of truth: `classify_file` and `scan_unknown` in `scan_pipeline.sh` and `scan_pipeline.py` / `transit/scan_docs.py`
+(`_BASENAME_RULES`, `_EXT_RULES`, `shebang_scanner` in `transit/core.py`, `DEFAULT_EXCLUDE_DIRS`). Regenerate the routed list with
 the snippet at the end.
 
 ## 1. How a file is classified
@@ -16,7 +21,7 @@ every file  ──►  universal pattern rules (layer 4)            credentials,
             ──►  .md .txt .rst                                            → documentation rules (+ RTF sniff)
             ──►  anything else: first line `#!` for python, ruby, node, php, pwsh or a shell
                                                                           → that language scanner
-                                otherwise `scan_unknown`: MIME check for a native executable, then PASS
+                                otherwise `scan_unknown`: MIME check for a native executable, then FAIL (unscanned)
 ```
 
 The extension is compared in lower case. Names are matched before extensions (`Makefile.so` is a Makefile).
@@ -61,7 +66,7 @@ The extension is compared in lower case. Names are matched before extensions (`M
 
 ## 4. What is not scanned, by category
 
-### 4.1 Never opened by the per-file scanners
+### 4.1 Never opened by the per-file scanners (these do not fail as unscanned: they are never classified)
 
 | What | Detail |
 |---|---|
@@ -72,7 +77,7 @@ The extension is compared in lower case. Names are matched before extensions (`M
 
 Only section 3 reaches these. The approved archive contains the skipped directories, which is why the native sweep reads them.
 
-### 4.2 Opened, but no scanner for the type (`scan_unknown`, then PASS)
+### 4.2 Opened, but no scanner for the type (`scan_unknown`, then **FAIL**)
 
 | Group | Examples |
 |---|---|
@@ -92,7 +97,7 @@ Only section 3 reaches these. The approved archive contains the skipped director
 
 ### 4.4 Containers that are not opened
 
-`.whl .egg .nupkg .apk .ipa .vsix .xpi .crx .epub .7z .rar .zst .cab .iso .msi .rpm .deb .a`. They pass the per-type step
+`.whl .egg .nupkg .apk .ipa .vsix .xpi .crx .epub .7z .rar .zst .cab .iso .msi .rpm .deb .a`. They fail as unscanned,
 unopened; a native file stored uncompressed inside one may still be seen by the native sweep, one stored compressed is not.
 A valid PDF, zip, jar or Office document with a payload appended or stored inside keeps its own scanner's verdict.
 
@@ -107,7 +112,7 @@ A valid PDF, zip, jar or Office document with a payload appended or stored insid
 
 ## 5. Evidence
 
-### 5.1 Hostile content in unrouted types (this host, Python engine)
+### 5.1 Hostile content in unrouted types, before the rule existed (this host, Python engine)
 
 | File | Content | Result |
 |---|---|---|
@@ -142,14 +147,14 @@ number as an order of magnitude. The most common unrouted extensions:
 
 (The no-extension group includes scripts that the shebang routing does scan.)
 
-## 6. If you want to close the gaps, in this order
+## 6. Adding a scanner for one of these types, in this order of value
 
-1. **Model and pickle files** (`.pkl .pickle .pt .pth .ckpt .h5`): the highest-impact gap for AI-generated repositories.
+1. **Model and pickle files** (they fail today, but nothing looks inside) (`.pkl .pickle .pt .pth .ckpt .h5`): the highest-impact gap for AI-generated repositories.
 2. **Perl and Lua**, by extension and by shebang (the same rules as shell: download piped into an interpreter, reverse shells, encoded payloads).
 3. **`.svg`** (script in an image), **`.toml`/`.ini`/`.env`** (credentials, install hooks in `pyproject.toml`), **`.ipynb`** (code cells, outputs), **systemd units** and **`.plist`** (persistence).
 4. **Launchers** (`.lnk .hta .vbs .wsf`) and **containers** (`.whl`, `.apk`, `.nupkg`, `.deb`): open them and scan their members.
 
-Each new scanner follows "Adding or modifying a scan layer" in `CLAUDE.md`: a rule in both engines, a positive and a
+The types above already fail; a scanner gives them depth and lets a clean one pass. Each new scanner follows "Adding or modifying a scan layer" in `CLAUDE.md`: a rule in both engines, a positive and a
 near-miss fixture, a calibration on real files, and a golden-report update.
 
 ## 7. Regenerating the routed list

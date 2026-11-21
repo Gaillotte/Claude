@@ -2435,6 +2435,22 @@ inside a real PDF, zip, jar or Office document, executables inside archives that
 executables under 64 bytes inside encoded text, bytecode (wasm, class, dex), scripts and launchers, packed or encrypted payloads,
 16-bit NE/LE/LX executables.
 
+### 11.2.16 Files no scanner understands — they fail
+
+A file whose type has no scanner (no routed extension or name, no shebang for python, ruby, node, php, PowerShell or a shell, not an
+executable) is a file nobody examined, and it **FAILs**: `unscanned:no_scanner_for_this_file_type`, HIGH. That is `.toml`, `.svg`,
+`.css`, `.lua`, `.pl`, `.swift`, `.ipynb`, `.env`, `LICENSE`, `.gitignore`, images, fonts, databases, model files (`.pkl`, `.pt`),
+bytecode, and containers that are not opened (`.whl`, `.apk`, `.deb`, `.7z`). `docs/unscanned_file_types.md` has the list.
+
+- It is a hard FAIL: the repository's `.transit-allow.json` and `--min-severity` do not lower it, and there is no exemption list.
+  The pipeline's own root `.transitignore` is the one file that is not failed.
+- Files matched by `.transitignore`, files under the skipped directories (`node_modules`, `vendor`, `build`, `dist`, `target`, `.venv`,
+  `.git` ...) and, in diff mode, unchanged files are never classified, so they do not fail here. The native-executable sweep still
+  reads them.
+- Nearly every real repository contains such a file; to be accepted it must lose them or have a scanner added for their type.
+  `--report-only` shows the findings without blocking.
+- One finding per file: a repository with thousands of them is slow in the bash engine (60 to 90 ms each); use `TRANSIT_ENGINE=python`.
+
 ### 11.3 Environment variables
 
 | Variable | Default | Purpose |

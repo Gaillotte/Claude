@@ -1204,7 +1204,7 @@ file_types = [
         "quel que soit le format, est un module compressé dans l'un d'eux ; le RTF n'a pas de conteneur et garde ses objets "
         "en hexadécimal dans le texte. Le contenu est reconnu et non présumé : Word ouvre sans broncher un RTF nommé .docx, "
         "l'extension ne décide donc que lorsque le contenu n'est pas un document bureautique (.dot est du Graphviz, .pot du "
-        "gettext et un .doc est parfois du texte brut : ils retournent au chemin des fichiers inconnus et passent). Le "
+        "gettext et un .doc est parfois du texte brut : ils retournent au chemin des fichiers inconnus, où ils échouent comme des fichiers qu'aucun scanner ne comprend). Le "
         "document n'est jamais extrait sur disque ; un assistant de la bibliothèque standard lit les parties comme le fait "
         "Office, le XML passe par un seul analyseur de balises linéaire et les parties de plus de 4 Mo sont lues en flux. "
         "Chaque limite atteinte est signalée (OFFICE_MAX_ENTRIES 20000, OFFICE_READ_BUDGET_MB 256, OFFICE_TIME_BUDGET_S 90, "

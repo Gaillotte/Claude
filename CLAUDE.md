@@ -902,7 +902,7 @@ or what it carries, not its prose:
 **The content is sniffed, the extension is a hint.** Word opens an RTF named `.docx` and an OLE2 file
 named `.doc` without complaint. When the content is not an office document at all, the extension
 decides: `.dot` is Graphviz, `.pot` is gettext and a `.doc` is sometimes plain text, so those fall
-back to `scan_unknown` and PASS; plain text named `.docx` or `.odt` is a WARN; a native executable
+back to `scan_unknown` (where they now FAIL as files no scanner understands); plain text named `.docx` or `.odt` is a WARN; a native executable
 named `.docx` is a FAIL.
 
 The document is **never extracted to disk**. A standard-library helper reads parts like Office does
@@ -1594,17 +1594,33 @@ the JSON's `\u001b` back into a raw byte). Two Layer D tests cover the two forms
 `docker-run.sh` and the `prepare_*`/`verify_*` scripts still use `echo -e`, but only on constant text
 and on values the operator supplies, never on a name taken from the scanned repository.
 
-## Files with unknown extensions
+## Files no scanner understands fail
 
-(The content sweep above looks at every file regardless; this section is the per-file routing that follows it.)
+`scan_unknown()` is where a file lands when it has neither a routed extension or name nor a shebang for python, ruby, node, php,
+PowerShell or a shell (the shebang is read first: an extensionless `entrypoint` starting `#!/usr/bin/env python3` is routed to
+`scan_python()` and is scanned). It then runs the MIME check (`application/x-executable`, `x-sharedlib` and `x-dosexec` are a FAIL,
+`binary:unexpected_executable_mime`) and **a file that survives it is a FAIL, never a PASS**:
+`unscanned:no_scanner_for_this_file_type`, HIGH, recorded with `record_fail_hard`. Reason: a file no scanner understands is a file
+nobody examined, and "examined by nobody" must not read as clean. Before this, such a file was recorded PASS: `.toml`, `.svg`, `.css`,
+`.lua`, `.pl`, `.swift`, `.ipynb`, `.env`, `LICENSE`, `.gitignore`, images, fonts, databases, model files (`.pkl`, `.pt`), bytecode and
+every container that is not opened (`.whl`, `.apk`, `.deb`, `.7z`). Hostile Lua, Perl, Swift, an SVG with a script, a systemd unit and
+an extensionless Perl script all passed with nothing flagged; only a credential in a TOML file was caught (by the universal rule).
+`docs/unscanned_file_types.md` lists the types.
 
-`scan_pipeline.sh` classifies unknown extensions via `scan_unknown()`, which first
-inspects the shebang: an extensionless `entrypoint` starting with `#!/usr/bin/env
-python3` is routed to `scan_python()` and gets full per-language analysis. Only files
-with neither a recognised extension nor a recognised shebang fall back to a MIME-type
-check — those pass through L1–L4 (pattern-based) but are skipped by L5 per-type SAST.
-ScanCode (L6) still inspects them for licences. An office-looking extension whose content is not an
-office document (`.dot` is Graphviz, `.pot` is gettext, a plain-text `.doc`) comes back here.
+- **No exemptions, and nothing lowers it**: neither the repository's own `.transit-allow.json` (the scanned repository controls it)
+  nor `--min-severity` (`record_fail_hard`, as for `engine:` findings). `--report-only` still observes without blocking, as for any FAIL.
+- **One exception**: the pipeline's own input, the root `.transitignore` (`is_control_file`), which the pipeline parses and reports
+  (`transitignore:exclusions_applied`). The root `.transit-allow.json` and `.manifest_sha256.txt` are JSON and text and are scanned.
+- **What it does not reach, stated**: files that never get this far. Files matched by `.transitignore`, files under the pruned
+  directories (`node_modules`, `vendor`, `build`, `dist`, `target`, `.venv`, `.git`, ...) and, in diff mode, files that did not change
+  are not classified, so they do not fail as unscanned (the native-executable sweep still reads them). A repository can therefore
+  still exclude a file from this rule with `.transitignore`; that is a different decision (see "Allowlist and exclusions").
+- **Cost**: one finding per file. The bash engine pays 60 to 90 ms per FAIL finding, so a repository with thousands of unscanned files
+  (an image folder) takes minutes there and seconds with `TRANSIT_ENGINE=python`.
+- **Calibration**: the 26 golden reports are unchanged but one: the rules corpus gains four FAILs (`office_gettext.pot`,
+  `office_graphviz.dot`, `office_plain.doc`, `pgp_private.asc`: text that an office-looking name once sent here, and a key file), 324 to
+  328 failing files. On this host 39% of 171,428 real files have no per-type scanner. Layer O of the suite (both engines, mutation-tested:
+  PASS again, `record_fail` instead of `record_fail_hard`, no control-file exception) pins it.
 
 ## selfcheck.py flags
 

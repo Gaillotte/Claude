@@ -3741,7 +3741,14 @@ scan_unknown() {
             return
         fi
     fi
-    record_pass "$f"
+    # A file that no scanner understands is a file nobody examined, and it does not pass: not whatever it is called, not whatever
+    # it holds, and not because the repository says so (record_fail_hard: no allowlist, no --min-severity). The only exception is the
+    # pipeline's own input, the root .transitignore, which the pipeline parses and reports (transitignore:exclusions_applied).
+    if _is_control_file "$f"; then
+        record_pass "$f"
+        return
+    fi
+    record_fail_hard "$f" "unscanned:no_scanner_for_this_file_type"
 }
 
 # ── PowerShell ───────────────────────────────────────────────────────────────

@@ -1588,7 +1588,7 @@ file_types = [
         "module inside one; RTF has no container and keeps its objects as hex in the text. The content is sniffed, "
         "not trusted: Word opens an RTF named .docx without complaint, so the extension only decides what to do when the "
         "content is not an office document (.dot is Graphviz, .pot is gettext and a .doc is sometimes plain text, so "
-        "those return to the unknown-file path and PASS). The document is never extracted to disk; a standard-library "
+        "those return to the unknown-file path, where they fail as files no scanner understands). The document is never extracted to disk; a standard-library "
         "helper reads parts the way Office does, XML goes through one linear tokenizer, and parts over 4 MB are "
         "streamed. Every limit reached is reported (OFFICE_MAX_ENTRIES 20000, OFFICE_READ_BUDGET_MB 256, "
         "OFFICE_TIME_BUDGET_S 90, objects opened three levels deep). Document prose is not searched for hostile strings "
