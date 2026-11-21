@@ -285,6 +285,8 @@ def scan_native_sweep():
     if rc != 0 or z_count is None or z_count != str(got):
         warn("native sweep: the helper did not finish (exit %d, %d record(s), announced '%s')" % (rc, got, z_count if z_count is not None else ""))
         record_fail_hard(G.SCAN_DIR, "engine:native_scan_failed")
+    elif "incomplete=1" in z_info:
+        warn("Native sweep: %s" % z_info)
     else:
         ok("Native sweep: %s" % z_info)
 

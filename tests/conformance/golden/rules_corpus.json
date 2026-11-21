@@ -560,6 +560,7 @@
    },
    "jar_prepended_pe.jar": {
     "messages": [
+     "[FAIL] CWE-506:hidden_native_executable:PE_other_exe:offset_0",
      "[FAIL] CWE-506:jar_native_executable_prepended_to_archive(1: PE)"
     ],
     "status": "FAIL"
@@ -3778,6 +3779,21 @@
     ],
     "rule_id": "CWE-506",
     "rule_name": "jar_native_executable_hidden_under_a_non_native_name(1: PE res/logo.png)",
+    "severity": "HIGH",
+    "tool": "grep-pattern"
+   },
+   {
+    "category": "cwe",
+    "file": "jar_prepended_pe.jar",
+    "line": null,
+    "line_count": 0,
+    "lines": [],
+    "message": "CWE-506:hidden_native_executable:PE_other_exe:offset_0",
+    "references": [
+     "CWE-506"
+    ],
+    "rule_id": "CWE-506",
+    "rule_name": "hidden_native_executable:PE_other_exe:offset_0",
     "severity": "HIGH",
     "tool": "grep-pattern"
    },
@@ -7594,6 +7610,7 @@
     "CWE-506:jar_native_executable_hidden_under_a_non_native_name(1: PE res/logo.png)"
    ],
    "jar_prepended_pe.jar": [
+    "CWE-506:hidden_native_executable:PE_other_exe:offset_0",
     "CWE-506:jar_native_executable_prepended_to_archive(1: PE)"
    ],
    "jar_private_key.jar": [
@@ -8257,7 +8274,7 @@
   "status_background": "#F8D7DA",
   "status_color": "#B02A37",
   "summary": {
-   "fail": 323,
+   "fail": 324,
    "pass": 58,
    "warn": 217
   },

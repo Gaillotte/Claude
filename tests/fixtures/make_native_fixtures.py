@@ -14,8 +14,10 @@ base64 of one) is flagged by its own scanner. `DIR/expect.tsv` lists, for every 
 encoding the finding must name:  <path relative to DIR/hit> TAB <message fragment>.
 """
 import base64
+import bz2
 import gzip
 import io
+import lzma
 import os
 import struct
 import sys
@@ -86,6 +88,14 @@ def zipped(b):
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("inner/readme.txt", "hello\n")
         z.writestr("inner/tool", b)
+    return out.getvalue()
+
+
+def zip_of_stored(b):
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as z:
+        z.writestr("readme", b"stored\n")
+        z.writestr("tool", b)
     return out.getvalue()
 
 
@@ -168,10 +178,10 @@ def build(root):
     put("encoded/c_array_pe.c", "static const unsigned char blob[] = {\n  " + hexarr(pe()) + "\n};\n", "PE_x86_64_exe:hex_array")
     put("encoded/powershell_bytes.ps1.txt", "[Byte[]] $b = " + ", ".join("0x%02X" % x for x in pe()) + "\n", "PE_x86_64_exe:hex_array")
     put("encoded/go_slice.go", "var payload = []byte{" + ", ".join("0x%02x" % x for x in macho()) + "}\n", "MachO_x86_64_exec:hex_array")
-    put("encoded/escaped_hex.py", "payload = b'" + "".join("\\x%02x" % x for x in P) + "'\n", "ELF_x86_64_exec:escaped_hex")
-    put("encoded/escaped_octal.c", "const char *p = \"" + "".join("\\%03o" % x for x in P) + "\";\n", "ELF_x86_64_exec:escaped_octal")
-    put("encoded/spaced_hex.txt", " ".join("%02x" % x for x in P) + "\n", "ELF_x86_64_exec:spaced_hex")
-    put("encoded/spaced_hex_pe.txt", " ".join("%02X" % x for x in pe()) + "\n", "PE_x86_64_exe:spaced_hex")
+    put("encoded/escaped_hex.py", "payload = b'" + "".join("\\x%02x" % x for x in P) + "'\n", "ELF_x86_64_exec:hex")
+    put("encoded/escaped_octal.c", "const char *p = \"" + "".join("\\%03o" % x for x in P) + "\";\n", "ELF_x86_64_exec:escaped_bytes")
+    put("encoded/spaced_hex.txt", " ".join("%02x" % x for x in P) + "\n", "ELF_x86_64_exec:hex")
+    put("encoded/spaced_hex_pe.txt", " ".join("%02X" % x for x in pe()) + "\n", "PE_x86_64_exe:hex")
     put("encoded/decimal_list.py", "payload = bytes([" + ", ".join(str(x) for x in P) + "])\n", "ELF_x86_64_exec:decimal_array")
     put("encoded/decimal_pe.py", "blob = [" + ",".join(str(x) for x in pe()) + "]\n", "PE_x86_64_exe:decimal_array")
     # 6. masked head
@@ -179,6 +189,92 @@ def build(root):
     put("encoded/xor_a7_pe.dat", mask_xor(pe(), 0xA7), "PE_x86_64_exe:masked_bytes")
     put("encoded/add_13.dat", mask_add(P, 13), "ELF_x86_64_exec:masked_bytes")
     put("encoded/xor_macho.dat", mask_xor(macho(), 0x3C), "MachO_x86_64_exec:masked_bytes")
+
+    # 7. owned extensions that are not what they say, build-file names (classify_file reads them before the extension)
+    for name in ("Makefile.so", "Dockerfile.bin", "makefile.exe", "GNUmakefile.dll", "Dockerfile.zip", "Makefile.pdf",
+                 "report.pdf", "x.docx", "y.doc", "z.rtf", "w.tar", "v.gz", "u.jar", "t.xlsx", "s.odt", "r.bz2", "q.xz"):
+        put("deceptive/" + name, P, "hidden_native_executable:ELF_x86_64_exec:offset_0")
+    put("deceptive/b64.doc", b"hello\n" + base64.b64encode(P), "encoded_native_executable:ELF_x86_64_exec:base64")
+    put("deceptive/hex.xls", P.hex().encode(), "encoded_native_executable:ELF_x86_64_exec:hex")
+    put("deceptive/notes.pdf", b"just a text file\n" * 5 + base64.b64encode(P), "encoded_native_executable:ELF_x86_64_exec:base64")
+    put("nested/sub/.git/objects/ab/cdef", P, "hidden_native_executable:ELF_x86_64_exec:offset_0")      # only <root>/.git/objects is skipped
+    put("nested/.git/hooks/pre-commit", P, "hidden_native_executable:ELF_x86_64_exec:offset_0")
+    # 8. the same payloads in the shapes tools and loaders really write
+    PEt = bytearray(pe()); PEt[2:4] = b"\x90\x00"; PEt[4:6] = b"\x03\x00"; PEt[8:10] = b"\x04\x00"; PEt[12:14] = b"\xff\xff"
+    PEt = bytes(PEt)                                                                             # the usual MSVC / MinGW DOS header
+    kp = "encoded_native_executable:PE_x86_64_exe:"
+    ke = "encoded_native_executable:ELF_x86_64_exec:"
+    b64e, b64p = base64.b64encode(P).decode(), base64.b64encode(PEt).decode()
+    put("shapes/b64url_pe.txt", base64.urlsafe_b64encode(PEt).decode(), kp)
+    put("shapes/b64url_macho.txt", base64.urlsafe_b64encode(macho()).decode(), "encoded_native_executable:MachO_x86_64_exec:")
+    put("shapes/b64_yaml_indented.yml", "payload: |\n" + "\n".join("    " + l for l in wrap(b64p, 76).split("\n")) + "\n", kp)
+    put("shapes/b64_hash_prefixed.txt", "\n".join("# " + l for l in wrap(b64e, 60).split("\n")) + "\n", ke)
+    put("shapes/b64_quoted_prefixed.txt", "\n".join("> " + l for l in wrap(b64p, 76).split("\n")) + "\n", kp)
+    put("shapes/b64_space_separated.txt", " ".join(b64e[i:i + 60] for i in range(0, len(b64e), 60)), ke)
+    put("shapes/b64_wrapped8.txt", wrap(b64e, 8), ke)
+    put("shapes/b64_utf16le_bom.txt", b"\xff\xfe" + b64p.encode("utf-16-le"), kp)
+    put("shapes/b64_utf16le_nobom.txt", b64e.encode("utf-16-le"), ke)
+    put("shapes/hex_utf16be.txt", b"\xfe\xff" + P.hex().encode("utf-16-be"), ke)
+    put("shapes/b64_word_before.txt", "x" + b64e, ke)
+    put("shapes/b64_after_100k_zeros_glued.txt", "x" + base64.b64encode(bytes(100000) + P).decode(), ke)
+    put("shapes/od_16_per_line.txt", "\n".join(" " + " ".join("%02x" % x for x in P[i:i + 16]) for i in range(0, len(P), 16)) + "\n", ke)
+    put("shapes/xxd_default.txt", "\n".join("%08x: %s  %s" % (i, " ".join(PEt[j:j + 2].hex() for j in range(i, min(i + 16, len(PEt)), 2)),
+                                                            "".join(chr(c) if 32 <= c < 127 else "." for c in PEt[i:i + 16]))
+                                          for i in range(0, len(PEt), 16)) + "\n", kp)
+    put("shapes/hexdump_c.txt", "\n".join("%08x  %s  %s  |%s|" % (i, " ".join("%02x" % c for c in P[i:i + 8]), " ".join("%02x" % c for c in P[i + 8:i + 16]),
+                                                               "".join(chr(c) if 32 <= c < 127 else "." for c in P[i:i + 16]))
+                                          for i in range(0, len(P), 16)) + "\n", ke)
+    put("shapes/hex_pairs_comma.txt", ", ".join("%02x" % x for x in P), ke)
+    put("shapes/hex_wrapped_indented.txt", "\n".join("    " + h[i:i + 30] for i in range(0, len(h), 30)), ke)
+    put("shapes/hex_comment_prefixed.txt", "\n".join("# " + h[i:i + 60] for i in range(0, len(h), 60)), ke)
+    arr = ["0x%02x" % x for x in P]
+    put("shapes/c_array_offset_comments.c", "\n".join("  " + ", ".join(arr[i:i + 16]) + ",   // +0x%x" % i for i in range(0, len(arr), 16)), ke)   # 1-2 digit tokens in the comments
+    put("shapes/c_array_block_comments.c", "\n".join("  /* 0x%02x */ " % (i & 255) + ", ".join(arr[i:i + 16]) + "," for i in range(0, len(arr), 16)), ke)
+    put("shapes/c_array_utf16le.c", b"\xff\xfe" + ("unsigned char p[] = {" + ", ".join(arr) + "};").encode("utf-16-le"), ke)
+    put("shapes/decimal_utf16be.py", b"\xfe\xff" + ("payload = [" + ", ".join(str(x) for x in P) + "]").encode("utf-16-be"), ke)
+    put("shapes/c_array_8_indent.c", ",\n        ".join(", ".join(arr[i:i + 12]) for i in range(0, len(arr), 12)), ke)
+    put("shapes/c_array_L_suffix.c", ", ".join(a + "L" for a in arr), ke)
+    put("shapes/c_array_u8_suffix.rs", ", ".join(a + "u8" for a in arr), ke)
+    put("shapes/c_array_uint32_le.c", ", ".join("0x%08x" % struct.unpack_from("<I", P + b"\0" * 4, i)[0] for i in range(0, len(P), 4)), ke)
+    put("shapes/c_array_2d.c", "{" + "},\n{".join(", ".join(arr[i:i + 16]) for i in range(0, len(arr), 16)) + "}", ke)
+    put("shapes/json_hex_strings.json", "[" + ", ".join('"%s"' % a for a in arr) + "]", ke)
+    sig = [x - 256 if x > 127 else x for x in PEt]
+    put("shapes/java_signed_bytes.java", "byte[] b = {" + ", ".join(str(x) for x in sig) + "};", kp)
+    import json
+    put("shapes/json_indented_list.json", json.dumps(list(P), indent=2), ke)
+    put("shapes/decimal_sentinel.py", "[999, " + ", ".join(str(x) for x in P) + "]", ke)
+    put("shapes/msfvenom_c.c", "unsigned char buf[] =\n" + "\n".join('"' + "".join("\\x%02x" % x for x in P[i:i + 16]) + '"' for i in range(0, len(P), 16)) + ";\n", ke)
+    put("shapes/python_repr.py", "payload = " + repr(P) + "\n", ke)
+    put("shapes/printf_octal.sh", "printf '" + "".join("\\%03o" % x if not (48 <= x <= 57 or 65 <= x <= 90 or 97 <= x <= 122) else chr(x) for x in P) + "' > /tmp/x\n", ke)
+    tiny = b"\x7fELF\x01\x01\x01\x00" + b"\x00" * 8 + b"\x02\x00\x03\x00" + b"\xeb" * 29
+    put("shapes/tiny_xor.dat", mask_xor(tiny, 0x55), "encoded_native_executable:ELF_x86_exec:masked_bytes")
+    # 9. compressed data inside an encoded blob, read the way loaders read it
+    def zip_of(n, payload, mutate=None):
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for i in range(n):
+                z.writestr("junk%04d" % i, b"junk %d" % i)
+            z.writestr("tool", payload)
+        raw = out.getvalue()
+        return mutate(raw) if mutate else raw
+    kz = "ELF_x86_64_exec:base64_compressed"
+    put("shapes/zip_33_entries.txt", base64.b64encode(zip_of(32, PL)), kz)
+    put("shapes/zip_2000_entries.txt", base64.b64encode(zip_of(2000, PL)), kz)
+    for r in (0, 1, 2):                                                                          # a zip whose length is r mod 3 (a base64 tail group)
+        raw = next(z for z in (zip_of(0, PL + bytes(k)) for k in range(40)) if len(z) % 3 == r)
+        put("shapes/zip_len_mod3_%d.txt" % r, base64.b64encode(raw), kz)
+    put("shapes/zip_prefixed.txt", base64.b64encode(b"HDR!HDR!H" + zip_of(0, PL)), kz)
+    put("shapes/zip_encrypted_first.txt", base64.b64encode(zip_of(1, PL, lambda r: r.replace(b"PK\x03\x04\x14\x00\x00\x00", b"PK\x03\x04\x14\x00\x01\x00", 1))), kz)
+    put("shapes/gzip_second_member.txt", base64.b64encode(gz(b"first member\n") + gz(PL)), kz)
+    bad = bytearray(gz(PL)); bad[-8:-4] = b"\x00\x00\x00\x00"
+    put("shapes/gzip_bad_crc.txt", base64.b64encode(bytes(bad)), kz)
+    put("shapes/gzip_after_header.txt", base64.b64encode(b"HDR!" + gz(PL)), kz)
+    put("shapes/gzip_after_40mib_zeros.txt", base64.b64encode(gz(bytes(40 * 1024 * 1024) + PL)), kz)
+    put("shapes/zlib_bad_adler.txt", base64.b64encode(zlib.compress(PL)[:-4] + b"\x00\x00\x00\x00"), kz)
+    put("shapes/bz2_blob.txt", base64.b64encode(bz2.compress(PL)), kz)
+    put("shapes/xz_blob.txt", base64.b64encode(lzma.compress(PL)), kz)
+    put("shapes/hex_of_zip.txt", zip_of(3, PL).hex(), "ELF_x86_64_exec:hex_compressed")
+    put("shapes/zip_stored_member.txt", base64.b64encode(zip_of_stored(PL)), "ELF_x86_64_exec:base64")
 
     clean = {}
     text = b"The ELF format and the MZ header are documented in elf.h and pe.go.\n" * 40
@@ -213,6 +309,30 @@ def build(root):
     clean["data/tiny.txt"] = b"MZ"
     clean["data/empty.txt"] = b""
     clean["src/many_mz.txt"] = b"MZ" * 4000                                                      # a candidate every two bytes
+    clean["data/elf_header_hexdump_excerpt.txt"] = (b"Example output of hexdump -C on an ELF file:\n\n" + "\n".join(
+        "%08x  %s  %s  |%s|" % (i, " ".join("%02x" % c for c in P[i:i + 8]), " ".join("%02x" % c for c in P[i + 8:i + 16]),
+                                "".join(chr(c) if 32 <= c < 127 else "." for c in P[i:i + 16])) for i in range(0, 32, 16)).encode() + b"\n")   # a manual's two lines
+    clean["data/elf_header_base64_excerpt.txt"] = b"The first 40 bytes, base64: " + base64.b64encode(P[:40])
+    clean["data/zip_signature_constants.py"] = (b"# source that talks about zip files: the escapes decode to the signature of a local file header, followed by more text\n" +
+                                                 b"".join(b"SIG%d = b'PK\\x03\\x04'  # local file header, then whatever comes next in the file \\x01\\x02\\x03\\x04\n" % i for i in range(30)))
+    clean["data/zip_header_garbage.py"] = (b"# the escapes decode to a zip signature, then text that reads as a method nobody can decode\n" +
+                                            b"".join(b"S%d = b'PK\\x03\\x04abdd\\x62\\x00 and then some more text'\n" % i for i in range(30)))
+    clean["data/uuids_and_identifiers.txt"] = (b"550e8400-e29b-41d4-a716-446655440000\nvery_long_snake_case_identifier_that_goes_on_and_on_and_on_forever\n"
+                                                b"a-very-long-kebab-case-name-for-a-css-class-that-never-seems-to-end-ever\n") * 6
+    clean["data/package_lock_integrity.json"] = ('{"packages": {' + ",".join('"node_modules/p%d": {"integrity": "sha512-%s"}' % (i, base64.b64encode(os.urandom(0) + bytes((i * 13 + j * 7) & 255 for j in range(64))).decode()) for i in range(20)) + '}}').encode()
+    clean["data/xxd_of_text.txt"] = "\n".join("%08x: %s  %s" % (i, " ".join(b"The quick brown fox jumps over the lazy dog, twice over.   "[j:j + 2].hex() for j in range(i, min(i + 16, 56), 2)), "text") for i in range(0, 56, 16)).encode() * 3
+    clean["data/zip_of_text.b64"] = base64.b64encode(zipped(b"just text, nothing to run " * 20))
+    clean["data/gzip_of_text.b64"] = base64.b64encode(gz(b"just text, nothing to run " * 50))
+    clean["data/utf16_prose.txt"] = b"\xff\xfe" + ("The quick brown fox jumps over the lazy dog. " * 30).encode("utf-16-le")
+    clean["data/numbers_with_gate_lookalike.csv"] = ("\n".join(",".join(str((i * 7 + j * 13) % 256) for j in range(28)) for i in range(300)) + "\n202,254,186,190,1,2,3\n127,69,76,70,9,9,9,9\n").encode()
+    clean["data/java_signed_ascii.java"] = ("byte[] b = {" + ", ".join(str(c) for c in b"plain ascii text as a signed byte array literal") + "};").encode()
+    clean["data/regex_escapes.py"] = b"import re\nr = re.compile(r'\\d+\\s*\\x')\ns = '\\xZZ and \\d and \\q'\n" * 5
+    clean["data/crc_table_words.h"] = ("static const unsigned int t[] = {" + ", ".join("0x%08x" % ((i * 2654435761) & 0xFFFFFFFF) for i in range(256)) + "};").encode()
+    clean["data/hexdump_of_text.txt"] = "\n".join("%08x  %s  |%s|" % (i, " ".join("%02x" % c for c in b"hello world, plain text only, sixteen!!"[i:i + 16]), "hello world") for i in range(0, 32, 16)).encode()
+    clean[".git/objects/ab/cdef"] = P                                                          # only <root>/.git/objects is skipped
+    clean["owned/real.pdf"] = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n%%EOF\n"
+    clean["owned/real.tar"] = b"a" * 257 + b"ustar" + b"\x00" * 300
+    clean["owned/real.gz"] = gz(b"plain text, nothing to run " * 10)
     # a file with an owned extension keeps its own scanner's verdict: the sweep does not read it
     clean["owned/lib.so"] = P
     clean["owned/tool.exe"] = pe()

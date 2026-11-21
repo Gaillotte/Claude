@@ -4225,6 +4225,8 @@ scan_native_sweep() {
     if (( rc != 0 )) || [[ -z "$z_count" || "$z_count" != "$got" ]]; then
         warn "native sweep: the helper did not finish (exit ${rc}, ${got} record(s), announced '${z_count}')"
         record_fail_hard "$SCAN_DIR" "engine:native_scan_failed"
+    elif [[ "$z_info" == *"incomplete=1"* ]]; then
+        warn "Native sweep: ${z_info}"
     else
         ok "Native sweep: ${z_info}"
     fi

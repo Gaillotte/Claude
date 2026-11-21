@@ -4199,6 +4199,14 @@ PY
     assert_eq "" "$(n_miss "$NW/hit.out" encoded/hex)$(n_miss "$NW/hit.out" encoded/c_array)$(n_miss "$NW/hit.out" encoded/powershell)$(n_miss "$NW/hit.out" encoded/go_slice)$(n_miss "$NW/hit.out" encoded/escaped)$(n_miss "$NW/hit.out" encoded/spaced)$(n_miss "$NW/hit.out" encoded/decimal)" \
         "native: hex (lower, upper wrapped, of gzip), C, PowerShell and Go byte arrays, \\x and octal escapes, spaced hex, decimal lists"
     assert_eq "" "$(n_miss "$NW/hit.out" encoded/xor)$(n_miss "$NW/hit.out" encoded/add)" "native: the head XOR-ed or ADD-ed with a single byte (ELF, PE, Mach-O)"
+    assert_eq "" "$(n_miss "$NW/hit.out" deceptive/)" "native: a file whose extension has a scanner of its own but whose content is not that format (a raw ELF named .pdf .docx .doc .rtf .tar .gz .jar .xlsx .odt .bz2 .xz, base64 or hex text named .doc .xls .pdf) is read like any other; so is Makefile.so, Dockerfile.bin, makefile.exe, GNUmakefile.dll, Dockerfile.zip (the build-file scanners get a file named like that before its extension is read)"
+    assert_eq "" "$(n_miss "$NW/hit.out" nested/)" "native: only <root>/.git/objects is skipped: a nested .git/objects and .git/hooks are examined"
+    assert_eq "" "$(n_miss "$NW/hit.out" shapes/b64)$(n_miss "$NW/hit.out" shapes/hex)$(n_miss "$NW/hit.out" shapes/od)$(n_miss "$NW/hit.out" shapes/xxd)$(n_miss "$NW/hit.out" shapes/tiny)" \
+        "native: base64 and hex as tools and loaders write them: base64url, YAML-indented, '# ' and '> ' prefixed, space-separated, wrapped at 8, UTF-16 (BOM and none, LE and BE), a word glued before 100 KB of zeros, od -An -tx1, xxd and hexdump -C dumps with offsets and gutters, hex pairs joined by commas, indented or comment-prefixed hex, a 45-byte ELF"
+    assert_eq "" "$(n_miss "$NW/hit.out" shapes/c_array)$(n_miss "$NW/hit.out" shapes/json)$(n_miss "$NW/hit.out" shapes/java)$(n_miss "$NW/hit.out" shapes/decimal)$(n_miss "$NW/hit.out" shapes/msfvenom)$(n_miss "$NW/hit.out" shapes/python)$(n_miss "$NW/hit.out" shapes/printf)" \
+        "native: byte arrays as tools write them: // offset comments, 8-space indents, L and u8 suffixes, uint32 words, rows, JSON strings, Java signed byte[], json.dumps(indent=2), a 999 sentinel, msfvenom -f c, repr(bytes), printf with octal escapes"
+    assert_eq "" "$(n_miss "$NW/hit.out" shapes/zip)$(n_miss "$NW/hit.out" shapes/gzip)$(n_miss "$NW/hit.out" shapes/zlib)$(n_miss "$NW/hit.out" shapes/bz2)$(n_miss "$NW/hit.out" shapes/xz)" \
+        "native: compressed data inside an encoded blob, read as a loader reads it: a zip with 33 or 2000 entries, of every length mod 3, behind a 9-byte prefix, with an encrypted first member, a stored member; gzip with a second member, a bad CRC, behind a header, after 40 MiB of zeros; zlib with a bad checksum; bzip2; xz"
     n_run "$NF/clean" > "$NW/clean.out"
     assert_eq "0" "$(grep -c '^[FES]|' "$NW/clean.out" || true)" "native: the near-misses are not reported (text about ELF and MZ, elf.h, a magic table, random bytes, a PNG, base64 of text or of a PNG or random bytes, hex or arrays or escapes of plain text, a bare magic with a bad header, a PE pointer to nothing or past the end, a Java class, wasm, pyc, 4000 MZ in a row)"
     assert_contains "$(tail -1 "$NW/clean.out")" "rc=0" "native: the helper exits 0"
@@ -4229,13 +4237,13 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
     # n_native: the native findings of the last report, one per line as file|message|severity, sorted
-    n_native() { n_py "$NREP" "'\n'.join(sorted('%s|%s|%s' % (f['file'], f['message'], f['severity']) for f in d['findings'] if 'native_executable' in f['message'] or f['message'].startswith('engine:native')))"; }
+    n_native() { n_py "$NREP" "'\n'.join(sorted('%s|%s|%s' % (f['file'], f['message'], f['severity']) for f in d['findings'] if f['message'].startswith(('CWE-506:hidden_native_executable', 'CWE-506:encoded_native_executable')) or f['message'].startswith('engine:native')))"; }
     NHIT="${SCRATCH}/n_hitrepo"; rm -rf "$NHIT"; cp -r "$NF/hit" "$NHIT"
     for NE in bash python; do
         n_scan "$NE" "$NHIT" "n_hit_$NE"
         assert_eq "FAIL" "$(n_py "$NREP" "d['verdict']")" "native [$NE]: the repository of hidden executables fails"
-        assert_eq "$N_HITS" "$(n_py "$NREP" "sum(1 for f in d['findings'] if 'native_executable' in f['message'])")" "native [$NE]: ${N_HITS} native findings, one per file"
-        assert_eq "1" "$(n_py "$NREP" "len({f['severity'] for f in d['findings'] if 'native_executable' in f['message']} - {'HIGH'}) + 1")" "native [$NE]: every native finding is HIGH"
+        assert_eq "$N_HITS" "$(n_py "$NREP" "sum(1 for f in d['findings'] if f['message'].startswith(('CWE-506:hidden_native_executable', 'CWE-506:encoded_native_executable')))")" "native [$NE]: ${N_HITS} native findings, one per file"
+        assert_eq "1" "$(n_py "$NREP" "len({f['severity'] for f in d['findings'] if f['message'].startswith(('CWE-506:hidden_native_executable', 'CWE-506:encoded_native_executable'))} - {'HIGH'}) + 1")" "native [$NE]: every native finding is HIGH"
         n_native > "${NW}/native_hit_${NE}.txt"
     done
     assert_eq "$(cat "${NW}/native_hit_bash.txt")" "$(cat "${NW}/native_hit_python.txt")" "native: the shell engine and the Python engine report exactly the same findings"
@@ -4249,11 +4257,14 @@ print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
     # the repository's own allowlist and --min-severity cannot turn a hidden executable into a pass
     NAL="${SCRATCH}/n_allow"; rm -rf "$NAL"; mkdir -p "$NAL"
     cp "$NF/hit/renamed/blob.dat" "$NAL/blob.dat"; printf 'plain readme\n' > "$NAL/README.md"
-    printf '[{"rule":"CWE-506","path":"blob.dat","reason":"trust me"},{"rule":"hidden_native_executable","path":"blob.dat","reason":"trust me"}]\n' > "$NAL/.transit-allow.json"
+    cp "$NF/hit/renamed/blob.dat" "$NAL/z.docx"; cp "$NF/hit/renamed/blob.dat" "$NAL/report.pdf"
+    printf '[{"rule":"CWE-506","path":"blob.dat","reason":"trust me"},{"rule":"hidden_native_executable","path":"blob.dat","reason":"trust me"},{"rule":"CWE-506","path":"z.docx","reason":"trust me"},{"rule":"CWE-506","path":"report.pdf","reason":"trust me"}]\n' > "$NAL/.transit-allow.json"
     for NE in bash python; do
         n_scan "$NE" "$NAL" "n_allow_$NE" MIN_SEVERITY=critical
         assert_eq "FAIL" "$(n_py "$NREP" "d['verdict']")" "native [$NE]: an allowlist entry in the repository, and --min-severity critical, do not hide it"
         assert_contains "$(n_native)" "blob.dat|CWE-506:hidden_native_executable:ELF_x86_64_exec:offset_0|HIGH" "native [$NE]: …the finding is still recorded as HIGH"
+        assert_contains "$(n_native)" "z.docx|CWE-506:hidden_native_executable:ELF_x86_64_exec:offset_0|HIGH" "native [$NE]: …also an ELF named .docx (the office scanner's own finding can be allowlisted; this one cannot)"
+        assert_contains "$(n_native)" "report.pdf|CWE-506:hidden_native_executable:ELF_x86_64_exec:offset_0|HIGH" "native [$NE]: …and one named .pdf"
     done
 
     # repository text never reaches a message: names that look like severity markers, line breaks, a terminal escape, bytes that are not UTF-8
@@ -4266,8 +4277,8 @@ print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
     for NE in bash python; do
         n_scan "$NE" "$NHO" "n_hostile_$NE"
         assert_eq "FAIL" "$(n_py "$NREP" "d['verdict']")" "native [$NE]: hostile names: the repository fails"
-        assert_eq "10" "$(n_py "$NREP" "sum(1 for f in d['findings'] if 'native_executable' in f['message'])")" "native [$NE]: …all 10 files are reported (':low:' and ':INFO:' in a name do not downgrade the finding)"
-        assert_eq "1" "$(n_py "$NREP" "len({(f['severity'], f['message']) for f in d['findings'] if 'native_executable' in f['message']})")" "native [$NE]: …each is HIGH with the same message: the name is not in it"
+        assert_eq "10" "$(n_py "$NREP" "sum(1 for f in d['findings'] if f['message'].startswith(('CWE-506:hidden_native_executable', 'CWE-506:encoded_native_executable')))")" "native [$NE]: …all 10 files are reported (':low:' and ':INFO:' in a name do not downgrade the finding)"
+        assert_eq "1" "$(n_py "$NREP" "len({(f['severity'], f['message']) for f in d['findings'] if f['message'].startswith(('CWE-506:hidden_native_executable', 'CWE-506:encoded_native_executable'))})")" "native [$NE]: …each is HIGH with the same message: the name is not in it"
         assert_eq "0" "$(grep -c $'\033\\]0;pwned' "${NW}/out_n_hostile_${NE}.txt" || true)" "native [$NE]: …and the console shows no terminal escape from a file name"
     done
 
@@ -4280,7 +4291,7 @@ print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
     assert_contains "$(grep '^Z|' "$NW/flood.out")" "|201|" "native: …and the helper announces 201 records"
     for NE in bash python; do
         n_scan "$NE" "$NFL" "n_flood_$NE"
-        assert_eq "201" "$(n_py "$NREP" "sum(1 for f in d['findings'] if 'native_executable' in f['message'])")" "native [$NE]: the flood is 201 findings in the report"
+        assert_eq "201" "$(n_py "$NREP" "sum(1 for f in d['findings'] if f['message'].startswith(('CWE-506:hidden_native_executable', 'CWE-506:encoded_native_executable')))")" "native [$NE]: the flood is 201 findings in the report"
     done
 
     # the time budget and a file that cannot be read: not looking must never read as clean
@@ -4291,6 +4302,7 @@ print(eval(sys.argv[2]))" "$@" 2>/dev/null || echo "unreadable"; }
         n_scan "$NE" "$NAL" "n_budget_$NE" NATIVE_TIME_BUDGET_S=0
         assert_eq "FAIL" "$(n_py "$NREP" "d['verdict']")" "native [$NE]: a budget of 0 seconds fails the run"
         assert_contains "$(n_native)" "engine:native_scan_incomplete:time_budget" "native [$NE]: …as engine:native_scan_incomplete"
+        assert_contains "$(tr -d '\033' < "${NW}/out_n_budget_${NE}.txt" | grep 'Native sweep:')" "[WARN]" "native [$NE]: …and the console line for an incomplete sweep is a warning, not [OK]"
     done
     if [[ "$(id -u)" != "0" ]]; then
         NUN="${SCRATCH}/n_unreadable"; rm -rf "$NUN"; mkdir -p "$NUN"; cp "$NP" "$NUN/secret.dat"; chmod 000 "$NUN/secret.dat"
@@ -4375,7 +4387,7 @@ PY
     for NE in bash python; do
         n_scan "$NE" "$NST" "n_stale_$NE"
         assert_eq "[(2, [2])]" "$(n_py "$NREP" "[(f['line'], f['lines']) for f in d['findings'] if f['message'].startswith('CWE-22:path_traversal_encoded')]")" "native [$NE]: (control) the traversal rule has its line in the same file"
-        assert_eq "[(None, [])]" "$(n_py "$NREP" "[(f['line'], f['lines']) for f in d['findings'] if 'native_executable' in f['message']]")" "native [$NE]: …and the native finding of that file carries no line"
+        assert_eq "[(None, [])]" "$(n_py "$NREP" "[(f['line'], f['lines']) for f in d['findings'] if f['message'].startswith(('CWE-506:hidden_native_executable', 'CWE-506:encoded_native_executable'))]")" "native [$NE]: …and the native finding of that file carries no line"
     done
 
     # end to end through the launcher: a native file under node_modules used to ship in the approved archive; now the run fails and nothing ships
@@ -4388,6 +4400,58 @@ PY
     assert_eq "0" "$RUN_EXIT" "native: the same repository without the executable passes"
     assert_eq "1" "$(ls "${RUN_WORK}/out"/*.zip 2>/dev/null | wc -l | tr -d ' ')" "native: …and its archive is produced"
 
+    # the first hit by offset is the finding (the offset was compared with a buffer-relative one after the first chunk)
+    NOF="${SCRATCH}/n_offset"; rm -rf "$NOF"; mkdir -p "$NOF"
+    python3 - "$NOF" "${FIXTURES}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[2])
+import make_native_fixtures as F
+open(sys.argv[1] + "/big.txt", "wb").write(b"x" * 2200000 + F.elf() + b"y" * 500 + F.pe())
+PY
+    assert_contains "$(n_run "$NOF")" "F|big.txt|CWE-506:hidden_native_executable:ELF_x86_64_exec:offset_2200000" "native: an ELF before a PE after the first 2 MB chunk is reported as the ELF, at its offset"
+    # a directory tree 1500 levels deep (a recursive walk dies at about 1000): the findings above and below are both reported
+    NDP="${SCRATCH}/n_deep"; rm -rf "$NDP"; mkdir -p "$NDP"
+    python3 - "$NDP" "${FIXTURES}" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[2])
+import make_native_fixtures as F
+root = sys.argv[1]
+open(root + "/top.dat", "wb").write(F.elf())
+cur = os.open(root, os.O_RDONLY)
+for _ in range(1500):
+    os.mkdir("d", dir_fd=cur)
+    nxt = os.open("d", os.O_RDONLY, dir_fd=cur)
+    os.close(cur)
+    cur = nxt
+fd = os.open("bottom.dat", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=cur)
+os.write(fd, F.elf())
+os.close(fd)
+os.close(cur)
+PY
+    NDO=$(n_run "$NDP")
+    assert_eq "2" "$(printf '%s\n' "$NDO" | grep -c '^F|' || true)" "native: a tree 1500 levels deep is walked to the bottom (both ELF files reported)"
+    assert_contains "$NDO" "incomplete=0" "native: …and the run is complete"
+    # legitimate large data files must not cost gigabytes (a regex run over a 30 MB list of numbers held 2 to 4 GB)
+    NMEM="${SCRATCH}/n_mem"; rm -rf "$NMEM"; mkdir -p "$NMEM"
+    python3 -c "
+open('$NMEM/ones.txt', 'wb').write(b'1,' * 8000000)
+open('$NMEM/spaced.txt', 'wb').write(b'7f 45 ' + b'41 ' * 8000000)
+open('$NMEM/octal.txt', 'wb').write((chr(92) + '101').encode() * 8000000)
+open('$NMEM/hexarr.txt', 'wb').write(b'0x01,' * 6000000)"
+    NPEAK=$(python3 -I -c "
+import resource, subprocess, sys
+subprocess.run([sys.executable, '-I', '$NHELPER', '$NMEM'], stdout=subprocess.DEVNULL, timeout=300)
+print(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // 1024)" 2>/dev/null || echo 99999)
+    if (( NPEAK < 400 )); then ok_test "native: 16 to 32 MB data files full of numbers, hex pairs, octal escapes and 0x tokens are swept in ${NPEAK} MB"; else fail_test "native: large data files stay bounded in memory" "peak ${NPEAK} MB"; fi
+    # an unreadable limit is a finding: a decoded blob that expands past the cap is an E record, never a quiet pass
+    NDL="${SCRATCH}/n_declimit"; rm -rf "$NDL"; mkdir -p "$NDL"
+    python3 -c "
+import base64, gzip, io
+o = io.BytesIO(); g = gzip.GzipFile(fileobj=o, mode='wb', mtime=0); g.write(bytes(300 * 1024 * 1024)); g.close()
+open('$NDL/bomb.txt', 'wb').write(base64.b64encode(o.getvalue()))"
+    assert_contains "$(n_run "$NDL")" "E|bomb.txt|engine:native_scan_incomplete:decode_limit" "native: a blob that decompresses to more than 256 MiB is an E record (a gzip bomb is not skipped quietly)"
+    # an invalid time budget does not reset the other variable and does not disable the budget
+    assert_eq "5" "$(NATIVE_TIME_BUDGET_S=nan NATIVE_MAX_FINDINGS=5 n_run "$NFL" | grep -c '^F|' || true)" "native: NATIVE_TIME_BUDGET_S=nan is the default and leaves NATIVE_MAX_FINDINGS alone"
     # a sparse file of 600 MB: read to the end without trouble
     truncate -s 600M "$NBD/sparse.dat"
     NSPARSE=$( { TIMEFORMAT=%R; time n_run "$NBD" >/dev/null; } 2>&1 )

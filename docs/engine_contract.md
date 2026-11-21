@@ -348,8 +348,8 @@ tag are joined the same way in `findings_by_file`.
 | exclusions | WARN `transitignore:exclusions_applied(<n> pattern(s))` | on `__global__`, whenever `.transitignore` yields at least one pattern; `<n>` is that number and nothing else from the file is in the message (D-004, J). |
 | symlinks | FAIL `symlink:target_outside_the_scanned_directory`; WARN `symlink:not_followed_its_target_is_not_scanned_through_the_link` | on the link itself, from `find -type l` over the same prune arguments as the file listing; section 8.5 (code; E22). Both go through `record_fail` / `record_warn`, so the FAIL can be allowlisted (rule `symlink` or `target_outside_the_scanned_directory`, path the link's relative path) and lowered by `--min-severity` like any other. |
 | the scan itself (`engine:`) | FAIL `engine:nothing_scanned`, FAIL `engine:file_listing_failed`, FAIL `engine:search_incomplete` | no detail segment; `engine:nothing_scanned` and `engine:file_listing_failed` on `__global__`, `engine:search_incomplete` on the file whose search could not finish, once per file. **Never allowlisted and never lowered by `--min-severity`** (section 6.2). Section 8 says when each is recorded. The Python engine adds further `engine:<kind>[:<detail>]` messages for its own failures (a scanner that raised, a file that could not be read, an unlistable directory, a time budget); they follow the same rules and are listed in `docs/python_engine_design.md` section 8.3. |
-| native sweep (section 8.9) | FAIL `CWE-506:hidden_native_executable:<kind>:offset_<N>`, FAIL `CWE-506:encoded_native_executable:<kind>:<encoding>[_compressed]`, FAIL `CWE-506:hidden_native_executable:more_files_not_listed:count_<N>` | built by `transit/scanners/native.py` from closed tables and integers, never from repository text. `<kind>` is `ELF_<arch>_<exec\|shared\|object\|core>`, `PE_<arch>_<exe\|dll>`, `MachO_<arch>_<type>` or `MachO_fat`; `<encoding>` is `base64`, `hex`, `hex_array`, `escaped_hex`, `escaped_octal`, `spaced_hex`, `decimal_array` or `masked_bytes`. Recorded with `record_fail_hard`: no allowlist, no `--min-severity`. The first token is `CWE-506` and the structured record is `grep-pattern` / `cwe` with no line (the helper searches the file itself). |
-| native sweep, the scan itself | FAIL `engine:native_scan_incomplete:<time_budget\|unreadable_file\|unreadable_directory>`, FAIL `engine:native_scan_failed` | `…incomplete` on the file, or on the scanned directory for the budget and for a directory; `…failed` on the scanned directory when the helper exits non-zero, cannot be started, ends without its closing record or announces another record count. Both with `record_fail_hard`. |
+| native sweep (section 8.9) | FAIL `CWE-506:hidden_native_executable:<kind>:offset_<N>`, FAIL `CWE-506:encoded_native_executable:<kind>:<encoding>[_compressed]`, FAIL `CWE-506:hidden_native_executable:more_files_not_listed:count_<N>` | built by `transit/scanners/native.py` from closed tables and integers, never from repository text. `<kind>` is `ELF_<arch>_<exec\|shared\|object\|core>`, `PE_<arch>_<exe\|dll>`, `MachO_<arch>_<type>` or `MachO_fat`; `<encoding>` is `base64`, `hex`, `hex_array`, `decimal_array`, `escaped_bytes` or `masked_bytes`, optionally followed by `_compressed`. Recorded with `record_fail_hard`: no allowlist, no `--min-severity`. The first token is `CWE-506` and the structured record is `grep-pattern` / `cwe` with no line (the helper searches the file itself). |
+| native sweep, the scan itself | FAIL `engine:native_scan_incomplete:<time_budget\|unreadable_file\|unreadable_directory\|decode_limit\|decode_unsupported\|memory\|internal_error>`, FAIL `engine:native_scan_failed` | `…incomplete` on the file, or on the scanned directory for the budget and for a directory; `…failed` on the scanned directory when the helper exits non-zero, cannot be started, ends without its closing record or announces another record count. Both with `record_fail_hard`. |
 | allowlist | `ALLOWED:<original message> (reason: <reason>)` | WARN, replaces the FAIL (section 6.2). |
 | min-severity | `LOW_SEV(below --min-severity <MIN_SEVERITY>):<original message>` | WARN, replaces the FAIL; `<MIN_SEVERITY>` is printed as given, not normalised (section 6.3). |
 
@@ -775,39 +775,65 @@ the shell, `python3 -I` in the Python engine) and records what it prints. Nothin
 
 * **Protocol.** stdout is NUL-terminated triples `TAG PATH MESSAGE`. `F` a finding, `E` the scan could not finish, `S` the findings
   beyond the cap; each is `record_fail_hard` on `SCAN_DIR/PATH` (`PATH` of `.` is `SCAN_DIR`). `Z` is always last: its `PATH` is the
-  number of `F`, `E` and `S` triples before it and its message is `files=<n> bytes=<n> incomplete=<0|1>`, printed as the line
-  `Native sweep: …`. An exit status other than 0, a missing `Z` or a different count is `engine:native_scan_failed` on `SCAN_DIR`
-  (the records already read stay recorded). The helper's stderr is discarded. The output goes to a file, never a variable: a path can
-  hold anything but NUL, and `$(…)` would drop the NULs.
-* **What is examined.** Every regular file of the tree, found by the helper itself with `os.walk`: no directory pruned (the built-in
-  exclusions do not apply), `.transitignore` does not apply, diff mode does not apply, a symbolic link is not followed, a FIFO or device
-  is not opened. Skipped: `.git/objects`, the `--skip` directory when it lies below the scan root, files under 4 bytes, and files whose
-  extension (lower-cased, after the last dot of the base name) is one of `so dll dylib exe elf bin jar war ear aar`, the office types,
-  `rtf pdf zip tar gz tgz bz2 xz`: those keep the verdict of `scan_binary`, `scan_jar`, `scan_office`, `scan_pdf` and `scan_archive`.
-  The order is fixed (sorted names, directories before the files below them), so both engines record in the same order.
+  number of `F`, `E` and `S` triples before it and its message is `files=<n> bytes=<n> incomplete=<0|1>` (`incomplete=1` whenever an
+  `E` was recorded), printed as the line `Native sweep: …`, an `[OK]` line when complete and a `[WARN]` line otherwise. An exit status
+  other than 0, a missing `Z` or a different count is `engine:native_scan_failed` on `SCAN_DIR` (the records already read stay
+  recorded). The helper's stderr is discarded. The output goes to a file, never a variable: a path can hold anything but NUL, and
+  `$(…)` would drop the NULs.
+* **What is examined.** Every regular file of the tree, found by the helper itself with an iterative `os.scandir` walk: no directory
+  pruned (the built-in exclusions do not apply), `.transitignore` does not apply, diff mode does not apply, a symbolic link is not
+  followed, a FIFO or device is not opened. Skipped: `<root>/.git/objects` (only that one: a nested `.git/objects` is read, because
+  `fetch_repo.sh` removes only the root `.git` and the archive ships the rest), the `--skip` directory when it lies below the scan
+  root, files under 4 bytes, and the files **their owner reads**. The order is fixed (the files of a directory by name, then its
+  subdirectories by name), so both engines record in the same order.
+* **Ownership is decided by content, not by name alone.** The owner of an extension reads a file when its content is what the
+  extension says: `so dll dylib exe elf bin` always (`scan_binary` fails them on the extension); `zip jar war ear aar`, the OOXML and
+  OpenDocument types, when the file starts with `PK`; `doc dot xls xlt xla ppt pot pps ppa` with a zip, OLE2 or RTF start; `rtf` with
+  `{\rtf`; `pdf` with `%PDF-` in the first 1024 bytes; `gz tgz` with `1f 8b`, `bz2` with `BZh`, `xz` with its magic, `tar` with `ustar` at
+  257. The flat OpenDocument types are text and not owned. A name that starts with `Dockerfile`, `Makefile`, `makefile` or `GNUmakefile`
+  is never owned by an extension: `classify_file` dispatches those names to the build-file scanners before it reads the extension
+  (`Makefile.so`). A file that is not what its extension claims (a raw ELF named `.pdf`, base64 named `.doc`) is read here, and its
+  finding cannot be allowlisted; the owner's findings keep their allowlist behaviour. A real container with a payload appended or
+  embedded is the owner's.
 * **Step 1, every file.** The whole file is read in 2 MiB chunks that overlap by 64 bytes; a header is judged only when 64 bytes of it
   are in hand, or at the end of the file; a PE reads `PE\0\0` with `pread` wherever `e_lfanew` points. ELF is the magic, a type 1..4 and a
   machine 1..511 in either byte order (the kernel ignores every other field; measured by running `/usr/bin/true` with each field
   broken). PE is `MZ`, `e_lfanew` in `[4, size-24]`, `PE\0\0` there. Mach-O thin is one of four magics with a known CPU, file type 1..12,
   1..65535 load commands that fit in the file; fat is `CAFEBABE` or `CAFEBABF` with 1..44 architectures, a known CPU, an offset inside
-  the file and a thin magic at that offset (the class-file collision is excluded by the count). The first hit by offset is the finding.
-  The first 4 KB under a single-byte XOR or ADD is tried last (an O(1) consistency test per magic, then the full test).
-* **Step 2, every file step 1 passed**, after step 1 has finished for all files: base64 / hex runs (a run is at least 64 characters
-  of the alphabet, line breaks allowed inside), `0x` arrays, `\x` and octal escapes, spaced hex and decimal lists (the last two only when
-  the first bytes of a header are present in the data), decoded and given to the step 1 test at any offset of the decoded bytes, one
-  level of gzip, zlib or zip inside. A file up to 32 MiB is decoded whole, a larger one in 8 MiB slices that overlap by 64 KiB.
-  Alignments 1 to 3 of a base64 run are tried on its first 64 KiB (all four on every run of a slice), both parities of a hex run, and
-  the hex stretches of a run that has other letters glued on.
-* **Bounds, all fail-closed.** `NATIVE_TIME_BUDGET_S` is checked per chunk, per file, per run and every 8192 candidate headers (a file of
-  nothing but `MZ` has a candidate every two bytes); reaching it stops the run with the `E` record `engine:native_scan_incomplete:time_budget`
-  after the findings so far. An unreadable file is `…:unreadable_file`, an unreadable directory `…:unreadable_directory`. Findings beyond
-  `NATIVE_MAX_FINDINGS` are counted and listed as one `S`; the budget `E` record is always kept, whatever the cap.
+  the file and a thin magic at that offset (the class-file collision is excluded by the count). The first hit by absolute offset is the
+  finding. The first bytes under a single-byte XOR or ADD are tried last (an O(1) consistency test per magic, then the full test; from
+  20 bytes up).
+* **Step 2, every file step 1 passed**, after step 1 has finished for all files. Each form is a function from the file (or its UTF-16
+  reading, from a byte-order mark or from NULs in every other byte) to one byte stream, and the stream is judged by the step 1 test at
+  any offset and, when it holds compressed data, inside it: **base64** (every byte outside `A-Za-z0-9+/_-=` dropped, `-_` mapped to
+  `+/`, `=` ends a stream, a stream of at least 28 characters is decoded at all four alignments, a partial last group padded);
+  **hex** (every non-hex byte dropped, at least 40 digits, both parities); **dump lines** (`xxd`, `hexdump -C`, `od`: offset and gutter
+  left out, at most 16 bytes a line); **`0x` tokens** (comments stripped with `str.find`, never a lazy regex; 1-2 digit tokens are
+  bytes, 4 and 8 digit tokens 16 and 32 bit words in both byte orders); **decimal lists** (only from a position that holds the first
+  bytes of a header, signed or not, up to 1 MiB of values, at most 32 positions); **escapes** (at least 16 `\xNN` or `\NNN` in the
+  file; adjacent literals joined, then `codecs.escape_decode`, or a regex substitution when a malformed `\x` makes it raise). A file up
+  to 32 MiB is decoded whole, a larger one in 8 MiB slices that overlap by 64 KiB. **A header found in decoded text needs at least
+  64 bytes from its start to the end of the decoded bytes** (`ENC_MIN`).
+* **Compressed data inside a decoded blob**, at any offset, one level deep: gzip (`1f 8b 08`, header parsed, then raw deflate: the CRC
+  and length are not checked, and each member is found by its own magic), zlib (`78 9c|da|01|5e`, then raw deflate: the Adler sum is not
+  checked), zip (every `PK\x03\x04` whose version is at most 63 and whose name holds no control byte: stored, deflate, bzip2 or LZMA
+  members are read from the local header, a size that lies is ignored, an encrypted member is skipped, deflate64 and PPMd are
+  `decode_unsupported`), bzip2 (`BZh` digit `1AY&SY`), xz. Output is streamed in 1 MiB pieces that overlap by 64 bytes; all the streams
+  of one blob may produce 256 MiB, and more is `decode_limit`.
+* **Bounds, all fail-closed.** `NATIVE_TIME_BUDGET_S` is checked per chunk, per file, per run, per decoder piece and every 8192
+  candidate headers (a file of nothing but `MZ` has a candidate every two bytes); reaching it stops the run with the `E` record
+  `engine:native_scan_incomplete:time_budget` after the findings so far, and that record is always kept, whatever the cap. A value
+  that is not a finite non-negative number is the default, for each variable on its own. Other `E` reasons end one file and not the
+  run: `unreadable_file`, `unreadable_directory`, `decode_limit`, `decode_unsupported`, `memory`; an unexpected exception anywhere
+  (a `RecursionError`, say) is `internal_error`, printed after every finding made before it. Findings beyond `NATIVE_MAX_FINDINGS`
+  are counted and listed as one `S`.
 * **Messages are closed.** No byte of the repository, not even its extension, reaches a message: the allowlist reads the first two colon
-  tokens and the classifier reads `:LOW:`-style markers anywhere in it, and a file named `x.:low:` downgraded its own finding in both engines
-  in the first design. Both engines clear the line-resolution state (`LM_FILE` / `G.LM_FILE`) before recording, so no stale grep match is
-  attached to a finding.
-* **Not covered**, each stated in CLAUDE.md: other ciphers and encodings, executables appended to files that keep their own scanner,
-  unopened containers, bytecode, scripts, launchers, shellcode, NE/LE/LX.
+  tokens and the classifier reads `:LOW:`-style markers anywhere in it, and a file named `x.:low:` downgraded its own finding in both
+  engines in the first design. The encodings are `base64`, `hex`, `hex_array`, `decimal_array`, `escaped_bytes`, `masked_bytes`, each
+  with an optional `_compressed`. Both engines clear the line-resolution state (`LM_FILE` / `G.LM_FILE`) before recording, so no stale
+  grep match can be attached to a finding.
+* **Not covered**, each stated in CLAUDE.md: other ciphers and encodings, executables smaller than 64 bytes inside encoded text,
+  payloads appended to or stored in real containers, unopened containers, bytecode, scripts, launchers, shellcode, NE/LE/LX.
 
 ## 9. Security properties the Python engine must preserve
 

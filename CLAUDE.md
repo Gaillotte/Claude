@@ -1191,59 +1191,87 @@ and records what it reports. Both engines run the same program, so they cannot d
   (thin, four magics, plausible header; fat, whose first slice starts with a thin magic, which also separates it from a Java
   class). A bare `MZ` or `\x7fELF` is **not** a finding: `MZ` is in 742 of 102,026 ordinary files and only 2 of them held an
   executable. Static libraries, `.o` and `.ko` are native code and fail.
-- **Encoded forms** (a payload that a loader decodes is the same payload): base64, also wrapped, in a data URI or JSON, with
-  letters glued before it (all four alignments of the first 64 KB of a run); hex (contiguous, with letters glued before it,
-  both parities); byte arrays `0x7f, 0x45, …` (C, Python, Go, PowerShell), `\x7f\x45…` and octal escapes, spaced hex, decimal
-  lists; one level of gzip, zlib or zip inside a decoded blob; and the first 4 KB under a single-byte XOR or ADD. **Decoded,
-  then judged by the same test**: a marker alone is never reported (a bare-marker search hit 25 source files here, `elf.h`
-  and `pe.go` among them, all false).
-- **Scope.** The helper walks the tree itself: no directory is pruned, `.transitignore` and diff mode do not apply, nothing is
-  followed through a symlink, a FIFO is not opened. Left out: `.git/objects` (zlib objects) and `--skip DIR` (the pipeline's own
-  `WORK_DIR`). Files whose extension has a scanner of its own (`.so .dll .dylib .exe .elf .bin`, jar, Office, `.rtf`, `.pdf`,
-  `.zip .tar .gz .tgz .bz2 .xz`) keep that scanner's verdict and are not read: a vendored jar with native libraries stays a WARN.
-- **Findings** are `record_fail_hard`: **the repository's own `.transit-allow.json` and `--min-severity` cannot lower them**.
-  Shown by experiment: an allowlist entry turned the `office_elf.docx` FAIL into a PASS, and a test now pins the opposite.
-  Messages are built by the helper from closed tables, never from repository text (a file named `x.:low:` would otherwise
-  downgrade its own finding): `CWE-506:hidden_native_executable:<kind>:offset_<N>`,
-  `CWE-506:encoded_native_executable:<kind>:<base64|hex|hex_array|escaped_hex|escaped_octal|spaced_hex|decimal_array|masked_bytes>[_compressed]`,
+- **Encoded forms.** Each is turned into a byte stream that **tolerates what is around it** (indentation, `# ` and `> `
+  prefixes, comments, line wrapping at any width, other text), and the stream is judged by the same test at any offset:
+  base64 and base64url (every character outside the alphabet is dropped, `=` ends a stream, all four alignments, a partial last
+  group is padded); hex (every non-hex character dropped, both parities; `xxd`, `hexdump -C` and `od` dumps with their offsets
+  and gutters); `0x` byte arrays and 16/32-bit word arrays (C, Python, Go, PowerShell, JSON strings, with comments and `L`/`u8`
+  suffixes); decimal and signed-decimal lists (Python, JSON, Java `byte[]`, followed from a header's first bytes);
+  `\x` and octal escapes with adjacent literals joined (`repr(bytes)`, `msfvenom -f c`, `printf`); UTF-16 text of any of these
+  (PowerShell's `>`); the first 4 KB under a single-byte XOR or ADD. A decoded blob is also searched, at any offset and one level
+  deep, for **gzip, zlib, zip, bzip2 and xz data, read as a loader reads it**: raw deflate (a bad CRC or Adler sum stops nobody), a
+  zip walked by its local headers (a lying size, an encrypted neighbour, a 2000-entry directory hide nothing), gzip members one
+  after the other. **A marker is never reported without the decoded header behind it, and a decoded header needs at least 64
+  bytes from its start on** (a two-line `hexdump -C` of an ELF header in a manual is not a program).
+- **Scope.** The helper walks the tree itself (iteratively: a tree 1,500 levels deep is fine): no directory pruned,
+  `.transitignore` and diff mode do not apply, nothing is followed through a symlink, a FIFO is not opened. Left out:
+  `<root>/.git/objects` (zlib objects; a nested `.git/objects` **is** read, because only the root `.git` is removed before the
+  archive is made) and `--skip DIR` (the pipeline's own `WORK_DIR`).
+- **Who owns a file.** A file whose extension has a scanner of its own keeps that scanner's verdict **only when its content is what
+  the extension says**: `.so .dll .dylib .exe .elf .bin` always (`scan_binary` fails them on the extension), and a `.zip .jar .docx
+  .xlsx .odt…` that starts with `PK`, a `.doc .xls .ppt…` with an OLE2, zip or RTF start, a `.rtf` with `{\rtf`, a `.pdf` with
+  `%PDF-`, a `.gz .bz2 .xz` with its magic, a `.tar` with `ustar`. A raw ELF named `report.pdf`, base64 text named `y.doc`, a
+  `.docx` that is plain text, and a **`Makefile.so` or `Dockerfile.zip`** (`classify_file` reads those names before the extension)
+  are read like any other file. A real container with a payload appended to it is its owner's job (see the gaps).
+- **Findings** are `record_fail_hard`: **the repository's own `.transit-allow.json` and `--min-severity` cannot lower them**
+  (shown by experiment: an allowlist entry turned the `office_elf.docx` FAIL into a PASS, and a test now pins the opposite, also for
+  an ELF named `.docx` or `.pdf`). The scanners that own an extension keep their own allowlist behaviour, so an operator who allows
+  a `.so` or a `.zip` by name still can. Messages are built by the helper from closed tables, never from repository text (a file
+  named `x.:low:` would otherwise downgrade its own finding): `CWE-506:hidden_native_executable:<kind>:offset_<N>`,
+  `CWE-506:encoded_native_executable:<kind>:<base64|hex|hex_array|decimal_array|escaped_bytes|masked_bytes>[_compressed]`,
   `<kind>` being `ELF_<arch>_<exec|shared|object|core>`, `PE_<arch>_<exe|dll>`, `MachO_<arch>_<type>` or `MachO_fat`. At most
   `NATIVE_MAX_FINDINGS` (200) are listed, then one `…:more_files_not_listed:count_<N>` (the bash engine pays 60 to 90 ms per FAIL).
 - **Not looking is never a pass.** A helper that exits non-zero, ends without its closing record or announces another record
-  count is `engine:native_scan_failed`; a time budget reached (`NATIVE_TIME_BUDGET_S`, 120 s for the whole run; step 1 over every
-  file completes before the encoded forms start) or a file or directory that cannot be read is
-  `engine:native_scan_incomplete:<time_budget|unreadable_file|unreadable_directory>`. Both are FAILs on the file or `.`. There is
-  no coverage key: a coverage state would have changed all 26 golden reports for nothing the verdict does not already say.
-- **Cost.** About 6 s per GB for the raw bytes and 30 to 40 s per GB with the encoded forms: this host's `/usr` (80k files, 4.3 GB)
-  took 140 s, so a multi-gigabyte local scan needs `NATIVE_TIME_BUDGET_S` raised; a repository at the 500 MB fetch limit takes
-  about 20 s.
+  count is `engine:native_scan_failed`. Everything else the helper could not finish is `engine:native_scan_incomplete:<reason>`, a
+  FAIL on the file (or on `.`) that never stops the other files: `time_budget` (`NATIVE_TIME_BUDGET_S`, 120 s for the whole run;
+  step 1 over every file completes before the encoded forms start), `unreadable_file`, `unreadable_directory`, `decode_limit` (a
+  decoded blob that decompresses to more than 256 MiB), `decode_unsupported` (a plausible zip member stored with deflate64 or PPMd),
+  `memory`, `internal_error` (the findings found so far are still reported). There is no coverage key: it would have changed all
+  26 golden reports for nothing the verdict does not already say. The console line is a warning, not `[OK]`, when anything was
+  unfinished.
+- **Cost.** About 15 to 20 s per GB with everything on (this host: 4.3 GB in 65 s, 165,000 files and 8 GB in under 3 minutes),
+  double that when the machine is shared. A repository at the 500 MB fetch limit takes about 10 s; a multi-gigabyte local scan
+  may need `NATIVE_TIME_BUDGET_S` raised. Memory is bounded: a 30 MB list of numbers, 24 MB of hex pairs or 32 MB of octal escapes
+  peak below 125 MB (the first version held 1.5 to 3.8 GB: regex runs over one gigantic match).
 
-**Calibration.** 165,338 real files on this host (`/usr /opt /etc /var /home /root /srv`, 8 GB), no error and no incomplete run:
-2,320 findings, of which the 2,143 at offset 0 are all ELF, PE or Mach-O according to `file` (0 differ), and the other 177 each
-hold a real executable (ELF objects in `.a` and `.rlib` archives, the JDK `lib/modules`, a PHAR with a PE, CMake's `.vsmacros`
-with a PE, Go's `*.base64` and hex-array test data). Fixtures: 89 hidden executables found with the expected kind and encoding,
-34 near-misses (text about `MZ`, `elf.h`, a magic table, base64 of text or of a PNG, arrays of ASCII, a PE pointer to nothing, a
-fat header with no slice, a Java class, wasm, 4,000 `MZ` in a row) not reported. Mutation-tested: 15 mutations of the helper
-(a stricter ELF ident, no `pread` for a far `e_lfanew`, one base64 alignment, one hex parity, no inflate, no owned extensions, no
-little-endian Mach-O marker, a header judged before its window is in hand, no masked head, `.git/objects` read, no cap, the
-extension in the message, no thin-slice check for a fat header, no `PE\0\0` check, no budget check) each turn an assertion red;
-using `record_fail` instead of `record_fail_hard` turns the allowlist assertion red in both engines. One real defect came from the
-tests: a Python precedence slip (`data[0] & 0x0F == 8` is `data[0] & False`) made base64 of zlib invisible until a fixture asked.
+**Calibration and review.** 165,338 real files on this host (`/usr /opt /etc /var /home /root /srv`, 8 GB), no error and no
+incomplete run: 2,327 findings, of which the 2,143 at offset 0 are all ELF, PE or Mach-O according to `file` (0 differ) and the
+rest each hold a real executable (ELF objects in `.a` and `.rlib` archives, the JDK `lib/modules`, a PHAR with a PE, CMake's
+`.vsmacros`, Go's base64, hex-array and fuzz-seed test data, a jar that starts with a PE). Two false-positive classes appeared in a
+second calibration of the tolerant decoders and are fixed (a zip header decoded from source that talks about zip files, and a
+two-line hexdump of an ELF header in a manual). Fixtures: 159 hidden executables found with the expected kind, 51 near-misses and owned files
+(text about `MZ`, `elf.h`, magic tables, base64 of text, of a PNG or of package-lock integrity hashes, a zip or gzip of text, UTF-16
+prose, CSV with header-looking numbers, uint32 constant tables, `hexdump` and `xxd` of text, ELF-header excerpts in a manual, a
+Java class, wasm) not reported. Mutation-tested: 15 mutations of the first helper each turned an assertion red; using
+`record_fail` instead of `record_fail_hard` turns the allowlist assertion red in both engines. **Two independent red-team reviews**
+then attacked it, one for evasions and one for robustness and parity: 34 of their 43 evasion files and 5 of the engine-side defects
+were real, and every one that reproduced is fixed and pinned (nested `.git/objects` shipped, `Makefile.so` and a raw ELF named
+`.pdf` passed, a base64 payload ended by indentation or `-`/`_`, UTF-16 text, the last base64 group dropped, zip 33rd entry, an
+encrypted or bad-CRC member, a second gzip member, a 16 MiB prefix, hex dumps with offsets, arrays with comments, signed Java
+bytes, adjacent string literals, a wrong first-hit offset, a 1,000-level directory tree killing the helper, regex memory, silent
+decode caps). One Python precedence slip (`data[0] & 0x0F == 8` is `data[0] & False`) was found by a fixture.
 
 **Known gaps, stated rather than hidden:**
 
 - Not decoded: multi-byte XOR, RC4, AES or any custom cipher; a XOR-masked payload that is not at offset 0 or is inside an encoded
-  blob; base64 of base64, reversed or uuencoded text; a payload split across files; base64 broken up by string concatenation
-  (`"ab" + "cd"`); `(byte)0x7f`, `0x7f_u8`, `%7f%45` and decimal-escape spellings.
-- In a file over 32 MB the encoded forms are read in 8 MB slices that overlap by 64 KB: an encoded PE whose `e_lfanew` points more
-  than 64 KB past its own header may be missed. Raw headers are found at every offset (tested around the chunk boundaries).
-- Files that keep their own scanner's verdict (see Scope) are not read here: an executable appended to a jar, a document or a PDF is
-  that scanner's job. Containers are not opened (wheels, APKs, NuGet packages, `.7z`, `.rar`, `.deb`): a PE stored *deflated* inside
-  one is not seen; stored (uncompressed) it is.
+  blob; base64 of base64, reversed or uuencoded text; a payload split across files; a zlib stream that needs a preset dictionary;
+  a zip member stored with a method other than store, deflate, bzip2 or LZMA (deflate64 and PPMd are an E record, AES is skipped);
+  base64 lines that each start with letters (`data: …` on every line); hex dumps wider than 16 bytes per line; `(byte)0x7f` and
+  `%7f%45` spellings; UTF-32 and EBCDIC text. Compressed data is read one level deep.
+- **An executable smaller than 64 bytes inside encoded text is not found** (a 45-byte ELF in base64 passes; the same bytes raw, or
+  XOR-masked at the start of a file, are found): that is the price of not flagging manuals that show an ELF header.
+- A real container with a payload appended or embedded keeps its owner's verdict: an ELF appended to a valid PDF after `%%EOF`, to a
+  zip, a jar or an Office document, or stored inside them. Containers are not opened (wheels, APKs, NuGet packages, `.7z`, `.rar`,
+  `.deb`): a native file inside a `.whl` or `.jmod` is seen only when one of the decoders happens to hand the container's bytes to the
+  zip reader (a binary file with 16 escape-like sequences), so do not rely on it.
 - Bytecode (wasm, Java class, DEX, `.pyc`), scripts, launchers (`.lnk .hta .vbs`), packed or encrypted payloads, raw shellcode and DOS
   COM files (no header) and 16-bit NE/LE/LX executables are not detected.
+- A file over 32 MB is decoded in 8 MB slices that overlap by 64 KB: an encoded PE whose `e_lfanew` points more than 64 KB past its own
+  header may be missed. Raw headers are found at every offset (tested around the chunk boundaries).
 - Windows and macOS recall is measured on 67 PE and 14 Mach-O files that happen to live on a Linux host, plus constructed headers;
   the loaders' tolerance on those platforms is reasoned, not measured.
-- The time budget makes a result depend on the machine only when it is reached, and then it is a FAIL.
+- A sparse multi-gigabyte file costs real read time; the time budget makes a result depend on the machine only when it is reached, and
+  then it is a FAIL. A scan root whose own name is not valid UTF-8 stops the report writer (`report_json.py`), which is older than this check.
 
 Tests: Layer N of `tests/run_tests.sh` (both engines), fixtures built at run time by `tests/fixtures/make_native_fixtures.py` (the
 repository holds no contiguous executable and no encoded one: its own scanner would flag it).

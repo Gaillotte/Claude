@@ -1267,7 +1267,7 @@ file_types = [
     ),
     (
         "5.27 Exécutables natifs par le contenu (ELF, PE, Mach-O dans tout fichier)",
-        "tout fichier, quel que soit son nom ; les fichiers qui ont déjà leur propre scanner (.so .dll .exe, jar, Office, PDF, zip et tar) gardent son verdict",
+        "tout fichier, quel que soit son nom ; un fichier garde le verdict du scanner de son extension (.so .dll .exe, jar, Office, PDF, zip et tar) seulement si son contenu est bien ce que dit l'extension",
         "Un exécutable n'était arrêté que si son nom le disait ou si file(1) le déclarait x-executable, x-sharedlib ou "
         "x-dosexec. Mesuré sur l'hôte de référence, 22 % des vrais fichiers ELF, PE et Mach-O (938 sur 4 256) passaient sous "
         "un nom anodin, et tout ce qui se trouvait sous node_modules, vendor, build, dist, target ou .venv n'était jamais "
@@ -1275,14 +1275,18 @@ file_types = [
         "les deux moteurs, parcourt maintenant tout l'arbre (aucun répertoire écarté, ni .transitignore ni le mode diff) et "
         "lit chaque fichier en entier à la recherche d'un en-tête réellement exécutable : ELF (magie, type et machine : le "
         "noyau Linux ignore tous les autres champs), PE (MZ dont e_lfanew pointe sur PE\\0\\0, lu où qu'il pointe) et Mach-O "
-        "(simple et universel). Une magie MZ ou ELF seule n'est jamais un constat. Base64, hexadécimal, tableaux d'octets, "
-        "échappements, hexadécimal espacé, listes décimales, un niveau de gzip, zlib ou zip, et un XOR ou ADD à un octet de "
-        "la tête sont décodés d'abord. Le constat ne peut être abaissé ni par le .transit-allow.json du dépôt lui-même ni par "
+        "(simple et universel). Une magie MZ ou ELF seule n'est jamais un constat. Base64 et base64url, hexadécimal (aussi les "
+        "vidages xxd, hexdump -C et od), tableaux 0x d'octets et de mots, listes décimales signées ou non, échappements aux "
+        "littéraux joints, texte UTF-16, un niveau de gzip, zlib, zip, bzip2 ou xz lu comme le lit un chargeur, et un XOR ou ADD "
+        "à un octet de la tête sont décodés d'abord, quel que soit leur habillage ; un en-tête décodé exige 64 octets derrière lui. Le constat ne peut être abaissé ni par le .transit-allow.json du dépôt lui-même ni par "
         "--min-severity, et son message vient de tables fermées (un fichier nommé x.:low: abaisserait sinon son propre "
         "constat). Un programme qui échoue, un fichier illisible ou un budget de temps atteint (NATIVE_TIME_BUDGET_S, 120 s) "
-        "est un FAIL, jamais un passage silencieux. Étalonnage : 165 338 vrais fichiers, 2 320 constats, les 2 143 à "
-        "l'offset 0 confirmés par file(1) et les 177 autres de vrais exécutables dans des archives et des données de test ; "
-        "15 mutations du programme font chacune rougir un test.",
+        "est un FAIL, jamais un passage silencieux. Étalonnage : 165 338 vrais fichiers, 2 327 constats, les 2 143 à "
+        "l'offset 0 confirmés par file(1) et les autres de vrais exécutables dans des archives et des données de test. Deux "
+        "revues adverses indépendantes l'ont attaqué ; chaque défaut reproduit (un .git/objects imbriqué, Makefile.so et un ELF "
+        "brut nommé .pdf, du base64 coupé par l'indentation ou en base64url, l'UTF-16, des variantes zip et gzip, des vidages "
+        "hexadécimaux, des tableaux commentés, une arborescence profonde, la mémoire des regex, des limites de décodage "
+        "silencieuses) est corrigé et figé par un test.",
         [
             ("Caché dans le fichier tel quel",
              "Un vrai en-tête ELF, PE ou Mach-O à n'importe quel offset : un fichier natif nommé .txt, .png, .dat ou sans "

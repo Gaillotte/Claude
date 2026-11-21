@@ -2393,38 +2393,47 @@ called and wherever in the file it sits, and decodes the usual encodings first:
 | PE: `MZ` whose `e_lfanew` points at `PE\0\0` (exe, dll, driver, EFI) | Windows, UEFI |
 | Mach-O: thin and fat (universal) binaries, executables, dylibs, bundles, kexts | macOS, iOS |
 
-Encodings that are decoded and then judged the same way: base64 (wrapped, in a data URI or JSON), hex, byte arrays
-(`0x7f, 0x45, …` in C, Python, Go or PowerShell, and plain decimal lists), `\x` and octal escapes, spaced hex, one level of
-gzip, zlib or zip inside, and the first 4 KB under a single-byte XOR or ADD. A bare `MZ` or `\x7fELF` is never reported on its
-own: 742 of 102,026 ordinary files contain `MZ`.
+Encodings that are decoded and then judged the same way, however they are wrapped, indented, commented or prefixed: base64 and
+base64url, hex (also `xxd`, `hexdump -C` and `od` dumps), `0x` byte and word arrays (C, Python, Go, PowerShell, JSON), decimal and
+signed-decimal lists (Python, JSON, Java `byte[]`), `\x` and octal escapes with adjacent string literals joined (`repr(bytes)`,
+`msfvenom -f c`, `printf`), UTF-16 text of any of these, gzip, zlib, zip, bzip2 and xz data inside them (read the way a loader reads
+it: a lying size, a bad CRC or an encrypted neighbour hide nothing), and the first 4 KB under a single-byte XOR or ADD. A bare `MZ`
+or `\x7fELF` is never reported on its own (`MZ` is in 742 of 102,026 ordinary files), and a decoded header needs 64 bytes behind it:
+a manual's two-line `hexdump` of an ELF header is not a program.
 
 On a hit the repository **FAILs** with `CWE-506:hidden_native_executable:<kind>:offset_<N>` (the executable is in the file as it
-is) or `CWE-506:encoded_native_executable:<kind>:<encoding>` (it is encoded). Two properties matter for operators:
+is) or `CWE-506:encoded_native_executable:<kind>:<encoding>` (it is encoded). What matters to operators:
 
 - The finding **cannot be allowlisted by the repository** (`.transit-allow.json`) and is not lowered by `--min-severity`: a repository
-  controls its own allowlist, and one entry would otherwise turn a hidden executable into a pass. There is no per-file exemption in
-  this version; a repository that vendors compiled code (a `.a` or `.rlib` static library, a `.node` addon, a PHAR with a PE inside)
-  is rejected, by design. `--report-only` observes without blocking.
-- Not looking is never a pass: a helper that fails, an unreadable file, or a run that exceeds its time budget is a FAIL
-  (`engine:native_scan_failed`, `engine:native_scan_incomplete:<reason>`).
+  controls its own allowlist, and one entry would otherwise turn a hidden executable into a pass. There is no per-file exemption for
+  these findings in this version; a repository that vendors compiled code (a `.a` or `.rlib` static library, a `.node` addon, a PHAR
+  with a PE inside) is rejected, by design. `--report-only` observes without blocking. The scanners that own an extension (`.so`,
+  `.dll`, `.exe`, `.bin`, archives) keep their own allowlist behaviour.
+- Not looking is never a pass: a helper that fails, an unreadable file, a blob that decompresses to more than 256 MiB, or a run that
+  exceeds its time budget is a FAIL (`engine:native_scan_failed`, `engine:native_scan_incomplete:<reason>`).
+- `.git/objects` at the top of the scanned directory is skipped; a nested one is read.
 
-Files that already have a scanner of their own (`.so .dll .dylib .exe .elf .bin`, jar, Office documents, `.pdf`, `.zip .tar .gz
-.tgz .bz2 .xz`) keep that scanner's verdict and are not read again.
+A file whose extension has a scanner of its own (`.so .dll .dylib .exe .elf .bin`, jar, Office documents, `.pdf`, `.rtf`, `.zip .tar
+.gz .tgz .bz2 .xz`) keeps that scanner's verdict **only when its content is what the extension says** (a `.pdf` that starts with
+`%PDF-`, a `.docx` that starts with `PK`…). A raw ELF named `report.pdf`, base64 text named `.doc`, and `Makefile.so` or
+`Dockerfile.zip` (the build-file scanners get those names first) are read like any other file.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `NATIVE_TIME_BUDGET_S` | 120 | seconds for the whole sweep; reaching it is a FAIL, not a skip |
 | `NATIVE_MAX_FINDINGS` | 200 | findings listed one by one; the rest are one summary finding |
 
-**Cost.** About 6 s per GB for the raw bytes and 30 to 40 s per GB with the encoded forms. A repository at the 500 MB fetch limit takes
-about 20 s; a multi-gigabyte local directory needs a larger `NATIVE_TIME_BUDGET_S` (measured here: 4.3 GB in 140 s). `docker-run.sh`
-forwards both variables.
+**Cost.** About 15 to 20 s per GB (measured here: 4.3 GB in 65 s), double that on a busy machine. A repository at the 500 MB fetch limit
+takes about 10 s; a multi-gigabyte local directory may need a larger `NATIVE_TIME_BUDGET_S`. `docker-run.sh` forwards both variables.
 
-**Calibration.** 165,338 real files of this host, no error: 2,320 findings, every one at offset 0 confirmed by `file` as ELF, PE or
-Mach-O (2,143 of 2,143), and the other 177 each hold a real executable (objects inside `.a` and `.rlib` archives, the JDK `lib/modules`,
-a PHAR with a PE, CMake `.vsmacros`, Go's base64 and hex-array test data). Not detected, and stated: other ciphers (multi-byte XOR, RC4,
-AES), base64 of base64 or reversed text, a payload split across files, executables inside archives that are not opened (wheels, APKs,
-`.7z`, `.deb`), bytecode (wasm, class, dex), scripts and launchers, packed or encrypted payloads, 16-bit NE/LE/LX executables.
+**Calibration.** 165,338 real files of this host, no error: 2,327 findings, every one at offset 0 confirmed by `file` as ELF, PE or
+Mach-O (2,143 of 2,143), and the others each hold a real executable (objects inside `.a` and `.rlib` archives, the JDK `lib/modules`,
+a PHAR with a PE, CMake `.vsmacros`, Go's base64, hex-array and fuzz-seed test data). Two independent red-team reviews attacked the
+first version; every defect that reproduced is fixed and pinned by a test (CLAUDE.md lists them). Not detected, and stated: other
+ciphers (multi-byte XOR, RC4, AES), base64 of base64 or reversed text, a payload split across files, a payload appended to or stored
+inside a real PDF, zip, jar or Office document, executables inside archives that are not opened (wheels, APKs, `.7z`, `.deb`),
+executables under 64 bytes inside encoded text, bytecode (wasm, class, dex), scripts and launchers, packed or encrypted payloads,
+16-bit NE/LE/LX executables.
 
 ### 11.3 Environment variables
 

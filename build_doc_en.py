@@ -1649,7 +1649,7 @@ file_types = [
     ),
     (
         "5.31 Native executables by content (ELF, PE, Mach-O in any file)",
-        "every file, whatever its name; files with a scanner of their own (.so .dll .exe, jar, Office, PDF, zip and tar) keep its verdict",
+        "every file, whatever its name; a file keeps the verdict of the scanner that owns its extension (.so .dll .exe, jar, Office, PDF, zip and tar) only when its content is what the extension says",
         "An executable used to be caught only when its name said so or when file(1) called it x-executable, x-sharedlib or "
         "x-dosexec. Measured on the reference host, 22% of the real ELF, PE and Mach-O files (938 of 4,256) passed under a "
         "harmless name, and anything under node_modules, vendor, build, dist, target or .venv was never examined although "
@@ -1657,13 +1657,17 @@ file_types = [
         "walks the whole tree (no directory pruned, .transitignore and diff mode do not apply) and reads every file in full "
         "for a header that is really an executable: ELF (magic, a type and a machine: the Linux kernel ignores every other "
         "field), PE (MZ whose e_lfanew points at PE\\0\\0, read wherever it points) and Mach-O (thin and fat). A bare MZ or "
-        "ELF magic is never a finding. Base64, hex, byte arrays, escapes, spaced hex, decimal lists, one level of gzip, "
-        "zlib or zip, and a single-byte XOR or ADD of the head are decoded first. The finding cannot be lowered by the "
+        "ELF magic is never a finding. Base64 and base64url, hex (also xxd, hexdump -C and od dumps), 0x byte and word arrays, decimal "
+        "and signed lists, escapes with adjacent string literals joined, UTF-16 text, one level of gzip, zlib, zip, bzip2 or xz read "
+        "the way a loader reads it, and a single-byte XOR or ADD of the head are decoded first, however they are wrapped, indented or "
+        "commented; a decoded header needs 64 bytes behind it. The finding cannot be lowered by the "
         "repository's own .transit-allow.json or by --min-severity, and its message is built from closed tables (a file named "
         "x.:low: would otherwise downgrade itself). A helper that fails, an unreadable file or a time budget reached "
-        "(NATIVE_TIME_BUDGET_S, 120 s) is a FAIL, never a quiet pass. Calibration: 165,338 real files, 2,320 findings, all "
-        "2,143 at offset 0 confirmed by file(1) and the 177 others real executables inside archives and test data; "
-        "15 mutations of the helper each turn a test red.",
+        "(NATIVE_TIME_BUDGET_S, 120 s) is a FAIL, never a quiet pass. Calibration: 165,338 real files, 2,327 findings, all "
+        "2,143 at offset 0 confirmed by file(1) and the others real executables inside archives and test data. Two "
+        "independent red-team reviews attacked it; every defect that reproduced (a nested .git/objects, Makefile.so and a raw "
+        "ELF named .pdf, base64 ended by indentation or base64url, UTF-16, zip and gzip variants, hex dumps, arrays with "
+        "comments, a deep tree, regex memory, silent decode caps) is fixed and pinned by a test.",
         [
             ("Hidden in the file as it is",
              "A real ELF, PE or Mach-O header at any offset: a native file named .txt, .png, .dat or with no extension, "
@@ -1672,8 +1676,8 @@ file_types = [
              "CWE-506:hidden_native_executable:<kind>:offset_<N>.",
              "FAIL"),
             ("Encoded",
-             "Base64 (wrapped, data URI, JSON, letters glued before it), hex, 0x byte arrays (C, Python, Go, PowerShell), "
-             "\\x and octal escapes, spaced hex, decimal lists, the same inside gzip, zlib or zip, and the head under a "
+             "Base64 and base64url, hex (dumps with offsets and gutters too), 0x byte and word arrays, decimal and signed lists, "
+             "escapes with joined literals, UTF-16 text, the same inside gzip, zlib, zip, bzip2 or xz, and the head under a "
              "single-byte XOR or ADD. CWE-506:encoded_native_executable:<kind>:<encoding>.",
              "FAIL"),
             ("The scan could not finish",
