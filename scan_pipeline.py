@@ -263,6 +263,32 @@ def _find_list(prune_args):
     return rc, [n for n in names if n != tmp]
 
 
+def scan_native_sweep():
+    """Native executables by content: one run of transit/scanners/native.py over the whole tree (the shell runs the same program).
+    Every file at any offset, plus base64 / hex / byte arrays / escapes / a masked head, decoded and judged the same way. The
+    helper walks the tree itself (nothing pruned, no .transitignore, no diff mode), leaves files whose extension has a scanner of
+    its own to that scanner, and builds every message from closed tables. The findings are record_fail_hard: the repository's
+    .transit-allow.json and --min-severity cannot lower them. A helper that fails, is cut short or announces another count is
+    engine:native_scan_failed."""
+    info("=== Native executables by content (ELF, PE, Mach-O: any file, any offset, encoded forms) ===")
+    G.LM_FILE = ""
+    rc, raw = run_helper("scanners/native.py", G.SCAN_DIR, "--skip", G.WORK_DIR)
+    parts = raw.split(b"\x00")
+    got, z_count, z_info = 0, None, ""
+    for i in range(0, len(parts) - 2, 3):
+        tag, path, msg = parts[i], _s(parts[i + 1]), _s(parts[i + 2])
+        if tag in (b"F", b"E", b"S"):
+            record_fail_hard(G.SCAN_DIR if path == "." else G.SCAN_DIR + "/" + path, msg)
+            got += 1
+        elif tag == b"Z":
+            z_count, z_info = path, msg
+    if rc != 0 or z_count is None or z_count != str(got):
+        warn("native sweep: the helper did not finish (exit %d, %d record(s), announced '%s')" % (rc, got, z_count if z_count is not None else ""))
+        record_fail_hard(G.SCAN_DIR, "engine:native_scan_failed")
+    else:
+        ok("Native sweep: %s" % z_info)
+
+
 def scan_by_type(prune_args, prune_builtin_args):
     info("=== Layer 5: Per-type SAST ===")
     list_rc, listed = _find_list(prune_args)
@@ -312,6 +338,7 @@ def scan_by_type(prune_args, prune_builtin_args):
 
     _clr()
     ok("Layer 5: %d files scanned" % current)
+    scan_native_sweep()
     if list_rc != 0:
         state = "skipped:file listing failed (find exit %d)" % list_rc
         record_layer("L4_patterns", state)

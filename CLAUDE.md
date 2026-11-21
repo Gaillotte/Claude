@@ -60,6 +60,7 @@ Output: PASS → ZIP in `./Good/` · FAIL → quarantine in `$WORK_DIR/quarantin
 | `OFFLINE_CACHE` | `$WORK_DIR/offline-cache` | Staged Semgrep rules, trivy DB, ClamAV signatures |
 | `JAR_MAX_ENTRIES`, `JAR_READ_BUDGET_MB`, `JAR_VIEW_MB`, `JAR_MAX_UNCOMPRESSED_MB`, `JAR_TIME_BUDGET_S` | `50000`, `64`, `32`, `1024`, `90` | Limits of the Java archive scanner; each one reached is reported (see "Java archives") |
 | `OFFICE_MAX_ENTRIES`, `OFFICE_READ_BUDGET_MB`, `OFFICE_TIME_BUDGET_S` | `20000`, `256`, `90` | Limits of the office-document scanner; each one reached is reported (see "Office documents") |
+| `NATIVE_TIME_BUDGET_S`, `NATIVE_MAX_FINDINGS` | `120`, `200` | Native-executable sweep: seconds for the whole run (reaching it is a FAIL, see "Native executables by content"), and findings listed one by one before one summary finding |
 
 ## Allowlist and exclusions
 
@@ -119,7 +120,7 @@ ai_transit.sh          ← orchestrator: flag parsing, phase 1 → fetch, phase 
 
 generate_excel_report.py  ← report_<ts>.json → .xlsx (Summary / Files / Findings tabs)
 selfcheck.py              ← self-check integrity report → PDF/JSON report (7 checks)
-transit/                  ← the Python helpers scan_pipeline.sh runs by path (office, jar, PDF, manifest
+transit/                  ← the Python helpers scan_pipeline.sh runs by path (native-executable sweep, office, jar, PDF, manifest
                           readers, the JSON report writer, the ScanCode and gitleaks result readers), plus the Python engine's
                           core.py, scan_lang.py, scan_build.py, scan_docs.py and layers.py (docs/python_port_thin_plan.md).
                           Standard library only; the integrity manifest, the Dockerfile and the offline bundle
@@ -161,7 +162,7 @@ All 6 layers run in sequence inside a single process. Verdict accumulates in `GL
 | L1 | `~line 75–360` | gitleaks, detect-secrets, ClamAV, YARA |
 | L2 | `~line 361–420` | Semgrep (p/owasp-top-ten, p/cwe-top-25, p/security-audit, p/secrets) — single run |
 | L3 | `~line 421–550` | trivy, pip-audit, safety, npm audit — off by default (`RUN_SCA=true`) |
-| L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09), plus known credential formats (18 providers) |
+| L4 | `~line 551–985` | grep built-ins (CWE-798/22/918/327/338, OWASP-A09), plus known credential formats (18 providers); and, once per scan after the per-file loop, `scan_native_sweep()` (executables hidden in any file, see "Native executables by content") |
 | L5 | `scan_by_type()` | Bandit (py), ShellCheck (sh), cppcheck (c/cpp), hadolint (Dockerfile), checkov (tf/yaml), Semgrep per-lang, **scan_rust** (rs), **scan_kotlin** (kt, and kts other than `*.gradle.kts`), **scan_csharp** (cs), **scan_pdf** (pdf — stream decoding + anchored name rules), **scan_makefile** (mk/mak/Makefile), **scan_html** (html/htm/xhtml), **scan_cmake** (cmake/CMakeLists.txt), **scan_xml** (xml/pom + Maven/Ant build rules), **scan_bat** (bat/cmd), **scan_powershell** (ps1/psm1/psd1/pssc/psrc), **scan_powershell_xml** (ps1xml/psc1/cdxml), **scan_setup_py** (setup.py, conanfile.py), **scan_gradle** (*.gradle, *.gradle.kts, gradle.properties, gradle-wrapper.properties), **scan_jar** (jar/war/ear/aar — structure, constant pools, wrapper shape), **scan_office** (docx/xlsx/pptx and macro/template variants, doc/xls/ppt, odt/ods/odp and flat/template variants, rtf — macros, DDE, remote relationships, embedded objects), **scan_package_json** (package.json, composer.json), **scan_requirements** (requirements*.txt) |
 | L6 | `scan_scancode()` | ScanCode Toolkit — licence (risky: GPL/AGPL/LGPL/SSPL/BUSL → WARN), CVE HIGH/CRITICAL → FAIL — off by default (`RUN_SCANCODE=true`) |
 
@@ -1171,6 +1172,82 @@ repository never holds a contiguous token. The limits, a helper that cannot open
 pathological inputs and a DDE field whose instruction lies in a later 4 MB slice than its `begin` are
 all exercised.
 
+## Native executables by content (any file, any offset, encoded)
+
+An executable used to be caught only when its name said so (`.so .dll .dylib .exe .elf .bin`) or when `file` called it
+`x-executable`, `x-sharedlib` or `x-dosexec` under an unknown extension. Measured on this host, **22% of the real ELF, PE and
+Mach-O files (938 of 4,256) passed under a harmless name**: `file` 5.45 calls a PIE executable `x-pie-executable`, a Mach-O
+`x-mach-binary` and a PE `vnd.microsoft.portable-executable`, and `scan_unknown` listed none of them. A PIE ELF named
+`a.txt`, an ELF appended to a text file or a PNG, an ELF carried as base64 or a C array, and any file under `node_modules`,
+`vendor`, `build`, `dist`, `target` or `.venv` (pruned from the per-file loop, yet zipped into the approved archive by
+`ai_transit.sh`) all passed.
+
+`scan_native_sweep()` (shell and Python engine) runs **`transit/scanners/native.py` once per scan**, after the per-file loop,
+and records what it reports. Both engines run the same program, so they cannot disagree; each engine is about 25 lines.
+
+- **What counts.** A header that is really an executable, **at any offset of any file**: ELF (the magic, a type 1 to 4 and a
+  machine: the Linux kernel ignores every other field, so a stricter test would be an evasion; both byte orders; every
+  architecture), PE (`MZ` whose `e_lfanew`, read with `pread` wherever it points, lands on `PE\0\0`; exe or dll), Mach-O
+  (thin, four magics, plausible header; fat, whose first slice starts with a thin magic, which also separates it from a Java
+  class). A bare `MZ` or `\x7fELF` is **not** a finding: `MZ` is in 742 of 102,026 ordinary files and only 2 of them held an
+  executable. Static libraries, `.o` and `.ko` are native code and fail.
+- **Encoded forms** (a payload that a loader decodes is the same payload): base64, also wrapped, in a data URI or JSON, with
+  letters glued before it (all four alignments of the first 64 KB of a run); hex (contiguous, with letters glued before it,
+  both parities); byte arrays `0x7f, 0x45, …` (C, Python, Go, PowerShell), `\x7f\x45…` and octal escapes, spaced hex, decimal
+  lists; one level of gzip, zlib or zip inside a decoded blob; and the first 4 KB under a single-byte XOR or ADD. **Decoded,
+  then judged by the same test**: a marker alone is never reported (a bare-marker search hit 25 source files here, `elf.h`
+  and `pe.go` among them, all false).
+- **Scope.** The helper walks the tree itself: no directory is pruned, `.transitignore` and diff mode do not apply, nothing is
+  followed through a symlink, a FIFO is not opened. Left out: `.git/objects` (zlib objects) and `--skip DIR` (the pipeline's own
+  `WORK_DIR`). Files whose extension has a scanner of its own (`.so .dll .dylib .exe .elf .bin`, jar, Office, `.rtf`, `.pdf`,
+  `.zip .tar .gz .tgz .bz2 .xz`) keep that scanner's verdict and are not read: a vendored jar with native libraries stays a WARN.
+- **Findings** are `record_fail_hard`: **the repository's own `.transit-allow.json` and `--min-severity` cannot lower them**.
+  Shown by experiment: an allowlist entry turned the `office_elf.docx` FAIL into a PASS, and a test now pins the opposite.
+  Messages are built by the helper from closed tables, never from repository text (a file named `x.:low:` would otherwise
+  downgrade its own finding): `CWE-506:hidden_native_executable:<kind>:offset_<N>`,
+  `CWE-506:encoded_native_executable:<kind>:<base64|hex|hex_array|escaped_hex|escaped_octal|spaced_hex|decimal_array|masked_bytes>[_compressed]`,
+  `<kind>` being `ELF_<arch>_<exec|shared|object|core>`, `PE_<arch>_<exe|dll>`, `MachO_<arch>_<type>` or `MachO_fat`. At most
+  `NATIVE_MAX_FINDINGS` (200) are listed, then one `…:more_files_not_listed:count_<N>` (the bash engine pays 60 to 90 ms per FAIL).
+- **Not looking is never a pass.** A helper that exits non-zero, ends without its closing record or announces another record
+  count is `engine:native_scan_failed`; a time budget reached (`NATIVE_TIME_BUDGET_S`, 120 s for the whole run; step 1 over every
+  file completes before the encoded forms start) or a file or directory that cannot be read is
+  `engine:native_scan_incomplete:<time_budget|unreadable_file|unreadable_directory>`. Both are FAILs on the file or `.`. There is
+  no coverage key: a coverage state would have changed all 26 golden reports for nothing the verdict does not already say.
+- **Cost.** About 6 s per GB for the raw bytes and 30 to 40 s per GB with the encoded forms: this host's `/usr` (80k files, 4.3 GB)
+  took 140 s, so a multi-gigabyte local scan needs `NATIVE_TIME_BUDGET_S` raised; a repository at the 500 MB fetch limit takes
+  about 20 s.
+
+**Calibration.** 165,338 real files on this host (`/usr /opt /etc /var /home /root /srv`, 8 GB), no error and no incomplete run:
+2,320 findings, of which the 2,143 at offset 0 are all ELF, PE or Mach-O according to `file` (0 differ), and the other 177 each
+hold a real executable (ELF objects in `.a` and `.rlib` archives, the JDK `lib/modules`, a PHAR with a PE, CMake's `.vsmacros`
+with a PE, Go's `*.base64` and hex-array test data). Fixtures: 89 hidden executables found with the expected kind and encoding,
+34 near-misses (text about `MZ`, `elf.h`, a magic table, base64 of text or of a PNG, arrays of ASCII, a PE pointer to nothing, a
+fat header with no slice, a Java class, wasm, 4,000 `MZ` in a row) not reported. Mutation-tested: 15 mutations of the helper
+(a stricter ELF ident, no `pread` for a far `e_lfanew`, one base64 alignment, one hex parity, no inflate, no owned extensions, no
+little-endian Mach-O marker, a header judged before its window is in hand, no masked head, `.git/objects` read, no cap, the
+extension in the message, no thin-slice check for a fat header, no `PE\0\0` check, no budget check) each turn an assertion red;
+using `record_fail` instead of `record_fail_hard` turns the allowlist assertion red in both engines. One real defect came from the
+tests: a Python precedence slip (`data[0] & 0x0F == 8` is `data[0] & False`) made base64 of zlib invisible until a fixture asked.
+
+**Known gaps, stated rather than hidden:**
+
+- Not decoded: multi-byte XOR, RC4, AES or any custom cipher; a XOR-masked payload that is not at offset 0 or is inside an encoded
+  blob; base64 of base64, reversed or uuencoded text; a payload split across files; base64 broken up by string concatenation
+  (`"ab" + "cd"`); `(byte)0x7f`, `0x7f_u8`, `%7f%45` and decimal-escape spellings.
+- In a file over 32 MB the encoded forms are read in 8 MB slices that overlap by 64 KB: an encoded PE whose `e_lfanew` points more
+  than 64 KB past its own header may be missed. Raw headers are found at every offset (tested around the chunk boundaries).
+- Files that keep their own scanner's verdict (see Scope) are not read here: an executable appended to a jar, a document or a PDF is
+  that scanner's job. Containers are not opened (wheels, APKs, NuGet packages, `.7z`, `.rar`, `.deb`): a PE stored *deflated* inside
+  one is not seen; stored (uncompressed) it is.
+- Bytecode (wasm, Java class, DEX, `.pyc`), scripts, launchers (`.lnk .hta .vbs`), packed or encrypted payloads, raw shellcode and DOS
+  COM files (no header) and 16-bit NE/LE/LX executables are not detected.
+- Windows and macOS recall is measured on 67 PE and 14 Mach-O files that happen to live on a Linux host, plus constructed headers;
+  the loaders' tolerance on those platforms is reasoned, not measured.
+- The time budget makes a result depend on the machine only when it is reached, and then it is a FAIL.
+
+Tests: Layer N of `tests/run_tests.sh` (both engines), fixtures built at run time by `tests/fixtures/make_native_fixtures.py` (the
+repository holds no contiguous executable and no encoded one: its own scanner would flag it).
+
 ## Package manifests
 
 `package.json`, `composer.json` and `requirements*.txt` / `constraints*.txt` are
@@ -1490,6 +1567,8 @@ the JSON's `\u001b` back into a raw byte). Two Layer D tests cover the two forms
 and on values the operator supplies, never on a name taken from the scanned repository.
 
 ## Files with unknown extensions
+
+(The content sweep above looks at every file regardless; this section is the per-file routing that follows it.)
 
 `scan_pipeline.sh` classifies unknown extensions via `scan_unknown()`, which first
 inspects the shebang: an extensionless `entrypoint` starting with `#!/usr/bin/env

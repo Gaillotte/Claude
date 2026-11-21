@@ -100,6 +100,7 @@ Read by `scan_pipeline.sh`:
 | `TMPDIR` | `/tmp` | Base for `aitransit_*` view files and the report-data temp directory (section 3.5). |
 | `JAR_MAX_ENTRIES` / `JAR_READ_BUDGET_MB` / `JAR_VIEW_MB` / `JAR_MAX_UNCOMPRESSED_MB` / `JAR_TIME_BUDGET_S` | 50000 / 64 / 32 / 1024 / 90 | Limits of the Java archive scanner. |
 | `OFFICE_MAX_ENTRIES` / `OFFICE_READ_BUDGET_MB` / `OFFICE_TIME_BUDGET_S` | 20000 / 256 / 90 | Limits of the office-document scanner. A comment above `scan_office` (L2488-L2490) says 64 MB; the code (L2529) and CLAUDE.md say 256, and 256 governs. |
+| `NATIVE_TIME_BUDGET_S` / `NATIVE_MAX_FINDINGS` | 120 / 200 | Limits of the native-executable sweep (section 8.9): seconds for the whole helper run, and findings recorded one by one before one summary. Parsed as a float and an integer; a value that is not a number means the default. A budget reached is a FAIL (`engine:native_scan_incomplete:time_budget`), never a skip. `0` is a budget that is reached at once (the tests use it). |
 | `LC_ALL` | forced to `C` | The script exports `LC_ALL=C` before it does anything else, whatever the caller set (K, F1). Every rule is ASCII and is meant to see bytes: in a UTF-8 locale GNU grep's `.` and `[^x]` do not match an invalid byte, so one 0xFF in a line stopped a line-spanning rule such as curl-pipe-bash from matching it, and a file with an encoding error became "binary" to the plain greps. The consequences are that `grep` and `sort` work on bytes (`repo_hash` sorts byte-wise) and that the console sanitiser sees the two bytes of a C1 control (S1). The Python engine matches bytes and sorts byte-wise, which is the same thing. |
 | `PATH` | environment | Tools are found with `command -v` at run time. |
 
@@ -347,6 +348,8 @@ tag are joined the same way in `findings_by_file`.
 | exclusions | WARN `transitignore:exclusions_applied(<n> pattern(s))` | on `__global__`, whenever `.transitignore` yields at least one pattern; `<n>` is that number and nothing else from the file is in the message (D-004, J). |
 | symlinks | FAIL `symlink:target_outside_the_scanned_directory`; WARN `symlink:not_followed_its_target_is_not_scanned_through_the_link` | on the link itself, from `find -type l` over the same prune arguments as the file listing; section 8.5 (code; E22). Both go through `record_fail` / `record_warn`, so the FAIL can be allowlisted (rule `symlink` or `target_outside_the_scanned_directory`, path the link's relative path) and lowered by `--min-severity` like any other. |
 | the scan itself (`engine:`) | FAIL `engine:nothing_scanned`, FAIL `engine:file_listing_failed`, FAIL `engine:search_incomplete` | no detail segment; `engine:nothing_scanned` and `engine:file_listing_failed` on `__global__`, `engine:search_incomplete` on the file whose search could not finish, once per file. **Never allowlisted and never lowered by `--min-severity`** (section 6.2). Section 8 says when each is recorded. The Python engine adds further `engine:<kind>[:<detail>]` messages for its own failures (a scanner that raised, a file that could not be read, an unlistable directory, a time budget); they follow the same rules and are listed in `docs/python_engine_design.md` section 8.3. |
+| native sweep (section 8.9) | FAIL `CWE-506:hidden_native_executable:<kind>:offset_<N>`, FAIL `CWE-506:encoded_native_executable:<kind>:<encoding>[_compressed]`, FAIL `CWE-506:hidden_native_executable:more_files_not_listed:count_<N>` | built by `transit/scanners/native.py` from closed tables and integers, never from repository text. `<kind>` is `ELF_<arch>_<exec\|shared\|object\|core>`, `PE_<arch>_<exe\|dll>`, `MachO_<arch>_<type>` or `MachO_fat`; `<encoding>` is `base64`, `hex`, `hex_array`, `escaped_hex`, `escaped_octal`, `spaced_hex`, `decimal_array` or `masked_bytes`. Recorded with `record_fail_hard`: no allowlist, no `--min-severity`. The first token is `CWE-506` and the structured record is `grep-pattern` / `cwe` with no line (the helper searches the file itself). |
+| native sweep, the scan itself | FAIL `engine:native_scan_incomplete:<time_budget\|unreadable_file\|unreadable_directory>`, FAIL `engine:native_scan_failed` | `…incomplete` on the file, or on the scanned directory for the budget and for a directory; `…failed` on the scanned directory when the helper exits non-zero, cannot be started, ends without its closing record or announces another record count. Both with `record_fail_hard`. |
 | allowlist | `ALLOWED:<original message> (reason: <reason>)` | WARN, replaces the FAIL (section 6.2). |
 | min-severity | `LOW_SEV(below --min-severity <MIN_SEVERITY>):<original message>` | WARN, replaces the FAIL; `<MIN_SEVERITY>` is printed as given, not normalised (section 6.3). |
 
@@ -723,8 +726,8 @@ everything. A stale `.diff_files` without `SINCE_COMMIT` is ignored with a stder
 * By extension, a regular file is a binary regardless of content: `.so .dll .dylib .exe .elf .bin` is a FAIL
   `binary:unexpected_binary_in_AI_repo` (plus `binary:IOC_strings_detected` if `strings` finds a URL or shell word);
   `.zip .tar .gz .tgz .bz2 .xz` is a FAIL `archive:requires_dedicated_rescan` (plus a zip-slip check on `.zip`).
-  `.jar .war .ear .aar`, the office types and `.pdf` have their own container scanners. An executable with a
-  harmless extension is caught only if it has no known extension (below).
+  `.jar .war .ear .aar`, the office types and `.pdf` have their own container scanners. An executable under any other
+  name, anywhere in a file, or encoded, is found by the content sweep of section 8.9, whatever its extension.
 * A file with no recognised extension is first routed by shebang, then `file --mime-type`: `application/x-executable`,
   `x-sharedlib`, `x-dosexec` is a FAIL `binary:unexpected_executable_mime:<mime>`; anything else PASS. If `file` is not
   installed that step is skipped without a warning (code, A22). **The shebang is reduced to the interpreter it names
@@ -763,6 +766,48 @@ engine's `dispatch.py` MUST route exactly that set and the check MUST be pointed
 retired. The *rules* inside each scanner are not restated here: they are the reference script's source plus
 `tests/conformance/patterns.json` (the pattern inventory), and `tests/fixtures/rules/` is the corpus where each
 file is crafted to trigger or deliberately not trigger one rule.
+
+### 8.9 Native executables by content (`scan_native_sweep`)
+
+One call per scan, in `scan_by_type`, **after the per-file loop and before the coverage lines** (shell: `scan_native_sweep`;
+Python: `scan_native_sweep()`). It runs `transit/scanners/native.py "$SCAN_DIR" --skip "$WORK_DIR"` as a program (`python3` in
+the shell, `python3 -I` in the Python engine) and records what it prints. Nothing about the verdict is decided in the engines.
+
+* **Protocol.** stdout is NUL-terminated triples `TAG PATH MESSAGE`. `F` a finding, `E` the scan could not finish, `S` the findings
+  beyond the cap; each is `record_fail_hard` on `SCAN_DIR/PATH` (`PATH` of `.` is `SCAN_DIR`). `Z` is always last: its `PATH` is the
+  number of `F`, `E` and `S` triples before it and its message is `files=<n> bytes=<n> incomplete=<0|1>`, printed as the line
+  `Native sweep: …`. An exit status other than 0, a missing `Z` or a different count is `engine:native_scan_failed` on `SCAN_DIR`
+  (the records already read stay recorded). The helper's stderr is discarded. The output goes to a file, never a variable: a path can
+  hold anything but NUL, and `$(…)` would drop the NULs.
+* **What is examined.** Every regular file of the tree, found by the helper itself with `os.walk`: no directory pruned (the built-in
+  exclusions do not apply), `.transitignore` does not apply, diff mode does not apply, a symbolic link is not followed, a FIFO or device
+  is not opened. Skipped: `.git/objects`, the `--skip` directory when it lies below the scan root, files under 4 bytes, and files whose
+  extension (lower-cased, after the last dot of the base name) is one of `so dll dylib exe elf bin jar war ear aar`, the office types,
+  `rtf pdf zip tar gz tgz bz2 xz`: those keep the verdict of `scan_binary`, `scan_jar`, `scan_office`, `scan_pdf` and `scan_archive`.
+  The order is fixed (sorted names, directories before the files below them), so both engines record in the same order.
+* **Step 1, every file.** The whole file is read in 2 MiB chunks that overlap by 64 bytes; a header is judged only when 64 bytes of it
+  are in hand, or at the end of the file; a PE reads `PE\0\0` with `pread` wherever `e_lfanew` points. ELF is the magic, a type 1..4 and a
+  machine 1..511 in either byte order (the kernel ignores every other field; measured by running `/usr/bin/true` with each field
+  broken). PE is `MZ`, `e_lfanew` in `[4, size-24]`, `PE\0\0` there. Mach-O thin is one of four magics with a known CPU, file type 1..12,
+  1..65535 load commands that fit in the file; fat is `CAFEBABE` or `CAFEBABF` with 1..44 architectures, a known CPU, an offset inside
+  the file and a thin magic at that offset (the class-file collision is excluded by the count). The first hit by offset is the finding.
+  The first 4 KB under a single-byte XOR or ADD is tried last (an O(1) consistency test per magic, then the full test).
+* **Step 2, every file step 1 passed**, after step 1 has finished for all files: base64 / hex runs (a run is at least 64 characters
+  of the alphabet, line breaks allowed inside), `0x` arrays, `\x` and octal escapes, spaced hex and decimal lists (the last two only when
+  the first bytes of a header are present in the data), decoded and given to the step 1 test at any offset of the decoded bytes, one
+  level of gzip, zlib or zip inside. A file up to 32 MiB is decoded whole, a larger one in 8 MiB slices that overlap by 64 KiB.
+  Alignments 1 to 3 of a base64 run are tried on its first 64 KiB (all four on every run of a slice), both parities of a hex run, and
+  the hex stretches of a run that has other letters glued on.
+* **Bounds, all fail-closed.** `NATIVE_TIME_BUDGET_S` is checked per chunk, per file, per run and every 8192 candidate headers (a file of
+  nothing but `MZ` has a candidate every two bytes); reaching it stops the run with the `E` record `engine:native_scan_incomplete:time_budget`
+  after the findings so far. An unreadable file is `…:unreadable_file`, an unreadable directory `…:unreadable_directory`. Findings beyond
+  `NATIVE_MAX_FINDINGS` are counted and listed as one `S`; the budget `E` record is always kept, whatever the cap.
+* **Messages are closed.** No byte of the repository, not even its extension, reaches a message: the allowlist reads the first two colon
+  tokens and the classifier reads `:LOW:`-style markers anywhere in it, and a file named `x.:low:` downgraded its own finding in both engines
+  in the first design. Both engines clear the line-resolution state (`LM_FILE` / `G.LM_FILE`) before recording, so no stale grep match is
+  attached to a finding.
+* **Not covered**, each stated in CLAUDE.md: other ciphers and encodings, executables appended to files that keep their own scanner,
+  unopened containers, bytecode, scripts, launchers, shellcode, NE/LE/LX.
 
 ## 9. Security properties the Python engine must preserve
 

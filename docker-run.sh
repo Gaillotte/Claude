@@ -89,7 +89,8 @@ fi
 # Variables from the host shell are automatically propagated when set.
 DOCKER_ENV_ARGS=(-e OUTPUT_DIR=/output)
 for _var in WORK_DIR MAX_SIZE_MB MIN_SEVERITY VERBOSITY GITHUB_TOKEN SINCE_COMMIT \
-             OFFLINE RUN_SCA RUN_SCANCODE SEMGREP_RULES_DIR TRIVY_CACHE_DIR CLAMAV_DB_DIR; do
+             OFFLINE RUN_SCA RUN_SCANCODE SEMGREP_RULES_DIR TRIVY_CACHE_DIR CLAMAV_DB_DIR \
+             NATIVE_TIME_BUDGET_S NATIVE_MAX_FINDINGS; do
     [[ -n "${!_var:-}" ]] && DOCKER_ENV_ARGS+=(-e "${_var}=${!_var}")
 done
 

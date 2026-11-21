@@ -289,7 +289,8 @@ FINDINGS_JL=$(mktemp "${WORK_DIR}/findings_XXXXXX.jsonl")
 # scan_by_type, the comment-free view of scan_xml), so that a run ended by a signal leaves none behind either.
 _TMP_LIST=""
 XML_TMP=""
-trap 'rm -f "$FINDINGS_JL" "${_TMP_LIST:-}" "${XML_TMP:-}"' EXIT
+_TMP_NATIVE=""
+trap 'rm -f "$FINDINGS_JL" "${_TMP_LIST:-}" "${XML_TMP:-}" "${_TMP_NATIVE:-}"' EXIT
 
 # Layers 3 (dependency CVEs) and 6 (ScanCode) are off in this deployment. They are
 # recorded as skipped in the coverage block rather than left out of it: a layer that
@@ -4181,6 +4182,54 @@ _symlink_escapes() {
     return 1
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# NATIVE EXECUTABLES BY CONTENT (ELF, PE, Mach-O in any file, whatever its name)
+# ═══════════════════════════════════════════════════════════════════════════════
+# One run of transit/scanners/native.py over the whole scanned tree, started by both engines so that they cannot
+# disagree. It reads every file in full, at any offset, for a header that is really an executable (a bare "MZ" or
+# "\x7fELF" is not one), and decodes base64, hex, byte arrays, \x and octal escapes, one level of gzip/zlib/zip, and
+# a single-byte XOR or ADD of the head, before judging the same way. A native file named .txt, .png or .dat, a
+# payload appended to a text file or an image, and one carried as base64 or a C array are all a FAIL.
+#   - It walks the tree itself: directories the per-file loop prunes (node_modules, vendor, build, dist, target,
+#     .venv ...) ship in the approved archive, so they are examined; .transitignore and diff mode do not apply.
+#   - Files whose extension has a scanner of its own (.so .dll .exe, jar, Office, PDF, zip and tar) keep that
+#     scanner's verdict and are not read.
+#   - The findings are record_fail_hard: a repository's .transit-allow.json (which the repository controls) and
+#     --min-severity cannot turn a hidden executable into a pass.
+#   - Every message is built by the helper from closed tables: no byte of the repository reaches it.
+#   - A helper that fails, is cut short, or reports a different number of records than it announced is a FAIL
+#     (engine:native_scan_failed); a time budget reached (NATIVE_TIME_BUDGET_S, default 120) or an unreadable file
+#     is an engine:native_scan_incomplete FAIL. Not looking must never read as clean.
+scan_native_sweep() {
+    info "=== Native executables by content (ELF, PE, Mach-O: any file, any offset, encoded forms) ==="
+    local out rc=0 tag path msg f got=0 z_count="" z_info=""
+    LM_FILE=""
+    out=$(mktemp "${WORK_DIR}/native_XXXXXX") || out=""
+    if [[ -z "$out" ]]; then
+        warn "native sweep: could not create a temporary file"
+        record_fail_hard "$SCAN_DIR" "engine:native_scan_failed"
+        return 0
+    fi
+    _TMP_NATIVE="$out"
+    python3 "$TRANSIT_DIR/scanners/native.py" "$SCAN_DIR" --skip "$WORK_DIR" > "$out" 2>/dev/null || rc=$?
+    while IFS= read -r -d '' tag && IFS= read -r -d '' path && IFS= read -r -d '' msg; do
+        case "$tag" in
+            F|E|S)
+                if [[ "$path" == "." ]]; then f="$SCAN_DIR"; else f="$SCAN_DIR/$path"; fi
+                record_fail_hard "$f" "$msg"
+                (( got++ )) || true ;;
+            Z)  z_count="$path"; z_info="$msg" ;;
+        esac
+    done < "$out"
+    rm -f "$out"; _TMP_NATIVE=""
+    if (( rc != 0 )) || [[ -z "$z_count" || "$z_count" != "$got" ]]; then
+        warn "native sweep: the helper did not finish (exit ${rc}, ${got} record(s), announced '${z_count}')"
+        record_fail_hard "$SCAN_DIR" "engine:native_scan_failed"
+    else
+        ok "Native sweep: ${z_info}"
+    fi
+}
+
 scan_by_type() {
     info "=== Layer 5: Per-type SAST ==="
 
@@ -4267,6 +4316,7 @@ scan_by_type() {
     # Clear the progress line (_clr is a no-op when stderr is not a terminal)
     _clr
     ok "Layer 5: $current files scanned"
+    scan_native_sweep
     if (( list_rc != 0 )); then
         record_layer L4_patterns "skipped:file listing failed (find exit ${list_rc})"
         record_layer L5_per_language_sast "skipped:file listing failed (find exit ${list_rc})"

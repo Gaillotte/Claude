@@ -219,6 +219,7 @@ toc_items = [
     ("    5.24", "XML, Maven et Ant (.xml .pom)"),
     ("    5.25", "Archives Java (.jar .war .ear .aar)"),
     ("    5.26", "Documents bureautiques (OOXML, OpenDocument, OLE2, RTF)"),
+    ("    5.27", "Exécutables natifs par le contenu (ELF, PE, Mach-O dans tout fichier)"),
     ("6.", "Outils utilisés — Description détaillée"),
     ("7.", "Résultats — Archives et rapports"),
     ("    7.1", "Archive ZIP approuvée (répertoire Good/)"),
@@ -1262,6 +1263,48 @@ file_types = [
              "un conteneur illisible, un projet VBA illisible ; chaque limite atteinte. Un document rempli au-delà du budget de "
              "lecture donne un WARN et non un FAIL : traiter office:inspection_incomplete comme « non inspecté ».",
              "WARN"),
+        ]
+    ),
+    (
+        "5.27 Exécutables natifs par le contenu (ELF, PE, Mach-O dans tout fichier)",
+        "tout fichier, quel que soit son nom ; les fichiers qui ont déjà leur propre scanner (.so .dll .exe, jar, Office, PDF, zip et tar) gardent son verdict",
+        "Un exécutable n'était arrêté que si son nom le disait ou si file(1) le déclarait x-executable, x-sharedlib ou "
+        "x-dosexec. Mesuré sur l'hôte de référence, 22 % des vrais fichiers ELF, PE et Mach-O (938 sur 4 256) passaient sous "
+        "un nom anodin, et tout ce qui se trouvait sous node_modules, vendor, build, dist, target ou .venv n'était jamais "
+        "examiné alors que l'archive approuvée l'inclut. Un seul programme standard (transit/scanners/native.py), lancé par "
+        "les deux moteurs, parcourt maintenant tout l'arbre (aucun répertoire écarté, ni .transitignore ni le mode diff) et "
+        "lit chaque fichier en entier à la recherche d'un en-tête réellement exécutable : ELF (magie, type et machine : le "
+        "noyau Linux ignore tous les autres champs), PE (MZ dont e_lfanew pointe sur PE\\0\\0, lu où qu'il pointe) et Mach-O "
+        "(simple et universel). Une magie MZ ou ELF seule n'est jamais un constat. Base64, hexadécimal, tableaux d'octets, "
+        "échappements, hexadécimal espacé, listes décimales, un niveau de gzip, zlib ou zip, et un XOR ou ADD à un octet de "
+        "la tête sont décodés d'abord. Le constat ne peut être abaissé ni par le .transit-allow.json du dépôt lui-même ni par "
+        "--min-severity, et son message vient de tables fermées (un fichier nommé x.:low: abaisserait sinon son propre "
+        "constat). Un programme qui échoue, un fichier illisible ou un budget de temps atteint (NATIVE_TIME_BUDGET_S, 120 s) "
+        "est un FAIL, jamais un passage silencieux. Étalonnage : 165 338 vrais fichiers, 2 320 constats, les 2 143 à "
+        "l'offset 0 confirmés par file(1) et les 177 autres de vrais exécutables dans des archives et des données de test ; "
+        "15 mutations du programme font chacune rougir un test.",
+        [
+            ("Caché dans le fichier tel quel",
+             "Un vrai en-tête ELF, PE ou Mach-O à n'importe quel offset : un fichier natif nommé .txt, .png, .dat ou sans "
+             "extension, une charge ajoutée à un texte ou une image, après du bruit, après un lanceur shell, un PE avec un "
+             "stub DOS de n'importe quelle taille, un ELF à l'ident corrompu, un module noyau ou un objet eBPF, une "
+             "bibliothèque statique. CWE-506:hidden_native_executable:<type>:offset_<N>.",
+             "FAIL"),
+            ("Encodé",
+             "Base64 (replié, URI de données, JSON, lettres collées devant), hexadécimal, tableaux 0x (C, Python, Go, "
+             "PowerShell), échappements \\x et octaux, hexadécimal espacé, listes décimales, la même chose dans gzip, zlib "
+             "ou zip, et la tête sous un XOR ou ADD à un octet. CWE-506:encoded_native_executable:<type>:<encodage>.",
+             "FAIL"),
+            ("L'analyse n'a pas pu aboutir",
+             "Le programme sort en erreur, s'arrête tôt ou annonce un autre nombre d'enregistrements "
+             "(engine:native_scan_failed) ; le budget de temps est atteint ou un fichier ou répertoire est illisible "
+             "(engine:native_scan_incomplete:<raison>).",
+             "FAIL"),
+            ("Non détecté, et dit",
+             "Autres chiffrements (XOR multi-octets, RC4, AES), base64 de base64 ou texte inversé, charge répartie sur "
+             "plusieurs fichiers, exécutables dans des archives non ouvertes (wheels, APK, .7z, .deb), bytecode (wasm, "
+             "class, dex), scripts et lanceurs, charges compressées ou chiffrées, exécutables 16 bits NE/LE/LX.",
+             "—"),
         ]
     ),
 ]

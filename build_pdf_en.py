@@ -1585,6 +1585,10 @@ SUMMARY_TOOLS = [
      "All IaC checks pass",
      "Any FAILED check → FAIL",
      "SKIPPED checks → WARN"),
+    ("Native executables", "L4", True,
+     "No ELF, PE or Mach-O in any file, at any offset, encoded or not",
+     "hidden or encoded native executable; helper failed or budget reached → FAIL (not allowlistable)",
+     "—"),
     ("Office documents", "L5", True,
      "No hostile macro, DDE, remote template or embedded exe",
      "macro that runs programs, DDEAUTO, remote template, UNC path, embedded exe → FAIL",
@@ -1770,7 +1774,7 @@ text(cv, "A scanner nobody tests is a scanner nobody should trust",
      35, H - 110, size=14, color=GRAY)
 
 qa_cards = [
-    ("Test suite", "1425 assertions", [
+    ("Test suite", "1515 assertions", [
         "Runs with zero scanning tools installed",
         "Rule corpus: every finding must land on the right file",
         "False-positive guards for correct, safe code",

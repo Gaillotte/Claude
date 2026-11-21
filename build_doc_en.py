@@ -226,6 +226,7 @@ toc_items = [
     ("    5.28", "Package manifests"),
     ("    5.29", "Java archives (.jar .war .ear .aar)"),
     ("    5.30", "Office documents (OOXML, OpenDocument, legacy OLE2, RTF)"),
+    ("    5.31", "Native executables by content (ELF, PE, Mach-O in any file)"),
     ("6.", "Security Standards Covered"),
     ("7.", "Tools Used — Detailed Description"),
     ("8.", "Success Criteria per Tool"),
@@ -1644,6 +1645,46 @@ file_types = [
              "container, an unreadable VBA project; every limit reached. A document padded past the read budget is a "
              "WARN, not a FAIL: treat office:inspection_incomplete as 'not inspected'.",
              "WARN"),
+        ]
+    ),
+    (
+        "5.31 Native executables by content (ELF, PE, Mach-O in any file)",
+        "every file, whatever its name; files with a scanner of their own (.so .dll .exe, jar, Office, PDF, zip and tar) keep its verdict",
+        "An executable used to be caught only when its name said so or when file(1) called it x-executable, x-sharedlib or "
+        "x-dosexec. Measured on the reference host, 22% of the real ELF, PE and Mach-O files (938 of 4,256) passed under a "
+        "harmless name, and anything under node_modules, vendor, build, dist, target or .venv was never examined although "
+        "the approved archive includes it. One standard-library helper (transit/scanners/native.py), run by both engines, now "
+        "walks the whole tree (no directory pruned, .transitignore and diff mode do not apply) and reads every file in full "
+        "for a header that is really an executable: ELF (magic, a type and a machine: the Linux kernel ignores every other "
+        "field), PE (MZ whose e_lfanew points at PE\\0\\0, read wherever it points) and Mach-O (thin and fat). A bare MZ or "
+        "ELF magic is never a finding. Base64, hex, byte arrays, escapes, spaced hex, decimal lists, one level of gzip, "
+        "zlib or zip, and a single-byte XOR or ADD of the head are decoded first. The finding cannot be lowered by the "
+        "repository's own .transit-allow.json or by --min-severity, and its message is built from closed tables (a file named "
+        "x.:low: would otherwise downgrade itself). A helper that fails, an unreadable file or a time budget reached "
+        "(NATIVE_TIME_BUDGET_S, 120 s) is a FAIL, never a quiet pass. Calibration: 165,338 real files, 2,320 findings, all "
+        "2,143 at offset 0 confirmed by file(1) and the 177 others real executables inside archives and test data; "
+        "15 mutations of the helper each turn a test red.",
+        [
+            ("Hidden in the file as it is",
+             "A real ELF, PE or Mach-O header at any offset: a native file named .txt, .png, .dat or with no extension, "
+             "a payload appended to text or an image, after junk, after a shell launcher, a PE with a DOS stub of any "
+             "size, an ELF with a corrupted ident, a kernel module or eBPF object, a static library. "
+             "CWE-506:hidden_native_executable:<kind>:offset_<N>.",
+             "FAIL"),
+            ("Encoded",
+             "Base64 (wrapped, data URI, JSON, letters glued before it), hex, 0x byte arrays (C, Python, Go, PowerShell), "
+             "\\x and octal escapes, spaced hex, decimal lists, the same inside gzip, zlib or zip, and the head under a "
+             "single-byte XOR or ADD. CWE-506:encoded_native_executable:<kind>:<encoding>.",
+             "FAIL"),
+            ("The scan could not finish",
+             "The helper exits non-zero, ends early or announces another record count (engine:native_scan_failed); the time "
+             "budget is reached or a file or directory cannot be read (engine:native_scan_incomplete:<reason>).",
+             "FAIL"),
+            ("Not detected, and stated",
+             "Other ciphers (multi-byte XOR, RC4, AES), base64 of base64 or reversed text, a payload split across files, "
+             "executables inside archives that are not opened (wheels, APKs, .7z, .deb), bytecode (wasm, class, dex), "
+             "scripts and launchers, packed or encrypted payloads, 16-bit NE/LE/LX executables.",
+             "—"),
         ]
     ),
 ]
