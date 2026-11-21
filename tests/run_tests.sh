@@ -2970,8 +2970,8 @@ EOF
     assert_contains "$(j31 env_options)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: env options and NAME=value words are skipped to find the interpreter"
     assert_contains "$(j31 sh_hostile_args)" "CWE-78:remote_code_execution_curl_pipe_bash" "D-031: a hostile argument list does not stop the file being scanned"
     assert_eq "absent" "$([[ -e "$PWNED31" ]] && echo present || echo absent)" "D-031: …and nothing in it is executed or expanded"
-    assert_not_contains "$(j31 env_no_command)" "[FAIL]" "D-031: env with no command, and a bare #!, route nowhere and do not break the scan"
-    assert_not_contains "$(j31 bare_hashbang)" "[FAIL]" "D-031: …a bare #! line likewise"
+    assert_contains "$(j31 env_no_command)" "unscanned:no_scanner_for_this_file_type" "D-031: env with no command, and a bare #!, route nowhere: no scanner takes them (so they fail as unscanned, not by a crash) and the scan goes on"
+    assert_contains "$(j31 bare_hashbang)" "unscanned:no_scanner_for_this_file_type" "D-031: …a bare #! line likewise"
     assert_not_contains "$(j31 sh_benign)" "[FAIL]" "D-031: a harmless script with a shebang argument is not failed by being routed"
 
     # ── D-039: a folded-view rule (XXE) is not blind to a file over 5 MiB ─────────────────────────────
@@ -3448,9 +3448,9 @@ PY
     assert_contains "$(k7m sh_hostile_join)" "$SHRULE" "F7: …nor a hostile list after -Sbash"
     assert_eq "absent" "$([[ -e "$K7_ABS" ]] && echo present || echo absent)" "F7: …no command substitution in a shebang line was executed"
     assert_eq "absent" "$([[ -e "${ROOT_DIR}/${K7_REL}" ]] && echo present || echo absent)" "F7: …nor a backtick one"
-    assert_not_contains "$(k7m hostile_option)" "[FAIL]" "F7: an interpreter made of a command substitution routes nowhere and breaks nothing"
-    assert_not_contains "$(k7m hostile_split)"  "[FAIL]" "F7: …likewise as the value of --split-string"
-    assert_not_contains "$(k7m env_S_nothing)"  "[FAIL]" "F7: env -S with nothing after it breaks nothing"
+    assert_contains "$(k7m hostile_option)" "unscanned:no_scanner_for_this_file_type" "F7: an interpreter made of a command substitution routes nowhere and breaks nothing (no scanner takes it: it fails as unscanned, nothing is executed)"
+    assert_contains "$(k7m hostile_split)" "unscanned:no_scanner_for_this_file_type" "F7: …likewise as the value of --split-string (no scanner takes it: it fails as unscanned, nothing is executed)"
+    assert_contains "$(k7m env_S_nothing)" "unscanned:no_scanner_for_this_file_type" "F7: env -S with nothing after it breaks nothing (no scanner takes it: it fails as unscanned, nothing is executed)"
     assert_not_contains "$(k7m env_Sbash_benign)" "[FAIL]" "F7: a harmless script with -Sbash is not failed by being routed"
     rm -f "$K7_ABS" "${ROOT_DIR}/${K7_REL}"
 
