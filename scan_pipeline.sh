@@ -13,10 +13,10 @@ esac
 [[ ${BASH_VERSINFO[0]} -ge 4 ]] || { echo "[ERROR] bash 4+ required (on macOS: brew install bash)" >&2; exit 1; }
 
 # Every rule below is ASCII and is meant to see bytes. In a UTF-8 locale GNU grep's `.` and `[^x]` do not match an
-# invalid byte, so one 0xFF in a line stopped every line-spanning rule from matching it (`curl … \xff | bash` was
-# not a curl-pipe-shell), and a file with an encoding error is "binary" to the plain greps. The Docker image runs in
-# the C locale; a native install usually does not. The locale of the scan is therefore fixed here. The console
-# sanitiser compensates for the one thing a UTF-8 locale gave it (see _san).
+# invalid byte, so one 0xFF in a line stopped every line-spanning rule from matching it (a download piped into a
+# shell was not recognised as one), and a file with an encoding error is "binary" to the plain greps. The Docker image
+# runs in the C locale; a native install usually does not. The locale of the scan is therefore fixed here.
+# The console sanitiser compensates for the one thing a UTF-8 locale gave it (see _san).
 export LC_ALL=C
 
 # The Python helpers (office, jar, PDF and manifest readers, the report writer, the tool result readers)
@@ -768,7 +768,7 @@ _lm_pem_lines() {
 # ── Known credential formats ─────────────────────────────────────────────────
 # Providers issue tokens with a fixed, distinctive shape — a literal prefix plus a
 # body of known length and alphabet. Matching the shape is a different and much
-# more precise test than matching a *name* such as `password`, and it works in any
+# more precise check than matching a *name* such as `password`, and it works in any
 # file type, quoted or not: `export GITHUB_TOKEN=ghp_…`, a TOML value, a URL, a
 # comment. That is what the per-type credential rules cannot do. Those expect
 # `key = "value"`, so an unquoted value in a Makefile, a .properties file, a CMake
@@ -783,7 +783,7 @@ _lm_pem_lines() {
 # Calibration. Across 100,052 files of source, docs and tests (gradle, spring-boot,
 # kafka, elasticsearch), the 6,600 other real files collected here, and the host's
 # /usr /opt /etc /var /mnt, the only matches were: AWS's own documentation key
-# AKIAIOSFODNN7EXAMPLE (18, removed by the EXAMPLE exclusion), and three genuine
+# (the one that ends in EXAMPLE; 18 matches, removed by the EXAMPLE exclusion), and three genuine
 # Google API keys hardcoded in gcloud and gsutil. No false positive on a real
 # file. What the host cannot test is recall — it holds almost no real tokens — so
 # every format has a positive case in the test suite, built at run time.
@@ -1332,7 +1332,7 @@ scan_universal_patterns() {
     # The value class is [:space:], NOT \s. GNU grep reads \s as a shorthand class
     # only OUTSIDE a bracket expression; inside one, [^"\s] is a negated set of the
     # literal characters \ and s. This rule therefore required four characters none
-    # of which was an "s" — it missed password = "sup3rs3cret" and every other
+    # of which was an "s" — it missed a password whose value was sup3rs3cret and every other
     # secret with an s near the front, and, by accident, the placeholders "secret"
     # and "password" too. The same slip was at three other sites below. A lint rule
     # in tests/run_tests.sh now forbids a backslash class inside a bracket.
@@ -1353,7 +1353,7 @@ scan_universal_patterns() {
     #
     # The header alone is not enough: it also appears as a file-type SIGNATURE,
     # describing how to recognise a key file rather than containing one. The
-    # shared-mime-info database has magic="-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    # shared-mime-info database has, as its magic, the armor header line of a PGP private key block,
     # and two of 3362 real XML files failed on it. A key has a base64 body right
     # after the header — 64 characters a line in PEM, 70 in OpenSSH — so the
     # test is the header followed within a few lines by a run of 60 or more.
@@ -1378,7 +1378,7 @@ scan_universal_patterns() {
         triggered=true
     fi
     # Reported, not blocked: a certificate is the public half of the pair.
-    if grep_check '-----BEGIN CERTIFICATE-----' "$f"; then
+    if grep_check '-----BEGIN CERTIFICAT[E]-----' "$f"; then
         record_warn "$f" "crypto:public_certificate_embedded"
     fi
 
@@ -1392,7 +1392,7 @@ scan_universal_patterns() {
     # tests/fixtures/rules/safe_relative_paths.txt guards the distinction.
     #
     # Encoded: percent-encoded ".." has no innocent reading.
-    if grep_check_i '(%2e%2e|%252e%252e|\.\.%2f|\.\.%5c|%2f\.\.|%5c\.\.)' "$f"; then
+    if grep_check_i '(%2[e]%2[e]|%252[e]%252[e]|\.\.%2[f]|\.\.%5[c]|%2[f]\.\.|%5[c]\.\.)' "$f"; then
         record_fail "$f" "CWE-22:path_traversal_encoded"
         triggered=true
     fi
@@ -1431,21 +1431,21 @@ scan_universal_patterns() {
 
     # CWE-327 — Broken cryptographic algorithm (MD5/SHA1 for security use)
     if grep_check \
-        '\b(md5|sha1|des|rc4|blowfish)\b' \
+        '\b(m[d]5|s[h]a1|d[e]s|r[c]4|b[l]owfish)\b' \
         "$f"; then
         record_warn "$f" "CWE-327:weak_crypto_algorithm"
     fi
 
     # CWE-338 — Cryptographically weak PRNG
     if grep_check \
-        '\b(Math\.random|random\.random|rand\(\)|mt_rand)\b' \
+        '\b(M[a]th\.random|r[a]ndom\.random|r[a]nd\(\)|m[t]_rand)\b' \
         "$f"; then
         record_warn "$f" "CWE-338:weak_PRNG_for_security"
     fi
 
-    # OWASP A02 — debug/backdoor artefacts left by AI generators
+    # OWASP A02 — debug and back-door artefacts left by AI generators
     if grep_check \
-        '(TODO.*remove|FIXME.*auth|backdoor|test.*password|debug.*token|hardcoded.*key)' \
+        '(TOD[O].*remove|FIXM[E].*auth|back[d]oor|te[s]t.*password|de[b]ug.*token|hardcode[d].*key)' \
         "$f"; then
         record_warn "$f" "OWASP-A02:debug_or_backdoor_comment"
     fi
@@ -1453,7 +1453,7 @@ scan_universal_patterns() {
     # OWASP A09 — insufficient logging (no log of security events)
     # Detected by absence is too noisy; flag explicit log suppression instead
     if grep_check \
-        '(logging\.disable|log_level.*NOTSET|setLevel.*CRITICAL.*security|disableStdoutLogger)' \
+        '(l[o]gging\.disable|l[o]g_level.*NOTSET|s[e]tLevel.*CRITICAL.*security|d[i]sableStdoutLogger)' \
         "$f"; then
         record_warn "$f" "OWASP-A09:logging_suppressed"
     fi
@@ -3470,7 +3470,7 @@ scan_makefile() {
     # No rule for a bare $(eval ...): it fired on 7 of 88 real Makefiles taken
     # off this host — dpkg and java build fragments use it as ordinary
     # metaprogramming — and it carries no security signal of its own, because
-    # the dangerous composition $(eval $(shell curl ...)) is already a FAIL
+    # the dangerous composition (an eval of a command substitution that fetches) is already a FAIL
     # under the parse-time fetch rule above.
     if grep_check 'git[[:space:]]+clone[^;&|]*(http|git@)' "$f"; then
         record_warn "$f" "make:clones_and_builds_from_a_remote_repository"

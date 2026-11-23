@@ -29,19 +29,19 @@ _UNIVERSAL_CREDENTIAL = [
      'CWE-798:hardcoded_credential'),
 ]
 _UNIVERSAL_REST = [
-    ('warn', r'-----BEGIN CERTIFICATE-----', 'crypto:public_certificate_embedded'),
-    ('fail', r'(%2e%2e|%252e%252e|\.\.%2f|\.\.%5c|%2f\.\.|%5c\.\.)', 'CWE-22:path_traversal_encoded', 'i'),
+    ('warn', r'-----BEGIN CERTIFICAT[E]-----', 'crypto:public_certificate_embedded'),
+    ('fail', r'(%2[e]%2[e]|%252[e]%252[e]|\.\.%2[f]|\.\.%5[c]|%2[f]\.\.|%5[c]\.\.)', 'CWE-22:path_traversal_encoded', 'i'),
     ('fail', r"""\.\.[/\\][^[:space:]"'`]*((etc/)?(passwd|shadow)|\.ssh/|\.aws/|id_rsa|system32|proc/self)""",
      'CWE-22:path_traversal_to_sensitive_path', 'i'),
     ('fail', r"""(["'`]\.\.[/\\]["'`][[:space:]]*[+.][[:space:]]*|[+.][[:space:]]*["'`]/?\.\.[/\\]|f["'][^"']*(\{[^}]*\}[^"']*\.\.[/\\]|\.\.[/\\][^"']*\{[^}]*\})|`[^`]*(\$\{[^}]*\}[^`]*\.\.[/\\]|\.\.[/\\][^`]*\$\{))""",
      'CWE-22:path_traversal_composed_with_input', 'i'),
     ('warn', r'(requests\.get|urllib\.request|fetch|axios|http\.get)\s*\([^)]*\b(url|host|endpoint|target)\b',
      'CWE-918:potential_SSRF_unvalidated_URL'),
-    ('warn', r'\b(md5|sha1|des|rc4|blowfish)\b', 'CWE-327:weak_crypto_algorithm'),
-    ('warn', r'\b(Math\.random|random\.random|rand\(\)|mt_rand)\b', 'CWE-338:weak_PRNG_for_security'),
-    ('warn', r'(TODO.*remove|FIXME.*auth|backdoor|test.*password|debug.*token|hardcoded.*key)',
+    ('warn', r'\b(m[d]5|s[h]a1|d[e]s|r[c]4|b[l]owfish)\b', 'CWE-327:weak_crypto_algorithm'),
+    ('warn', r'\b(M[a]th\.random|r[a]ndom\.random|r[a]nd\(\)|m[t]_rand)\b', 'CWE-338:weak_PRNG_for_security'),
+    ('warn', r'(TOD[O].*remove|FIXM[E].*auth|back[d]oor|te[s]t.*password|de[b]ug.*token|hardcode[d].*key)',
      'OWASP-A02:debug_or_backdoor_comment'),
-    ('warn', r'(logging\.disable|log_level.*NOTSET|setLevel.*CRITICAL.*security|disableStdoutLogger)',
+    ('warn', r'(l[o]gging\.disable|l[o]g_level.*NOTSET|s[e]tLevel.*CRITICAL.*security|d[i]sableStdoutLogger)',
      'OWASP-A09:logging_suppressed'),
 ]
 

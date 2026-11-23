@@ -1625,6 +1625,42 @@ an extensionless Perl script all passed with nothing flagged; only a credential 
   328 failing files. On this host 39% of 171,428 real files have no per-type scanner. Layer O of the suite (both engines, mutation-tested:
   PASS again, `record_fail` instead of `record_fail_hard`, no control-file exception) pins it.
 
+## The project scans clean under its own rules
+
+The pipeline reads its own sources like any repository, and a rule definition holds what it detects: a pattern for a download piped into
+a shell contains the words of one, and so did the documents that explained it. A scan of this repository (the grep rules, gitleaks,
+semgrep) used to FAIL on `scan_pipeline.sh` for that reason alone. `tests/selfmatch.py` (Layer F, four assertions, each seen red) applies
+the engine's FAIL-level grep rules (read from the tables of `transit/scan_lang.py`, with the engine's grep flags) and the default
+gitleaks AWS-key and semgrep PGP-block expressions to the 31 project sources, drops the hits `.transit-allow.json` covers (same rule
+token and path as the engine reads it), and exits 1 on the rest.
+
+Three ways to keep a source clean, in this order:
+
+1. **Describe, do not quote**, in a comment or a document: "a download piped into a shell", "the armor header line of a PGP private key
+   block", "AWS's documentation key, the one that ends in EXAMPLE". A document that needs a credential fixture writes it with the keyword
+   as a `printf` argument, so the file it creates is byte for byte the same.
+2. **A rule pattern gets one bracketed character in every literal run.** In an ERE a bracket holding one letter is that letter, so
+   `%2[e]%2[e]` is the regex of the sequence it detects while its own text no longer holds that sequence. The shell pattern and the
+   Python table keep the same text, and the rule names and messages never change. This was checked for the six rules concerned on about
+   70,000 crafted lines per rule (case, glue characters, single-character mutations, both locales) and on an 80-file scan under both
+   engines: same matches, same reports.
+3. **`.transit-allow.json`**, path-scoped and with a reason, for files that hold hostile text by nature: `tests/run_tests.sh` writes the
+   fixtures, `transit/core.py` and `transit/scan_docs.py` call subprocess with argument lists, never a shell. A scan reports those as
+   `ALLOWED:` WARNs, not FAILs.
+
+A gitleaks or semgrep finding cannot be allowlisted per path: the pipeline ignores the repository's own `.gitleaks.toml`,
+`.gitleaksignore` and inline allow comments on purpose, and the finding is about the whole directory. A source must not hold those
+literals at all.
+
+What stays a WARN, by design: the broad A02 heuristic matches rule names (the private-key rule's message and its own: 4 lines of
+`scan_pipeline.sh`, 2 of `transit/scan_lang.py`, 2 of `transit/scan_docs.py`) and the wording of 12 test names in `tests/run_tests.sh`; the
+IFS rule matches ordinary `while IFS= read -r` code (22 lines of `scan_pipeline.sh`, 3 of `tests/run_tests.sh`). Removing them would mean
+renaming a rule or refining one, which is a calibrated rule change. Outside the guard's list, on purpose or not yet: `tests/fixtures`
+(hostile files), the document build scripts (`build_*.py`) and `tests/conformance/conformance.py`, which quote rule text to explain it.
+
+Adding a rule: put the bracket in its pattern, add a new source file to `SCOPE` in `tests/selfmatch.py`, run
+`python3 -I tests/selfmatch.py`.
+
 ## selfcheck.py flags
 
 ```bash
