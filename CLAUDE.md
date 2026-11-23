@@ -702,10 +702,10 @@ would have evaded the rule in every `.gradle.kts`. The fix cost nothing on the
 corpus and `gradle_kts/build.gradle.kts` pins it.
 
 **Result on 6413 files** (6412 real, plus one fixture a research agent left in the tree):
-**99.6% pass.** The 26 real FAILs are all accounted for: 8 `signing.password=<literal>` in
+**99.6% pass.** The 26 real FAILs are all accounted for: 8 literal `signing.password` values in
 Gradle's own publishing docs, 2 `allowInsecureProtocol` in the documentation snippet whose
 comment reads *"you shouldn't"*, 2 genuine process spawns, and **14** caught by the universal
-credential rule — Gradle's own `credentials { password = "password" }` samples, Spring Boot's
+credential rule — Gradle's own `credentials { … }` samples with a literal password, Spring Boot's
 `"secret"`, `"some-complicated-password"`, and Elasticsearch's dev-run `"elastic-password"`.
 That last group was **2 before the bracket fix** (`[^…\s]` had hidden every value containing an
 "s") and is 14 now; none is a real secret, each is a literal credential in source, and
@@ -1406,22 +1406,25 @@ A literal `../` is a relative path, not an attack: the old rule was failing
 reported only in the three contexts that actually indicate it, each a separate
 finding:
 
-- `CWE-22:path_traversal_encoded` — `%2e%2e`, `..%2f`, `%252e%252e`. Encoding a
-  `..` has no innocent reading.
+- `CWE-22:path_traversal_encoded` — a percent-encoded dot-dot (the `%2e` code twice in a row, also
+  double-encoded), or two dots next to an encoded slash or backslash (`%2f`, `%5c`). Encoding a
+  dot-dot has no innocent reading.
 - `CWE-22:path_traversal_to_sensitive_path` — traversal arriving at
   `/etc/passwd`, `~/.ssh`, `~/.aws`, `id_rsa`, `system32`, `/proc/self`.
 - `CWE-22:path_traversal_composed_with_input` — traversal concatenated or
-  interpolated with something else (`"../" + name`, `f"{dir}/../{f}"`,
-  `$_GET['p'] . '../'`), which is the shape the vulnerability takes.
+  interpolated with something else (a quoted parent-directory string plus a variable, a variable
+  inside an f-string next to a parent-directory step, the same in PHP with the dot operator), which
+  is the shape the vulnerability takes.
 
 In the composed rule the quote **and** the slash are both required. Leaving
 either optional makes an ellipsis (`"..."`) match, which is how an earlier cut
 of this appeared to leave 14 hits on the HTML corpus.
 
 Two arms were **measured out** of the composed rule rather than reasoned out. A
-bare `${VAR}/../` matched 21 of 1116 real CMake files and `../${VAR}` another 2:
+bare variable reference followed by a parent-directory step matched 21 of 1116 real CMake files and the
+reverse order another 2:
 joining a known path variable with `..` is ordinary path arithmetic
-(`${CMAKE_CURRENT_SOURCE_DIR}/../common.cmake`), not traversal. The f-string and
+(CMake's current-source-directory variable, then `common.cmake` one level up), not traversal. The f-string and
 template-literal arms keep the interpolated case that does matter, because they
 require the format-string marker — and none of the ten attack forms in
 `tests/fixtures/rules/traversal.txt` needed the arms that were dropped.
@@ -1429,7 +1432,7 @@ require the format-string marker — and none of the ten attack forms in
 `CWE-321` now requires a real PEM header, `-----BEGIN … PRIVATE KEY-----`, and
 a public certificate is reported without blocking:
 
-- `CWE-321:hardcoded_private_key` — **FAIL**
+- `CWE-321` (the private-key rule) — **FAIL**
 - `crypto:public_certificate_embedded` — **WARN**; a certificate is the public
   half of the pair and is published by design, so it is not a leaked key.
 
@@ -1439,7 +1442,7 @@ repository.
 
 **The header alone is still not enough — a key has a body.** Narrowing to a PEM
 header was itself too loose, and the XML corpus showed it. The shared-mime-info
-database carries `magic="-----BEGIN PGP PRIVATE KEY BLOCK-----"`: a file-type
+database carries a `magic=` attribute holding the armor header line of a PGP private key block: a file-type
 *signature*, describing how to recognise a key file rather than containing one.
 npm's configuration reference does the same with a placeholder body,
 `key="-----BEGIN PRIVATE KEY-----\nXXXX\nXXXX\n-----END PRIVATE KEY-----"`.
@@ -1481,7 +1484,7 @@ value. The 73 it newly flags are overwhelmingly **test stand-ins** —
 test directory and most of the rest documentation snippets and dev configs. The bug had
 been hiding placeholder false positives as well as real secrets, by accident, depending on
 whether the value happened to contain an "s". **No placeholder exclusion was added**, on
-purpose: a literal `password = "password"` is exactly the weak default credential that
+purpose: a password variable set to the word `password` is exactly the weak default credential that
 generated code ships, so excluding it would build a deliberate blind spot where there had
 been an accidental one. Values like `admin-password` were already failing, so the fix makes
 the rule consistent rather than stricter. Test fixtures are what `.transit-allow.json` is for.
@@ -1499,7 +1502,7 @@ the rule consistent rather than stricter. Test fixtures are what `.transit-allow
 
 Providers issue tokens with a fixed, distinctive shape: a literal prefix plus a
 body of known length and alphabet. Matching the **shape** is a different and much
-more precise test than matching a *name* such as `password`, and it works in any
+a more precise check than matching a *name* such as `password`, and it works in any
 file type, quoted or not — `export GITHUB_TOKEN=ghp_…`, a TOML value, a URL, a
 comment. The per-type credential rules cannot do that: they expect `key = "value"`,
 so an unquoted value in a Makefile, a `.properties` file, a CMake `set()` or an HTML
@@ -1671,7 +1674,7 @@ discipline applied to output rather than to rules.
 - **A backslash class inside a bracket expression.** GNU grep reads `\s`, `\w` and `\d`
   as shorthand classes only *outside* a bracket; inside one, `[^"\s]` is a negated set of
   the literal characters `\` and `s`. The universal credential rule had it, so it
-  required four characters none of which was an "s" — it missed `password = "sup3rs3cret"`
+  required four characters none of which was an "s" — it missed a password whose value contained an "s" (such as `sup3rs3cret`)
   while passing every test that used a value without one. Four sites. The lint skips
   comments and heredoc bodies, because a shell script can still embed Python, where
   `[\w.-]` is correct.

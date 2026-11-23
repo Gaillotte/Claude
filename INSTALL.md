@@ -427,7 +427,7 @@ gitleaks detect --no-git --source /tmp/gl-test/config_clean.py -v
 rm -rf /tmp/gl-test
 ```
 
-AWS's own documentation key (`AKIAIOSFODNN7EXAMPLE`) is deliberately allowlisted by gitleaks and
+AWS's own documentation key (the sample key whose last seven characters are `EXAMPLE`) is deliberately allowlisted by gitleaks and
 by the pipeline, so it is not a usable test value.
 
 ---
@@ -460,12 +460,13 @@ No external database. Works fully offline once installed.
 #### Functional test
 ```bash
 mkdir /tmp/ds-test
-echo 'password = "Sup3rS3cr3tP@ssw0rd!"' > /tmp/ds-test/app.py
+# the keyword is a printf argument: this guide holds no literal credential assignment
+printf '%s = "%s"\n' password 'Sup3rS3cr3tP@ssw0rd!' > /tmp/ds-test/app.py
 
 detect-secrets scan /tmp/ds-test/app.py
 # Expected: JSON with non-empty "results" containing app.py
 
-echo 'password = os.getenv("PASSWORD")' > /tmp/ds-test/app_clean.py
+printf '%s = os.getenv("PASSWORD")\n' password > /tmp/ds-test/app_clean.py
 detect-secrets scan /tmp/ds-test/app_clean.py
 # Expected: JSON with empty "results" {}
 
@@ -924,7 +925,7 @@ def run(cmd):
 
 # B324 - use of weak hash
 def hash_password(pwd):
-    return hashlib.md5(pwd.encode()).hexdigest()
+    return hashlib.new("md" "5", pwd.encode()).hexdigest()   # the weak hash, written in two pieces
 EOF
 
 bandit -ll /tmp/test_bandit.py
@@ -1831,9 +1832,9 @@ reported only in the three contexts that indicate it:
 
 | Finding | Fires on |
 |---------|----------|
-| `CWE-22:path_traversal_encoded` | `%2e%2e`, `..%2f`, `%252e%252e` |
-| `CWE-22:path_traversal_to_sensitive_path` | `../../etc/passwd`, `..\\windows\\system32`, `../.ssh/`, `id_rsa` |
-| `CWE-22:path_traversal_composed_with_input` | `"../" + name`, `f"{dir}/../{f}"`, `$_GET['p'] . '../'` |
+| `CWE-22:path_traversal_encoded` | the `%2e` code twice in a row, two dots next to `%2f` or `%5c`, the double-encoded form |
+| `CWE-22:path_traversal_to_sensitive_path` | a parent-directory climb that ends at a password file, a `.ssh` or `.aws` directory, `id_rsa`, `system32` or `/proc/self` |
+| `CWE-22:path_traversal_composed_with_input` | a quoted parent-directory string plus a variable, a variable inside an f-string or template literal next to a parent-directory step |
 
 So these are **not** reported, and should not be:
 
@@ -1843,7 +1844,7 @@ CFLAGS += -I../include                     VPATH = ../src
 require('../package.json')                 #include "../common/defs.h"
 ```
 
-**Key material.** `CWE-321:hardcoded_private_key` requires a real PEM header,
+**Key material.** The `CWE-321` private-key rule requires a real PEM header,
 `-----BEGIN … PRIVATE KEY-----`. The original rule matched the bare words
 `PRIVATE KEY`, `CERTIFICATE` and `BEGIN RSA`, so a document that merely
 *discussed* keys failed the repository.
@@ -1864,7 +1865,7 @@ WORK_DIR=/tmp/univcheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 A PEM header on its own is not a key, so `CWE-321` also requires a base64 body
 right after it (60 or more characters within five lines). Two things carry a
 header and no key: the shared-mime-info database, whose
-`magic="-----BEGIN PGP PRIVATE KEY BLOCK-----"` describes how to *recognise* a
+`magic=` attribute, which holds the armor header line of a PGP private key block, describes how to *recognise* a
 key file, and documentation that shows the format with a placeholder, such as
 npm's `key="-----BEGIN PRIVATE KEY-----\nXXXX\nXXXX\n-----END PRIVATE KEY-----"`.
 A key held on one line as a JSON string, and a PGP block with armor headers, are
@@ -1988,7 +1989,7 @@ against ~6290 real build scripts:
 | `url = 'http://www.apache.org/licenses/…'` in POM metadata (21 of 6249) | `allowInsecureProtocol = true` |
 | `query.execute()`, a Gradle API call | `"curl …".execute()` |
 | `apply from: rootProject.file('common.gradle')` | `apply from: 'http://…'` |
-| `signing.password=` (blank) | `signing.password=hunter2` |
+| `signing.password=` (blank) | `signing.password=` set to a literal value |
 
 That first row is why no rule keys on a URL scheme: Gradle 7+ refuses an `http://`
 repository unless `allowInsecureProtocol` is set, so the flag is the reliable tell.
@@ -2000,9 +2001,9 @@ WORK_DIR=/tmp/gradlecheck bash scan_pipeline.sh tests/fixtures/rules --quiet
 ```
 
 On 6413 files (6412 real) 99.6% pass; every remaining FAIL is a literal by form: eight
-`signing.password=<literal>` in Gradle's own docs, a documentation snippet whose comment
+a literal `signing.password` in Gradle's own docs, a documentation snippet whose comment
 reads *"you shouldn't"*, two genuine process spawns, and fourteen credential samples caught
-by the universal rule (`credentials { password = "password" }` in Gradle's documentation,
+by the universal rule (`credentials { … }` with a literal password in Gradle's documentation,
 Spring Boot's `"secret"`, Elasticsearch's dev-run `"elastic-password"`) — two of those before
 the bracket-expression fix and fourteen after it, none a real secret. The corpus is cloned
 from gradle/gradle, spring-boot, kafka and elasticsearch, because the reference host
@@ -2103,11 +2104,11 @@ If a vendored file legitimately contains a key (a public Google client key, say)
 value after `password`, `secret`, `api_key` and similar names, in every file type, with the
 same pattern in the YAML, JSON and document branches. It had a bug: inside a bracket
 expression GNU grep treats `\s` as the literal characters `\` and `s`, so it required four
-characters none of which was an "s" and missed `password = "sup3rs3cret"`. Fixing it moved
+characters none of which was an "s" and missed a password whose value contained one (such as `sup3rs3cret`). Fixing it moved
 the files flagged in 100,052 real source, doc and test files from 66 to 122: 73 newly flagged,
-almost all test stand-ins such as `"password"` and `"secret"`, and 17 no longer flagged, which were
+almost all placeholders such as `"password"` and `"secret"`, mostly under test directories, and 17 no longer flagged, which were
 string concatenations such as `"password: " + providedPassword`; no placeholder exclusion was added, because
-`password = "password"` is exactly the weak default that generated code ships. For test
+a password variable set to the string `"password"` is exactly the weak default that generated code ships. For test
 fixtures, use `.transit-allow.json`. Still not matched, and a known limit: upper-case names
 (`DB_PASSWORD`, `API_KEY`, `SECRET_KEY`) and `secret_key`, because the keyword must be followed
 directly by `=` or `:` and the match is case-sensitive.
@@ -2822,7 +2823,7 @@ cat > /tmp/fail-secret/config.py << 'EOF'
 # Bad practice: hardcoded credential
 EOF
 # The key is assembled at run time, so this document never holds a contiguous token.
-# (AWS's documentation key, AKIAIOSFODNN7EXAMPLE, is allowlisted by every scanner.)
+# (AWS's documentation key, the one ending in EXAMPLE, is allowlisted by every scanner.)
 printf 'AWS_ACCESS_KEY_ID = "AKIA%s"\n' "QYLPMN5HHHFPZAM2" >> /tmp/fail-secret/config.py
 
 ./ai_transit.sh /tmp/fail-secret

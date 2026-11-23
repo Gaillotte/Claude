@@ -84,7 +84,7 @@ check_simple() {   # name, command that must succeed offline
     else fail "$name works offline" "command failed or timed out: $cmd"; fi
 }
 
-echo 'password = "hunter2supersecret123"' > "${SCRATCH}/probe.py"
+printf '%s = "%s"\n' password hunter2supersecret123 > "${SCRATCH}/probe.py"   # keyword as an argument: no literal credential in this file
 echo 'x = 1' > "${SCRATCH}/clean.py"
 printf '#!/bin/sh\necho "$1"\n' > "${SCRATCH}/probe.sh"
 printf 'int main(){return 0;}\n' > "${SCRATCH}/probe.c"

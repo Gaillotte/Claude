@@ -1,0 +1,7 @@
+[
+  {"rule": "CWE-798", "path": "tests/run_tests.sh", "reason": "test script: it writes the credential fixtures (a literal password in a generated file) that the rules under test must catch"},
+  {"rule": "CWE-22",  "path": "tests/run_tests.sh", "reason": "test script: it writes the percent-encoded traversal fixtures that the rules under test must catch"},
+  {"rule": "CWE-78",  "path": "tests/run_tests.sh", "reason": "test script: it writes the 'download piped into a shell' fixtures and names them in assertion messages"},
+  {"rule": "CWE-78",  "path": "transit/core.py", "reason": "the engine runs external tools with subprocess and an argument list, never a shell; bandit checks shell=True separately"},
+  {"rule": "CWE-78",  "path": "transit/scan_docs.py", "reason": "the engine runs external tools with subprocess and an argument list, never a shell; bandit checks shell=True separately"}
+]

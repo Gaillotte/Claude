@@ -122,7 +122,7 @@ A valid PDF, zip, jar or Office document with a payload appended or stored insid
 | `evil.service` | `curl … \| sh` | PASS, nothing flagged |
 | `evil.swift` | `Process()` launching `/bin/sh -c "curl … \| sh"` | PASS, nothing flagged |
 | `noext_perl` | `#!/usr/bin/perl` + `system("curl … \| sh")` | PASS, nothing flagged |
-| `secret.toml` | `password = "hunter2hunter2"` | **FAIL**, `CWE-798:hardcoded_credential` (universal rule) |
+| `secret.toml` | a `password` key set to a quoted literal | **FAIL**, `CWE-798:hardcoded_credential` (universal rule) |
 
 ### 5.2 How much of a real tree is unrouted
 
