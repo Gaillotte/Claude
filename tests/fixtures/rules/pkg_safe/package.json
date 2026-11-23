@@ -1,0 +1,21 @@
+{
+  "name": "widget",
+  "version": "1.0.0",
+  "scripts": {
+    "prepare": "husky install",
+    "prepublishOnly": "node -e \"if (!process.env.AUTHORIZED) { console.error('use the publish script'); process.exit(1) }\"",
+    "postinstall": "node scripts/postinstall.js",
+    "download-fixtures": "curl -fsSL https://example.test/data.json -o data.json",
+    "build": "tsc",
+    "test": "jest"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "csrf-token": "^2.0.0",
+    "shared": "file:../shared",
+    "tool": "github:org/tool#semver:^1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.4.0"
+  }
+}

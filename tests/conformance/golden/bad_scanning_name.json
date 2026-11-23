@@ -1,0 +1,15 @@
+{
+ "exit": 1,
+ "last_line": "",
+ "meta": {
+  "engine": "bash",
+  "locale": "C.UTF-8",
+  "tools_present": [
+   "npm",
+   "file",
+   "strings",
+   "unzip"
+  ]
+ },
+ "report": null
+}

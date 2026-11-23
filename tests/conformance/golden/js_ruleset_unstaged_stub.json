@@ -1,0 +1,105 @@
+{
+ "exit": 0,
+ "last_line": "PASS",
+ "meta": {
+  "engine": "bash",
+  "locale": "C.UTF-8",
+  "tools_present": [
+   "npm",
+   "file",
+   "strings",
+   "unzip"
+  ]
+ },
+ "report": {
+  "coverage": {
+   "L1_ioc_yara": "skipped:yara or rules directory missing",
+   "L1_malware": "skipped:clamav not installed",
+   "L1_secrets_entropy": "skipped:detect-secrets not installed",
+   "L1_secrets_gitleaks": "skipped:gitleaks not installed",
+   "L2_owasp_cwe": "ran",
+   "L3_dependency_cve": "skipped:disabled (RUN_SCA is not true)",
+   "L4_patterns": "ran",
+   "L5_per_language_sast": "partial:javascript rule set not staged",
+   "L6_licence": "skipped:disabled (RUN_SCANCODE is not true)"
+  },
+  "coverage_complete": false,
+  "coverage_gaps": [
+   "L1_ioc_yara",
+   "L1_malware",
+   "L1_secrets_entropy",
+   "L1_secrets_gitleaks",
+   "L3_dependency_cve",
+   "L5_per_language_sast",
+   "L6_licence"
+  ],
+  "decision": "APPROVED",
+  "file_results": {
+   "README.md": {
+    "messages": [],
+    "status": "PASS"
+   },
+   "__global__": {
+    "messages": [
+     "[WARN] OFFLINE:semgrep javascript rule set not staged in <WORK>/offline-cache/semgrep-rules \u2014 per-file JavaScript SAST did NOT run; stage it with prepare_offline_cache.sh on a connected host",
+     "[WARN] clamscan missing",
+     "[WARN] detect-secrets missing",
+     "[WARN] gitleaks missing \u2014 secret scan skipped",
+     "[WARN] yara or rules directory missing"
+    ],
+    "status": "WARN"
+   },
+   "requirements.txt": {
+    "messages": [],
+    "status": "PASS"
+   },
+   "src/app.js": {
+    "messages": [],
+    "status": "PASS"
+   },
+   "src/app.py": {
+    "messages": [
+     "[WARN] bandit missing"
+    ],
+    "status": "WARN"
+   },
+   "src/setup.sh": {
+    "messages": [
+     "[WARN] shellcheck missing"
+    ],
+    "status": "WARN"
+   }
+  },
+  "findings": [],
+  "findings_by_file": {},
+  "scan_name": "conf",
+  "source": {
+   "sha256": "6b467d7e3db0107236ec4be6611d5f7f7a141d99679791fc0da4b214a51bc233"
+  },
+  "standards": [
+   "OWASP-Top10-2021",
+   "CWE-Top25",
+   "CERT-Secure-Coding",
+   "PDF-Active-Content",
+   "Build-Script-Hardening",
+   "HTML-Active-Content",
+   "XML-Build-Hardening",
+   "Package-Manifest-Integrity",
+   "Gradle-Build-Hardening",
+   "Install-Time-Python",
+   "Known-Credential-Formats",
+   "PowerShell-Hardening",
+   "Windows-Batch-Hardening",
+   "Java-Archive-Hardening",
+   "Office-Document-Hardening"
+  ],
+  "status_background": "#D1E7DD",
+  "status_color": "#198754",
+  "summary": {
+   "fail": 0,
+   "pass": 5,
+   "warn": 7
+  },
+  "verdict": "PASS"
+ }
+}

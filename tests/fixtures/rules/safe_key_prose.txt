@@ -1,0 +1,26 @@
+Writing about keys is not the same as committing one. Every line below failed
+the repository before the rule required a PEM header.
+
+  Store the PRIVATE KEY in a hardware security module, never in the repo.
+  The CERTIFICATE chain must be complete before deployment.
+  Pass BEGIN RSA to openssl to start the block.
+
+A public certificate is published by design and is not a secret, so it is
+worth noting rather than blocking:
+
+-----BEGIN CERTIFICATE-----
+MIIBkTCB+wIJAKZfixtureonlynotarealcertificatefixtureonlynotareal
+-----END CERTIFICATE-----
+
+A PEM header can also appear as a file-type SIGNATURE, which describes how to
+recognise a key file rather than containing one. This is the shared-mime-info
+database, found by scanning 3362 real XML files - two of them failed on it:
+
+  <mime type="application/pgp-keys" magic="-----BEGIN PGP PRIVATE KEY BLOCK-----" />
+  <match type="string" value="-----BEGIN PGP PRIVATE KEY BLOCK-----" offset="0"/>
+
+Documentation shows the key format with a placeholder body. This is npm's own
+configuration reference, which three of 388 real HTML files on this host
+reproduce - a PEM header followed by XXXX, not a key:
+
+  key="-----BEGIN PRIVATE KEY-----\nXXXX\nXXXX\n-----END PRIVATE KEY-----"
