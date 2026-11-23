@@ -4447,6 +4447,7 @@ generate_report_json() {
     # finding messages that contain triple-quote sequences.
     local _tmp
     _tmp=$(mktemp -d)
+    # shellcheck disable=SC2064  # double quotes on purpose: a RETURN trap is not scoped to this function and outlives `local _tmp`
     trap "rm -rf '$_tmp'" RETURN
 
     # NUL-delimited streams: key\x00value\x00key\x00value…

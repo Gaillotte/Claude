@@ -1535,6 +1535,7 @@ if ! _skipping; then
     jar_with() {   # jar_with <file> VAR=value … ; prints the findings for that file
         local name="$1"; shift
         (
+            # shellcheck disable=SC2163  # "$@" is the NAME=value pairs the caller passed: that is what is exported
             export "$@"
             run_pipeline "$JARLIM" --quiet
             [[ -n "$RUN_JSON" ]] && json_findings "$RUN_JSON" | grep "/${name} " || true
@@ -1602,6 +1603,7 @@ if ! _skipping; then
     cp "${FIXTURES}/rules/office_big.docx" "$OFFLIM/"
     office_with() {   # office_with VAR=value … ; prints the findings for office_big.docx
         (
+            # shellcheck disable=SC2163  # "$@" is the NAME=value pairs the caller passed: that is what is exported
             export "$@"
             run_pipeline "$OFFLIM" --quiet
             [[ -n "$RUN_JSON" ]] && json_findings "$RUN_JSON" | grep "/office_big.docx " || true
@@ -2289,8 +2291,8 @@ print(type(f).__name__, type(d['findings_by_file']).__name__, all(need <= set(r)
     assert_contains "$(g_json "${GR}/report_scan_calm.json" coverage_gaps)" "L3_dependency_cve" \
         "a disabled layer is a coverage gap"
     g_scan "${FIXTURES}/clean" "$GR" both_on
-    GEC_BOTH=$(cd "$ROOT_DIR" && WORK_DIR="$GW" RUN_SCA=true RUN_SCANCODE=true timeout 300 bash ./scan_pipeline.sh \
-        "${FIXTURES}/clean" "$GR" both_on >/dev/null 2>&1; echo $?)
+    (cd "$ROOT_DIR" && WORK_DIR="$GW" RUN_SCA=true RUN_SCANCODE=true timeout 300 bash ./scan_pipeline.sh \
+        "${FIXTURES}/clean" "$GR" both_on >/dev/null 2>&1)
     assert_not_contains "$(g_json "${GR}/report_scan_both_on.json" coverage.L3_dependency_cve)" "disabled" \
         "RUN_SCA=true runs layer 3 again"
     assert_not_contains "$(g_json "${GR}/report_scan_both_on.json" coverage.L6_licence)" "disabled" \
@@ -2342,8 +2344,8 @@ print(len(r), r[0]['category'], r[0]['severity'], r[0]['file']) if r else print(
 " "${GR}/report_scan_leaks.json" 2>/dev/null || echo unreadable)
     assert_eq "1 secret CRITICAL ." "$REC" "the gitleaks finding is a structured record about the whole directory"
     assert_eq "ran" "$(g_json "${GR}/report_scan_leaks.json" coverage.L1_secrets_gitleaks)" "coverage names L1_secrets_gitleaks"
-    OUT_GL0=$(cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=0 WORK_DIR="$GW" timeout 300 \
-        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" noleaks 2>&1); EC_GL0=$?
+    (cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=0 WORK_DIR="$GW" timeout 300 \
+        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" noleaks >/dev/null 2>&1); EC_GL0=$?
     assert_eq "0" "$EC_GL0" "gitleaks exiting 0 (nothing found) leaves a clean repo passing"
     assert_eq "0" "$(grep -c 'betterleaks' "${ROOT_DIR}/scan_pipeline.sh" | tr -d ' ')" \
         "scan_pipeline.sh no longer refers to betterleaks"
@@ -2385,8 +2387,8 @@ print(r[0]['rule_id'], r[0]['line'], r[0]['severity'], r[0]['file'], r[0]['messa
         "…and coverage does not claim the layer ran"
 
     # A finding gitleaks or ClamAV reports is critical, so --min-severity critical must not let it through.
-    OUT_GL4=$(cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=1 MIN_SEVERITY=critical WORK_DIR="$GW" timeout 300 \
-        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" gl4 2>&1); EC_GL4=$?
+    (cd "$ROOT_DIR" && PATH="${GST}:$PATH" GITLEAKS_STUB_EXIT=1 MIN_SEVERITY=critical WORK_DIR="$GW" timeout 300 \
+        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" gl4 >/dev/null 2>&1); EC_GL4=$?
     assert_eq "1" "$EC_GL4" "--min-severity critical still fails on a gitleaks leak"
 
     # Severity is read from the Semgrep severity field, never from the message text after it.
@@ -2397,8 +2399,8 @@ print(r[0]['rule_id'], r[0]['line'], r[0]['severity'], r[0]['file'], r[0]['messa
 echo '{"results":[{"check_id":"rule.x","path":"${FIXTURES}/clean/t.py","start":{"line":2},"extra":{"message":"see :LOW: note","severity":"ERROR"}}]}'
 EOF
     chmod +x "${SGS}/semgrep"
-    OUT_SG=$(cd "$ROOT_DIR" && PATH="${SGS}:$PATH" OFFLINE_CACHE="${SCRATCH}/g_sgcache" WORK_DIR="$GW" timeout 300 \
-        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" sg 2>&1); EC_SG=$?
+    (cd "$ROOT_DIR" && PATH="${SGS}:$PATH" OFFLINE_CACHE="${SCRATCH}/g_sgcache" WORK_DIR="$GW" timeout 300 \
+        bash ./scan_pipeline.sh "${FIXTURES}/clean" "$GR" sg >/dev/null 2>&1); EC_SG=$?
     assert_eq "1" "$EC_SG" "a Semgrep ERROR whose message text contains ':LOW:' is still blocking"
     assert_eq "HIGH" "$(python3 -c "
 import json,sys
@@ -2519,9 +2521,9 @@ if ! _skipping; then
         printf 'import os\nos.system(input())\nprint(eval(input()))\n' > "$1/app.py"
         printf 'password = "hunter2hunter2"\n' > "$1/cfg.py"
     }
-    I_RUN() {       # I_RUN <dir> <name>; sets IEC and IV (the verdict in the report)
+    I_RUN() {       # I_RUN <dir> <name>; sets IV (the verdict in the report)
         local rep="${SCRATCH}/i_rep"; mkdir -p "$rep"
-        (cd "$ROOT_DIR" && WORK_DIR="${SCRATCH}/i_work" timeout 300 bash ./scan_pipeline.sh --quiet "$1" "$rep" "$2" >/dev/null 2>&1); IEC=$?
+        (cd "$ROOT_DIR" && WORK_DIR="${SCRATCH}/i_work" timeout 300 bash ./scan_pipeline.sh --quiet "$1" "$rep" "$2" >/dev/null 2>&1)
         IV=$(python3 -c "
 import json,sys
 print(json.load(open(sys.argv[1]))['verdict'])" "${rep}/report_scan_$2.json" 2>/dev/null || echo none)
@@ -3369,7 +3371,7 @@ PY
     K5D="${SCRATCH}/k5_term_repo"; rm -rf "$K5D"; mkdir -p "$K5D"; printf '<a/>\n' > "$K5D/ok.xml"
     KENV=(PATH="${K5S}:${PATH}" TMPDIR="$K5T"); k_scan "$K5D" k5_term; KENV=()
     assert_eq "143" "$KEC" "F5: the stub ended the scan with SIGTERM while it searched the XML view (the test is not vacuous)"
-    assert_eq "0" "$(ls -A "$K5T" | grep -c aitransit_xml_)" "F5: …and no temporary XML view is left behind"
+    assert_eq "0" "$(shopt -s nullglob; k5_left=("$K5T"/*aitransit_xml_*); echo "${#k5_left[@]}")" "F5: …and no temporary XML view is left behind"
 
     # ── F6: a grep that cannot finish is neither a match nor a clean file ────────────────────────────
     # grep_flat counted a grep that failed (exit 2: out of memory, an I/O error) as a MATCH, so the report named an XXE attack
@@ -3739,7 +3741,7 @@ PY
         { wait "$pid"; } 2>/dev/null; K13_EC=$?
         return 0
     }
-    k13_left() { ls -A "$1" 2>/dev/null | grep -cE '^\.(diff_files|manifest)\.' || true; }   # k13_left <work dir>: temporary lists still there
+    k13_left() { ( shopt -s nullglob; k13_f=("$1"/.diff_files.* "$1"/.manifest.*); echo "${#k13_f[@]}" ); }   # k13_left <work dir>: temporary lists still there
     K13P="${SCRATCH}/k13_plain"; rm -rf "$K13P"; mkdir -p "$K13P"; printf 'print(1)\n' > "$K13P/ok.py"
     K13M=$(k_stubdir k13_sha); k_wrap "$K13M" sha256sum "ls \"\$WORK_DIR\"/.manifest.* > '${K13M}/seen' 2>/dev/null; echo \$\$ > '${K13M}/pid'; exec sleep 37"
     K13W1="${SCRATCH}/k13_w1"; rm -rf "$K13W1"; mkdir -p "$K13W1"
@@ -3780,9 +3782,9 @@ fi
 group "Layer L — fixes found by the Python port"
 if ! _skipping; then
     LW="${SCRATCH}/l_work"; LR="${SCRATCH}/l_rep"; mkdir -p "$LW" "$LR"
-    l_scan() {   # l_scan <engine> <dir> <name> <stub dir>; sets LREP, LEC
+    l_scan() {   # l_scan <engine> <dir> <name> <stub dir>; sets LREP
         LREP="${LR}/report_scan_$3.json"; rm -f "$LREP"
-        (cd "$ROOT_DIR" && TRANSIT_ENGINE="$1" PATH="$4:${PATH}" WORK_DIR="$LW" timeout 300 bash ./scan_pipeline.sh "$2" "$LR" "$3" >/dev/null 2>&1); LEC=$?
+        (cd "$ROOT_DIR" && TRANSIT_ENGINE="$1" PATH="$4:${PATH}" WORK_DIR="$LW" timeout 300 bash ./scan_pipeline.sh "$2" "$LR" "$3" >/dev/null 2>&1)
     }
     l_py() { python3 -c "
 import json, sys
