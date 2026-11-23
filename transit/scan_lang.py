@@ -177,7 +177,7 @@ _SHELL_RULES = [
     ('fail', r'curl\s+.*\|\s*(bash|sh)|wget\s+.*\|\s*(bash|sh)', 'CWE-78:remote_code_execution_curl_pipe_bash'),
     ('fail', r'eval\s+\$', 'CWE-88:eval_variable_injection'),
     ('warn', r"""export\s+PATH\s*=\s*['"]?[^/]""", 'CWE-426:PATH_starts_with_relative_directory'),
-    ('warn', r'/tmp/\$\$|/tmp/[a-z_]+[^/]*(tmp|temp)', 'CWE-377:predictable_temp_file_name'),
+    ('warn', r'/tmp/\$\$|/tmp/[a-z_]+[^/]*(tmp|temp)', 'CWE-377:predictable_temp_file_name'),  # nosec B108: a grep pattern that looks for /tmp names, not a temp file
     ('warn', r"""IFS\s*=\s*['"]?""", 'shell:IFS_manipulation'),
 ]
 

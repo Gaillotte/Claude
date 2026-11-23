@@ -70,10 +70,10 @@ def _copy_fixture(name: str) -> Callable[[Path], Path]:
     return build
 
 
-def _fixture_plus(name: str, extra: Callable[[Path], None]) -> Callable[[Path], Path]:
+def _fixture_plus(name: str, adjust: Callable[[Path], None]) -> Callable[[Path], Path]:
     def build(base: Path) -> Path:
         dst = _copy_fixture(name)(base)
-        extra(dst)
+        adjust(dst)                      # not `extra(...)`: bandit reads a call named extra as Django's QuerySet.extra (B610)
         return dst
     return build
 
@@ -116,7 +116,7 @@ def _gitleaks_stub(base: Path) -> Path:
     return scan
 
 
-def _stubbed(fixture: str, stubs: dict[str, str], extra: Callable[[Path], None] | None = None) -> Callable[[Path], Path]:
+def _stubbed(fixture: str, stubs: dict[str, str], adjust: Callable[[Path], None] | None = None) -> Callable[[Path], Path]:
     """The fixture, plus stub programs in <base>/stubs (put first on PATH by the case's env). A stub is the body of a
     sh script. Staged data (rule sets, signatures, a YARA rule) goes in the case's pre_work: it lives under
     WORK_DIR, so its path is normalised to <WORK> in the report."""
@@ -125,8 +125,8 @@ def _stubbed(fixture: str, stubs: dict[str, str], extra: Callable[[Path], None] 
         for name, body in stubs.items():
             _write(base / "stubs" / name, "#!/bin/sh\n" + body + "\n")
             (base / "stubs" / name).chmod(0o755)
-        if extra:
-            extra(dst)
+        if adjust:
+            adjust(dst)
         return dst
     return build
 
