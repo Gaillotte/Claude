@@ -39,7 +39,7 @@ def scan_doc(f):
 def _mktemp(prefix):
     """`mktemp "${TMPDIR:-/tmp}/<prefix>XXXXXX" 2>/dev/null || ""`."""
     try:
-        fd, path = tempfile.mkstemp(prefix=prefix, dir=os.environ.get("TMPDIR") or "/tmp")
+        fd, path = tempfile.mkstemp(prefix=prefix, dir=os.environ.get("TMPDIR") or None)   # None: the system temp dir (/tmp)
     except OSError:
         return ""
     os.close(fd)

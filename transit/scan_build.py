@@ -36,7 +36,7 @@ def _rules(f, v, rows):
 def _temp_view(prefix, data):
     """`mktemp "${TMPDIR:-/tmp}/<prefix>XXXXXX"` holding `data` -> its path, or "" when it could not be made."""
     try:
-        fd, path = tempfile.mkstemp(prefix=prefix, dir=os.environ.get("TMPDIR") or "/tmp")
+        fd, path = tempfile.mkstemp(prefix=prefix, dir=os.environ.get("TMPDIR") or None)   # None: the system temp dir (/tmp)
     except OSError:
         return ""
     register_tmp(path)
